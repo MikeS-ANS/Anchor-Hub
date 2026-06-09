@@ -1,6 +1,6 @@
 {
   "name": "anchor-hub",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Anchor Hub — MSP tooling for Autotask & Pax8",
   "main": "main.js",
   "scripts": {
