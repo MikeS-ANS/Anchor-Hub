@@ -1868,7 +1868,7 @@ function renderInvoiceProcessorResults(data) {
   const qboHtml = `
     <table style="width:100%;border-collapse:collapse;font-size:13px">
       <thead>
-        <tr style="background:#D0641C;color:#fff">
+        <tr style="background:rgba(45,77,107,.75);color:#fff">
           <th style="text-align:left;padding:6px 10px;font-weight:600">Category</th>
           <th style="text-align:left;padding:6px 10px;font-weight:600">QBO Account</th>
           <th style="text-align:right;padding:6px 10px;font-weight:600">Amount</th>
@@ -1876,12 +1876,12 @@ function renderInvoiceProcessorResults(data) {
       </thead>
       <tbody>
         ${qboRows.map((r, i) => `
-          <tr style="background:${i % 2 === 0 ? '#2a2a2a' : '#242424'}">
+          <tr style="background:${i % 2 === 0 ? 'rgba(255,255,255,.025)' : 'transparent'}">
             <td style="padding:5px 10px;font-weight:500;color:var(--text)">${escHtml(r[0])}</td>
             <td style="padding:5px 10px;color:var(--text-muted);font-family:var(--font-mono);font-size:11px">${escHtml(r[1])}</td>
             <td style="padding:5px 10px;text-align:right;font-family:var(--font-mono);color:var(--text)">${fmt(r[2])}</td>
           </tr>`).join('')}
-        <tr style="background:#2a2a2a;border-top:2px solid #D0641C">
+        <tr style="background:rgba(45,77,107,.2);border-top:2px double var(--border)">
           <td colspan="2" style="padding:6px 10px;font-weight:700;color:var(--text)">TOTAL</td>
           <td style="padding:6px 10px;text-align:right;font-weight:700;font-family:var(--font-mono);color:var(--text)">${fmt(data.qbo.total)}</td>
         </tr>
@@ -1923,20 +1923,20 @@ function renderInvoiceProcessorResults(data) {
     oneTimeEl.innerHTML = `
       <table style="width:100%;border-collapse:collapse;font-size:12px">
         <thead>
-          <tr style="background:#D0641C;color:#fff">
-            <th style="text-align:left;padding:5px 8px">Company</th>
-            <th style="text-align:left;padding:5px 8px">SKU</th>
-            <th style="text-align:left;padding:5px 8px">Description</th>
-            <th style="text-align:right;padding:5px 8px">Qty</th>
-            <th style="text-align:right;padding:5px 8px">Unit Cost</th>
-            <th style="text-align:right;padding:5px 8px">Total Cost</th>
-            <th style="text-align:right;padding:5px 8px">Unit Price</th>
-            <th style="text-align:right;padding:5px 8px">Total Price</th>
+          <tr style="background:rgba(45,77,107,.75);color:#fff">
+            <th style="text-align:left;padding:5px 8px;font-weight:600">Company</th>
+            <th style="text-align:left;padding:5px 8px;font-weight:600">SKU</th>
+            <th style="text-align:left;padding:5px 8px;font-weight:600">Description</th>
+            <th style="text-align:right;padding:5px 8px;font-weight:600">Qty</th>
+            <th style="text-align:right;padding:5px 8px;font-weight:600">Unit Cost</th>
+            <th style="text-align:right;padding:5px 8px;font-weight:600">Total Cost</th>
+            <th style="text-align:right;padding:5px 8px;font-weight:600">Unit Price</th>
+            <th style="text-align:right;padding:5px 8px;font-weight:600">Total Price</th>
           </tr>
         </thead>
         <tbody>
           ${(data.oneTime || []).map((r, i) => `
-            <tr style="background:${i % 2 === 0 ? 'rgba(255,251,80,.07)' : 'rgba(255,251,80,.03)'}">
+            <tr style="background:${i % 2 === 0 ? 'rgba(255,255,255,.025)' : 'transparent'}">
               <td style="padding:4px 8px">${escHtml(r.company)}</td>
               <td style="padding:4px 8px;font-family:var(--font-mono);font-size:11px">${escHtml(r.sku)}</td>
               <td style="padding:4px 8px">${escHtml(r.description)}</td>
@@ -1954,11 +1954,11 @@ function renderInvoiceProcessorResults(data) {
   const svcSection = document.getElementById('ip-services-section');
   const svcEl = document.getElementById('ip-services-tables');
   const svcDefs = [
-    { key: 'nerdio',     label: 'Nerdio',     color: '#d6eeff' },
-    { key: 'exclaimer',  label: 'Exclaimer',  color: '#eedbff' },
-    { key: 'ironscales', label: 'Ironscales', color: '#ffeedd' },
-    { key: 'printix',    label: 'Printix',    color: '#d6f5f0' },
-    { key: 'intuit',     label: 'Intuit/QBO', color: '#d6f5dd' },
+    { key: 'nerdio',     label: 'Nerdio'     },
+    { key: 'exclaimer',  label: 'Exclaimer'  },
+    { key: 'ironscales', label: 'Ironscales' },
+    { key: 'printix',    label: 'Printix'    },
+    { key: 'intuit',     label: 'Intuit/QBO' },
   ];
   const svcHtmlParts = [];
   for (const svc of svcDefs) {
@@ -1966,19 +1966,19 @@ function renderInvoiceProcessorResults(data) {
     if (!rows.length) continue;
     svcHtmlParts.push(`
       <div style="margin-bottom:16px">
-        <div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">${escHtml(svc.label)}</div>
+        <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">${escHtml(svc.label)}</div>
         <table style="width:100%;border-collapse:collapse;font-size:13px">
           <thead>
-            <tr style="background:#D0641C;color:#fff">
-              <th style="text-align:left;padding:5px 10px">Company</th>
-              <th style="text-align:right;padding:5px 10px">Qty</th>
+            <tr style="background:rgba(45,77,107,.75);color:#fff">
+              <th style="text-align:left;padding:5px 10px;font-weight:600">Company</th>
+              <th style="text-align:right;padding:5px 10px;font-weight:600">Qty</th>
             </tr>
           </thead>
           <tbody>
             ${rows.map((r, i) => `
-              <tr style="background:${i % 2 === 0 ? svc.color : 'transparent'}">
-                <td style="padding:4px 10px">${escHtml(r.company)}</td>
-                <td style="padding:4px 10px;text-align:right;font-family:var(--font-mono)">${r.qty}</td>
+              <tr style="background:${i % 2 === 0 ? 'rgba(255,255,255,.025)' : 'transparent'}">
+                <td style="padding:4px 10px;color:var(--text)">${escHtml(r.company)}</td>
+                <td style="padding:4px 10px;text-align:right;font-family:var(--font-mono);color:var(--text)">${r.qty}</td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -2036,8 +2036,8 @@ function renderInvoiceProcessorResults(data) {
   });
 }
 
-function azureRowColor(mPct) {
-  return mPct >= 20 ? '#d6f5dd' : mPct >= 10 ? '#fffbe6' : '#ffeedd';
+function azureMarginColor(mPct) {
+  return mPct >= 20 ? '#34d399' : mPct >= 10 ? '#f59e0b' : '#f87171';
 }
 
 function renderAzureTable(azureRows) {
@@ -2051,26 +2051,27 @@ function renderAzureTable(azureRows) {
   el.innerHTML = `
     <table style="width:100%;border-collapse:collapse;font-size:13px" id="ip-azure-tbl">
       <thead>
-        <tr style="background:#D0641C;color:#fff">
-          <th style="text-align:left;padding:6px 10px">Company</th>
-          <th style="text-align:left;padding:6px 10px">AT Company</th>
-          <th style="text-align:right;padding:6px 10px">Pax8 Cost</th>
-          <th style="text-align:center;padding:6px 10px">Margin %</th>
-          <th style="text-align:right;padding:6px 10px">Client Price</th>
+        <tr style="background:rgba(45,77,107,.75);color:#fff">
+          <th style="text-align:left;padding:6px 10px;font-weight:600">Company</th>
+          <th style="text-align:left;padding:6px 10px;font-weight:600">AT Company</th>
+          <th style="text-align:right;padding:6px 10px;font-weight:600">Pax8 Cost</th>
+          <th style="text-align:center;padding:6px 10px;font-weight:600">Margin %</th>
+          <th style="text-align:right;padding:6px 10px;font-weight:600">Client Price</th>
         </tr>
       </thead>
       <tbody>
         ${azureRows.map((r, i) => {
-          const price  = r.price != null ? r.price : (r.marginPct < 100 ? Math.ceil(r.cost / (1 - r.marginPct / 100) / 5) * 5 : r.cost);
-          const rowBg  = azureRowColor(r.marginPct);
+          const price       = r.price != null ? r.price : (r.marginPct < 100 ? Math.ceil(r.cost / (1 - r.marginPct / 100) / 5) * 5 : r.cost);
+          const mColor      = azureMarginColor(r.marginPct);
+          const rowBg       = i % 2 === 0 ? 'rgba(255,255,255,.025)' : 'transparent';
           return `
-            <tr style="background:${rowBg}" data-row="${i}" data-cost="${r.cost}">
-              <td style="padding:5px 10px">${escHtml(r.company)}</td>
+            <tr style="background:${rowBg};border-left:3px solid ${mColor}" data-row="${i}" data-cost="${r.cost}">
+              <td style="padding:5px 10px;color:var(--text)">${escHtml(r.company)}</td>
               <td style="padding:5px 10px;color:${r.atCompanyId ? 'var(--text)' : 'var(--text-muted)'}">${escHtml(r.atCompanyName || '(not mapped)')}</td>
-              <td style="padding:5px 10px;text-align:right;font-family:var(--font-mono)">${fmt(r.cost)}</td>
+              <td style="padding:5px 10px;text-align:right;font-family:var(--font-mono);color:var(--text)">${fmt(r.cost)}</td>
               <td style="padding:5px 10px;text-align:center">
                 <input type="number" class="margin-input" value="${r.marginPct}" min="0" max="99" step="0.1"
-                  style="width:56px;text-align:center;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-size:12px;font-family:var(--font-mono)" />
+                  style="width:56px;text-align:center;background:var(--surface-2);color:${mColor};border:1px solid ${mColor}40;border-radius:4px;padding:2px 4px;font-size:12px;font-family:var(--font-mono);font-weight:700" />
               </td>
               <td style="padding:3px 6px;text-align:right">
                 <input type="number" class="price-input" value="${price.toFixed(2)}" min="0" step="5"
@@ -2080,11 +2081,11 @@ function renderAzureTable(azureRows) {
         }).join('')}
       </tbody>
       <tfoot>
-        <tr style="background:rgba(208,100,28,.18);font-weight:700;border-top:2px solid #D0641C">
-          <td colspan="2" style="padding:6px 10px">TOTALS</td>
-          <td style="padding:6px 10px;text-align:right;font-family:var(--font-mono)">${fmt(totalCost)}</td>
+        <tr style="background:rgba(45,77,107,.2);font-weight:700;border-top:2px double var(--border);border-left:3px solid transparent">
+          <td colspan="2" style="padding:6px 10px;color:var(--text)">TOTALS</td>
+          <td style="padding:6px 10px;text-align:right;font-family:var(--font-mono);color:var(--text)">${fmt(totalCost)}</td>
           <td></td>
-          <td id="ip-az-total-price" style="padding:6px 10px;text-align:right;font-family:var(--font-mono)">${fmt(totalPrice)}</td>
+          <td id="ip-az-total-price" style="padding:6px 10px;text-align:right;font-family:var(--font-mono);color:var(--text)">${fmt(totalPrice)}</td>
         </tr>
       </tfoot>
     </table>`;
@@ -2100,7 +2101,10 @@ function renderAzureTable(azureRows) {
       const rawPrice = mPct < 100 ? cost / (1 - mPct / 100) : cost;
       const rounded  = Math.ceil(rawPrice / 5) * 5;
       priceInput.value = rounded.toFixed(2);
-      tr.style.background = azureRowColor(mPct);
+      const mc = azureMarginColor(mPct);
+      tr.style.borderLeft = `3px solid ${mc}`;
+      marginInput.style.color = mc;
+      marginInput.style.borderColor = mc + '40';
       refreshAzureTotalPrice(el);
     });
 
@@ -2108,7 +2112,10 @@ function renderAzureTable(azureRows) {
       const price = parseFloat(priceInput.value) || 0;
       const mPct  = price > 0 && cost > 0 ? ((price - cost) / price) * 100 : 0;
       marginInput.value = mPct.toFixed(1);
-      tr.style.background = azureRowColor(mPct);
+      const mc = azureMarginColor(mPct);
+      tr.style.borderLeft = `3px solid ${mc}`;
+      marginInput.style.color = mc;
+      marginInput.style.borderColor = mc + '40';
       refreshAzureTotalPrice(el);
     });
   });
