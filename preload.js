@@ -51,7 +51,11 @@ contextBridge.exposeInMainWorld('api', {
   getKaseyaSettings:      ()     => ipcRenderer.invoke('get-kaseya-settings'),
   saveKaseyaSettings:     (s)    => ipcRenderer.invoke('save-kaseya-settings', s),
   exportKaseyaReport:     (data) => ipcRenderer.invoke('export-kaseya-report', data),
-  generateKaseyaAtPrompt: (data) => ipcRenderer.invoke('generate-kaseya-at-prompt', data),
+  generateKaseyaAtPrompt:  (data) => ipcRenderer.invoke('generate-kaseya-at-prompt', data),
+  getKaseyaSnapshots:      ()     => ipcRenderer.invoke('get-kaseya-snapshots'),
+  compareKaseyaSnapshots:  (opts) => ipcRenderer.invoke('compare-kaseya-snapshots', opts),
+  deleteKaseyaSnapshot:    (key)  => ipcRenderer.invoke('delete-kaseya-snapshot', key),
+  loadKaseyaSnapshot:      (key)  => ipcRenderer.invoke('load-kaseya-snapshot', key),
 
   // Invoice Processor
   browseInvoiceCsv:       ()     => ipcRenderer.invoke('browse-invoice-csv'),
@@ -72,6 +76,10 @@ contextBridge.exposeInMainWorld('api', {
   runContractRenewals:  (opts) => ipcRenderer.invoke('run-contract-renewals', opts),
   getRenewalSettings:   ()     => ipcRenderer.invoke('get-renewal-settings'),
   saveRenewalSettings:  (s)    => ipcRenderer.invoke('save-renewal-settings', s),
+
+  // BlackPoint / CompassOne
+  runBlackpointUsage:     ()     => ipcRenderer.invoke('run-blackpoint-usage'),
+  exportBlackpointReport: (data) => ipcRenderer.invoke('export-blackpoint-report', data),
 
   // Tool Visibility
   getToolVisibility:  ()    => ipcRenderer.invoke('get-tool-visibility'),

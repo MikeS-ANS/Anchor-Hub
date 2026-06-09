@@ -2489,7 +2489,15 @@ ipcMain.handle('generate-service-prompt', (_, data) => {
 });
 
 // ─── Kaseya Invoice Processor ─────────────────────────────────────────────────
-const KASEYA_SETTINGS_FILE = path.join(__dirname, 'pax8hub-kaseya-settings.json');
+const KASEYA_SETTINGS_FILE  = path.join(__dirname, 'pax8hub-kaseya-settings.json');
+const KASEYA_SNAPSHOTS_FILE = path.join(USER_DATA, 'kaseya-snapshots.json');
+
+function loadKaseyaSnapshots() {
+  try { return JSON.parse(fs.readFileSync(KASEYA_SNAPSHOTS_FILE, 'utf8')); } catch { return {}; }
+}
+function saveKaseyaSnapshots(snaps) {
+  fs.writeFileSync(KASEYA_SNAPSHOTS_FILE, JSON.stringify(snaps, null, 2));
+}
 
 const DEFAULT_KASEYA_SETTINGS = {
   psa:    { strategic: 35, serviceDelivery: 25, admin: 15, coManaged: 25 },
@@ -2645,43 +2653,65 @@ ipcMain.handle('process-kaseya-xls', (_, { filePath }) => {
     const XLSX = require('xlsx');
     const wb   = XLSX.readFile(filePath, { cellDates: false, raw: false });
 
-    // Try Details2 first (has Company Name), fall back to Details, then any sheet
-    const sheetName = wb.SheetNames.find(n => n === 'Details2')
-                   || wb.SheetNames.find(n => n === 'Details')
+    // Prefer Details (has Organization/Client Name per row). Fall back to Details2 then any.
+    const sheetName = wb.SheetNames.find(n => n === 'Details')
+                   || wb.SheetNames.find(n => n === 'Details2')
                    || wb.SheetNames.find(n => /detail/i.test(n))
                    || wb.SheetNames[0];
     if (!sheetName) throw new Error('No sheets found in workbook.');
-    const ws   = wb.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+    const ws = wb.Sheets[sheetName];
 
-    if (!rows.length) {
-      // Try to figure out what sheets exist for better error message
-      throw new Error(`No data rows in sheet "${sheetName}". Available sheets: ${wb.SheetNames.join(', ')}`);
-    }
+    if (!ws['!ref']) throw new Error(`Sheet "${sheetName}" is empty. Available sheets: ${wb.SheetNames.join(', ')}`);
 
-    // Detect column names from first row
+    // Read raw rows then normalize: trim whitespace from ALL column names and string values
+    const rawRows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+    if (!rawRows.length) throw new Error(`No data rows in sheet "${sheetName}".`);
+
+    const rows = rawRows.map(row => {
+      const clean = {};
+      for (const [k, v] of Object.entries(row)) {
+        clean[String(k).trim()] = typeof v === 'string' ? v.trim() : v;
+      }
+      return clean;
+    });
+
     const sample = rows[0];
     const keys   = Object.keys(sample);
 
-    // Flexible column finders (case-insensitive substring match)
+    // Flexible column finder: exact match first, then case-insensitive substring
     const findCol = (...candidates) =>
       candidates.find(c => c in sample) ||
       keys.find(k => candidates.some(c => k.toLowerCase().includes(c.toLowerCase())));
 
-    const companyCol  = findCol('Company Name', 'Organization (Client) Name', 'Client Name', 'Company', 'Client');
-    const moduleCol   = findCol('Module', 'Product Module', 'Category', 'Module Name');
-    const qtyCol      = findCol('Billed Quantity', 'Quantity', 'Qty', 'Units');
-    const rateCol     = findCol('Rate', 'Unit Rate', 'Unit Price', 'Price');
-    const totalCol    = findCol('Total (Pre-Tax)', 'Total Pre-Tax', 'Monthly Fee', 'Total', 'Amount', 'Subtotal');
+    // Prefer per-client "Organization (Client) Name" over master "Company Name"
+    const companyCol  = findCol('Organization (Client) Name', 'Organization', 'Client Name', 'Company Name', 'Company', 'Client');
+    const moduleCol   = findCol('Module', 'Product Module', 'Module Name');
+    const categoryCol = findCol('Category', 'Product Category');
+    const qtyCol         = findCol('Billed Quantity', 'Quantity', 'Qty', 'Units');
+    const licenseUsageCol = findCol('License Usage', 'Licensed Qty', 'License Qty', 'Licenses Used', 'Usage Qty');
+    const rateCol        = findCol('Rate', 'Unit Rate', 'Unit Price', 'Price');
+    const totalCol    = findCol('Total (Pre-Tax)', 'Total Pre-Tax', 'Monthly Fee', 'Total', 'Amount');
     const descCol     = findCol('Product Description', 'Description', 'Item Description', 'Product Name');
     const productCol  = findCol('Product Item', 'Product', 'Item', 'SKU');
     const svcStartCol = findCol('Service Period Start Date', 'Start Date', 'Period Start');
 
-    if (!companyCol) throw new Error(`Cannot find a company/client column. Columns found: ${keys.slice(0, 15).join(', ')}`);
-    if (!moduleCol)  throw new Error(`Cannot find a module/category column. Columns found: ${keys.slice(0, 15).join(', ')}`);
-    if (!totalCol)   throw new Error(`Cannot find a total/amount column. Columns found: ${keys.slice(0, 15).join(', ')}`);
+    if (!moduleCol) throw new Error(`Cannot find a module column. Columns: ${keys.slice(0, 15).join(', ')}`);
+    if (!totalCol)  throw new Error(`Cannot find a total column. Columns: ${keys.slice(0, 15).join(', ')}`);
 
-    // Extract billing date from filename: K00340989_YYYYMMDD_CI_xxx
+    // Number parser — handles embedded whitespace, $, commas, \r\n
+    const parseNum = v => parseFloat(String(v ?? '').replace(/[$,\s\r\n]/g, '')) || 0;
+
+    // Company name cleaner: strips trailing/leading punctuation from each word so
+    // "St. Charles Town Company" and "St Charles Town Company" map to the same name.
+    const cleanCompany = raw => {
+      if (!raw) return '';
+      return raw.split(/\s+/)
+        .map(w => w.replace(/^[.,\-'"]+|[.,\-'"]+$/g, ''))
+        .filter(Boolean)
+        .join(' ');
+    };
+
+    // Billing dates from filename: K00340989_YYYYMMDD_CI_xxx
     const fname      = path.basename(filePath, path.extname(filePath));
     const dateMatch  = fname.match(/_(\d{8})_/);
     const invoiceDate = dateMatch
@@ -2690,60 +2720,199 @@ ipcMain.handle('process-kaseya-xls', (_, { filePath }) => {
     const billingStart = firstOfCurrentMonth(invoiceDate);
     const billingEnd   = lastOfCurrentMonth(invoiceDate);
 
-    const moduleMap = new Map();  // module → { total, qty, lines[] }
-    const clientMap = new Map();  // company → { total, modules: Map }
+    // ── Build data maps ──────────────────────────────────────────────────────
+    const moduleMap    = new Map(); // module  → { total, qty, lineCount }
+    const categoryMap  = new Map(); // category→ total
+    const clientMap    = new Map(); // clientKey → { total, modules: Map }
+    const clientTotals = [];        // { name, total } — built after maps
+
+    // Sheet4 section data
+    const workplaceModules = new Set(['DWP', 'DFP']);
+    const backupModules    = new Set(['BCDR', 'Cloud Continuity', 'Azure Cloud Siris', 'Networking']);
+
+    const wkProductMap  = new Map(); // workplace product → { qty, rates[], total }
+    const wkUsageMap    = new Map(); // client → Map(product → qty)
+    const atProductMap  = new Map(); // anchor tools product → { qty, rates[], total }
+    const backupModMap  = new Map(); // backup module → { qty, rates[], total }
+    const netProductMap = new Map(); // networking product → { qty, rates[], total }
+    const bcdrClientMap = new Map(); // client → total
+    const saasClientMap = new Map(); // client → qty
 
     for (const row of rows) {
-      const company = String(row[companyCol] || '').trim();
-      const module  = String(row[moduleCol]  || '').trim();
-      const qty     = parseFloat(String(row[qtyCol]   || '').replace(/,/g, '')) || 0;
-      const rate    = parseFloat(String(row[rateCol]  || '').replace(/[$,]/g, '')) || 0;
-      const total   = parseFloat(String(row[totalCol] || '').replace(/[$,]/g, '')) || 0;
-      const desc    = descCol     ? String(row[descCol]     || '').trim() : '';
-      const product = productCol  ? String(row[productCol]  || '').trim() : '';
-      const svcStart = svcStartCol ? String(row[svcStartCol] || '').trim() : '';
+      const company  = cleanCompany(companyCol ? String(row[companyCol] ?? '') : '');
+      const module   = String(row[moduleCol] ?? '').trim();
+      const category = categoryCol ? String(row[categoryCol] ?? '').trim() : '';
+      const product  = productCol  ? String(row[productCol]  ?? '').trim() : '';
+      const qty        = parseNum(row[qtyCol]);
+      const licenseQty = licenseUsageCol ? parseNum(row[licenseUsageCol]) : 0;
+      const rate       = parseNum(row[rateCol]);
+      const total    = parseNum(row[totalCol]);
 
-      if (!company || !module) continue;
+      if (!module) continue;
 
-      // Module map
-      if (!moduleMap.has(module)) moduleMap.set(module, { total: 0, qty: 0, lines: [] });
-      const mod = moduleMap.get(module);
-      mod.total += total;
-      mod.qty   += qty;
-      mod.lines.push({ company, desc, product, qty, rate, total, svcStart });
+      // Module summary
+      if (!moduleMap.has(module)) moduleMap.set(module, { total: 0, qty: 0, lineCount: 0 });
+      const mm = moduleMap.get(module);
+      mm.total += total; mm.qty += qty; mm.lineCount++;
 
-      // Client map
-      if (!clientMap.has(company)) clientMap.set(company, { total: 0, modules: new Map() });
-      const client = clientMap.get(company);
-      client.total += total;
-      if (!client.modules.has(module)) client.modules.set(module, { total: 0, qty: 0 });
-      client.modules.get(module).total += total;
-      client.modules.get(module).qty   += qty;
+      // Category summary
+      if (category) {
+        categoryMap.set(category, (categoryMap.get(category) || 0) + total);
+      }
+
+      // Client breakdown (blank client → "(blank)")
+      const clientKey = company || '(blank)';
+      if (!clientMap.has(clientKey)) clientMap.set(clientKey, { total: 0, totalQty: 0, totalLicQty: 0, modules: new Map() });
+      const cm = clientMap.get(clientKey);
+      cm.total += total;
+      cm.totalQty    += qty;
+      cm.totalLicQty += licenseQty;
+      if (!cm.modules.has(module)) cm.modules.set(module, { total: 0, qty: 0 });
+      cm.modules.get(module).total += total;
+      cm.modules.get(module).qty   += qty;
+
+      // ── Sheet4 Workplace section ────────────────────────────────
+      if (workplaceModules.has(module)) {
+        if (!wkProductMap.has(product)) wkProductMap.set(product, { qty: 0, rates: [], total: 0 });
+        const wp = wkProductMap.get(product);
+        wp.qty += qty; if (rate > 0) wp.rates.push(rate); wp.total += total;
+        // Per-client usage
+        if (company) {
+          if (!wkUsageMap.has(company)) wkUsageMap.set(company, new Map());
+          const cu = wkUsageMap.get(company);
+          cu.set(product, (cu.get(product) || 0) + qty);
+        }
+      }
+
+      // ── Sheet4 Anchor Tools section (blank client, non-backup, non-workplace) ─
+      if (!company && !workplaceModules.has(module) && !backupModules.has(module)) {
+        if (!atProductMap.has(product)) atProductMap.set(product, { qty: 0, rates: [], total: 0 });
+        const ap = atProductMap.get(product);
+        ap.qty += qty; if (rate > 0) ap.rates.push(rate); ap.total += total;
+      }
+
+      // ── Sheet4 Backup & Networking section ─────────────────────
+      if (backupModules.has(module)) {
+        if (!backupModMap.has(module)) backupModMap.set(module, { qty: 0, rates: [], total: 0 });
+        const bm = backupModMap.get(module);
+        bm.qty += qty; if (rate > 0) bm.rates.push(rate); bm.total += total;
+
+        if (module === 'Networking') {
+          if (!netProductMap.has(product)) netProductMap.set(product, { qty: 0, rates: [], total: 0 });
+          const np = netProductMap.get(product);
+          np.qty += qty; if (rate > 0) np.rates.push(rate); np.total += total;
+        }
+        if (module === 'BCDR' && company) {
+          bcdrClientMap.set(company, (bcdrClientMap.get(company) || 0) + total);
+        }
+      }
+
+      // ── Sheet4 Datto SaaS per-client ────────────────────────────
+      if (module === 'SaaS Protection' && company) {
+        saasClientMap.set(company, (saasClientMap.get(company) || 0) + qty);
+      }
     }
 
-    // Serialize
+    // ── Serialize ────────────────────────────────────────────────────────────
+    const r2 = v => parseFloat(v.toFixed(2));
+    const avgRate = arr => arr.length ? r2(arr.reduce((s, r) => s + r, 0) / arr.length) : 0;
+    const sortByName = arr => arr.sort((a, b) => {
+      if (a.name === '(blank)') return 1;
+      if (b.name === '(blank)') return -1;
+      return a.name.localeCompare(b.name);
+    });
+
     const modules = {};
-    for (const [name, data] of moduleMap) {
-      modules[name] = { total: parseFloat(data.total.toFixed(2)), qty: data.qty };
+    for (const [name, d] of moduleMap) {
+      modules[name] = { total: r2(d.total), qty: d.qty, lineCount: d.lineCount };
     }
 
+    const categories = {};
+    for (const [name, total] of categoryMap) categories[name] = r2(total);
+
+    // Client details: modules as { total, qty } objects
+    // Filter: skip clients where both Billed Quantity AND License Usage are 0
     const clients = [];
-    for (const [name, data] of clientMap) {
+    for (const [name, d] of clientMap) {
+      if (d.totalQty === 0 && d.totalLicQty === 0) continue;
       const mods = {};
-      for (const [mName, mData] of data.modules) mods[mName] = parseFloat(mData.total.toFixed(2));
-      clients.push({ name, total: parseFloat(data.total.toFixed(2)), modules: mods });
+      for (const [mName, mData] of d.modules) {
+        mods[mName] = { total: r2(mData.total), qty: mData.qty };
+      }
+      clients.push({ name, total: r2(d.total), modules: mods });
     }
-    clients.sort((a, b) => a.name.localeCompare(b.name));
+    sortByName(clients);
+
+    // Client totals for Sheet4 section 2
+    const ctArray = clients.map(c => ({ name: c.name, total: c.total }));
+
+    const grandTotal = r2(clients.reduce((s, c) => s + c.total, 0));
+
+    // Workplace products
+    const workplaceProducts = [...wkProductMap.entries()]
+      .map(([name, d]) => ({ name, qty: d.qty, avgRate: avgRate(d.rates), total: r2(d.total) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const workplaceProductNames = workplaceProducts.map(p => p.name);
+    const workplaceUsage = [...wkUsageMap.entries()]
+      .map(([client, prods]) => ({ client, products: Object.fromEntries(prods) }))
+      .sort((a, b) => a.client.localeCompare(b.client));
+
+    // Anchor tools
+    const anchorTools = [...atProductMap.entries()]
+      .map(([name, d]) => ({ name, qty: d.qty, avgRate: avgRate(d.rates), total: r2(d.total) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    // Backup summary (fixed order)
+    const backupOrder = ['Azure Cloud Siris', 'BCDR', 'Cloud Continuity', 'Networking'];
+    const backupProducts = backupOrder
+      .filter(m => backupModMap.has(m))
+      .map(name => {
+        const d = backupModMap.get(name);
+        return { name, qty: d.qty, avgRate: avgRate(d.rates), total: r2(d.total) };
+      });
+
+    const networkingProducts = [...netProductMap.entries()]
+      .map(([name, d]) => ({ name, qty: d.qty, avgRate: avgRate(d.rates), total: r2(d.total) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const bcdrCosts = [...bcdrClientMap.entries()]
+      .map(([name, total]) => ({ name, total: r2(total) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const saasCosts = [...saasClientMap.entries()]
+      .map(([name, qty]) => ({ name, qty }))
+      .sort((a, b) => a.name.localeCompare(b.name));
 
     const settings   = loadKaseyaSettings();
     const qboEntries = buildKaseyaQboEntries(modules, settings);
-    const grandTotal = parseFloat(clients.reduce((s, c) => s + c.total, 0).toFixed(2));
+
+    // ── Auto-save snapshot for delta comparison ──────────────────────────────
+    const snapKey = invoiceDate ? invoiceDate.slice(0, 7) : new Date().toISOString().slice(0, 7);
+    const columnsDetectedSnap = { company: companyCol || '(not found)', module: moduleCol, qty: qtyCol, rate: rateCol, total: totalCol };
+    try {
+      const snaps = loadKaseyaSnapshots();
+      snaps[snapKey] = {
+        savedAt: new Date().toISOString(),
+        invoiceDate, fileName: fname, grandTotal,
+        totalLines: rows.length,
+        sheetUsed: sheetName,
+        columnsDetected: columnsDetectedSnap,
+        modules, categories,
+        clients: clients.map(c => ({ name: c.name, total: c.total, modules: c.modules })),
+        qboEntries,
+      };
+      saveKaseyaSnapshots(snaps);
+    } catch (_) { /* non-fatal */ }
 
     return {
       success: true, fileName: fname, invoiceDate, billingStart, billingEnd,
-      modules, clients, qboEntries, grandTotal, totalLines: rows.length,
+      snapKey,
+      modules, categories, grandTotal, totalLines: rows.length,
       sheetUsed: sheetName,
-      columnsDetected: { company: companyCol, module: moduleCol, qty: qtyCol, rate: rateCol, total: totalCol }
+      columnsDetected: { company: companyCol || '(not found)', module: moduleCol, qty: qtyCol, rate: rateCol, total: totalCol },
+      clients, clientTotals: ctArray, qboEntries,
+      workplaceProducts, workplaceProductNames, workplaceUsage,
+      anchorTools, saasCosts, backupProducts, networkingProducts, bcdrCosts,
     };
   } catch (e) {
     return { success: false, error: e.message };
@@ -2754,25 +2923,201 @@ ipcMain.handle('export-kaseya-report', async (_, data) => {
   try {
     const result = await dialog.showSaveDialog(mainWindow, {
       title: 'Save Kaseya Report',
-      defaultPath: `Kaseya-${data.billingStart || 'report'}.xlsx`,
+      defaultPath: `${data.fileName || 'Kaseya'}.xlsx`,
       filters: [{ name: 'Excel Workbook', extensions: ['xlsx'] }],
     });
     if (result.canceled) return { canceled: true };
 
     const ExcelJS = require('exceljs');
     const wb = new ExcelJS.Workbook();
-    const ORANGE = 'FFD0641C', LIGHT_OR = 'FFFFDDB8', YELLOW = 'FFFFF3B0', RED_BG = 'FFFFE0D0';
-    const applyHdr = (row, argb) => {
-      row.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-      row.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb } }; c.alignment = { vertical: 'middle' }; });
-    };
-    const fill = (argb) => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } });
-    const fmt$ = '$#,##0.00';
+    wb.creator = 'Anchor Hub';
+    wb.created = new Date();
 
-    // Sheet 1: QBO Entries
+    const ORANGE   = 'FFD0641C';
+    const ORANGE_L = 'FFFFDDB8'; // light orange for grand-total rows
+    const SECTION  = 'FF2D4D6B'; // dark navy for section title rows
+    const YELLOW   = 'FFFFF3B0';
+    const LIGHT_O  = 'FFFFDDB8';
+    const ROW_ALT  = 'FFF7F7F7'; // very light grey for alternating rows
+    const r2 = v => Math.round(v * 100) / 100;
+    const fill = argb => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } });
+    const fmt$ = '#,##0.00';
+    const fmtN = '#,##0';
+
+    // ── INVOICE SUMMARY — main pivot summary ─────────────────────────────────
+    const ws4 = wb.addWorksheet('Invoice Summary');
+
+    // set(row, col, value, opts)
+    const s4 = (row, col, val, opts = {}) => {
+      const c = ws4.getCell(row, col);
+      c.value = val;
+      if (opts.bold || opts.white || opts.color)
+        c.font = { bold: !!opts.bold, color: { argb: opts.white ? 'FFFFFFFF' : (opts.color || 'FF000000') } };
+      if (opts.numFmt) c.numFmt = opts.numFmt;
+      if (opts.fill)   c.fill = fill(opts.fill);
+      if (opts.align)  c.alignment = { horizontal: opts.align, vertical: 'middle', wrapText: false };
+    };
+    // Orange column header
+    const hdrCell = (row, col, val) => s4(row, col, val, { bold: true, fill: ORANGE, white: true, align: 'left' });
+    // Navy section title (e.g. "DATTO WORKPLACE COSTS")
+    const secCell = (row, col, val) => s4(row, col, val, { bold: true, fill: SECTION, white: true });
+    // Light orange grand-total row helper
+    const gtCell  = (row, col, val, numFmt, align) => s4(row, col, val, { bold: true, fill: ORANGE_L, numFmt, align });
+
+    // Column widths (A=1 … T=20)
+    const colW = [35,16,2,35,16,2,35,14,14,16,2,40,14,14,16,2,35,14,14,16];
+    colW.forEach((w, i) => { ws4.getColumn(i + 1).width = w; });
+
+    let rowA = 1, rowD = 1, rowG = 1, rowL = 1, rowQ = 1;  // current write row per column-group
+
+    // helper: alternate light fill on even data rows (i = 0-based)
+    const altFill = (i, ...cells) => {
+      if (i % 2 === 0) cells.forEach(([r, c]) => { const cell = ws4.getCell(r, c); cell.fill = fill(ROW_ALT); });
+    };
+
+    // ── A-B: Totals by Module ────────────────────────────────────────────────
+    secCell(rowA, 1, 'Totals by Module'); rowA++;
+    hdrCell(rowA, 1, 'Module'); hdrCell(rowA, 2, 'Amount'); rowA++;
+    const modEntries = Object.entries(data.modules || {}).sort((a, b) => b[1].total - a[1].total);
+    let modGT = 0;
+    modEntries.forEach(([name, m], i) => {
+      s4(rowA, 1, name); s4(rowA, 2, r2(m.total), { numFmt: fmt$ });
+      altFill(i, [rowA, 1], [rowA, 2]); modGT += m.total; rowA++;
+    });
+    gtCell(rowA, 1, 'Grand Total'); gtCell(rowA, 2, r2(modGT), fmt$); rowA++;
+
+    // A-B: Totals by Category (below modules, with gap)
+    rowA += 1;
+    secCell(rowA, 1, 'Totals by Category'); rowA++;
+    hdrCell(rowA, 1, 'Category'); hdrCell(rowA, 2, 'Amount'); rowA++;
+    const catEntries = Object.entries(data.categories || {}).sort((a, b) => b[1] - a[1]);
+    let catGT = 0;
+    catEntries.forEach(([name, total], i) => {
+      s4(rowA, 1, name); s4(rowA, 2, r2(total), { numFmt: fmt$ });
+      altFill(i, [rowA, 1], [rowA, 2]); catGT += total; rowA++;
+    });
+    gtCell(rowA, 1, 'Grand Total'); gtCell(rowA, 2, r2(catGT), fmt$);
+
+    // ── D-E: Total Costs by Client ───────────────────────────────────────────
+    secCell(rowD, 4, 'TOTAL COSTS BY CLIENT'); rowD++;
+    hdrCell(rowD, 4, 'Client'); hdrCell(rowD, 5, 'Amount'); rowD++;
+    let clientGT = 0;
+    (data.clientTotals || []).forEach((c, i) => {
+      s4(rowD, 4, c.name); s4(rowD, 5, r2(c.total), { numFmt: fmt$ });
+      altFill(i, [rowD, 4], [rowD, 5]); clientGT += c.total; rowD++;
+    });
+    gtCell(rowD, 4, 'Grand Total'); gtCell(rowD, 5, r2(clientGT), fmt$);
+
+    // ── G-J: Datto Workplace Costs ───────────────────────────────────────────
+    secCell(rowG, 7, 'DATTO WORKPLACE COSTS'); rowG++;
+    hdrCell(rowG, 7, 'Product'); hdrCell(rowG, 8, 'Qty'); hdrCell(rowG, 9, 'Avg Rate'); hdrCell(rowG, 10, 'Amount'); rowG++;
+    const wp = data.workplaceProducts || [];
+    let wpQtyT = 0, wpTotT = 0;
+    wp.forEach((p, i) => {
+      s4(rowG, 7, p.name);
+      s4(rowG, 8,  p.qty,         { numFmt: fmtN, align: 'right' });
+      s4(rowG, 9,  r2(p.avgRate), { numFmt: fmt$, align: 'right' });
+      s4(rowG, 10, r2(p.total),   { numFmt: fmt$, align: 'right' });
+      altFill(i, [rowG,7],[rowG,8],[rowG,9],[rowG,10]);
+      wpQtyT += p.qty; wpTotT += p.total; rowG++;
+    });
+    gtCell(rowG, 7, 'Grand Total'); gtCell(rowG, 8, wpQtyT, fmtN, 'right'); gtCell(rowG, 10, r2(wpTotT), fmt$, 'right');
+    rowG += 2;
+
+    // Datto Workplace Usage sub-section
+    secCell(rowG, 7, 'DATTO WORKPLACE USAGE'); rowG++;
+    const wkUsage = data.workplaceUsage || [];
+    const wpProdNames = data.workplaceProductNames || [];
+    if (wkUsage.length && wpProdNames.length) {
+      hdrCell(rowG, 7, 'Client');
+      wpProdNames.forEach((pn, i) => hdrCell(rowG, 8 + i, pn));
+      rowG++;
+      wkUsage.forEach(({ client, products }, i) => {
+        s4(rowG, 7, client);
+        wpProdNames.forEach((pn, j) => {
+          const v = products[pn] || 0;
+          if (v) s4(rowG, 8 + j, v, { numFmt: fmtN, align: 'right' });
+        });
+        if (i % 2 === 0) {
+          [7, ...wpProdNames.map((_, j) => 8 + j)].forEach(c => { ws4.getCell(rowG, c).fill = fill(ROW_ALT); });
+        }
+        rowG++;
+      });
+    }
+
+    // ── L-O: Anchor Tools ────────────────────────────────────────────────────
+    secCell(rowL, 12, 'ANCHOR TOOLS'); rowL++;
+    hdrCell(rowL, 12, 'Product'); hdrCell(rowL, 13, 'Qty'); hdrCell(rowL, 14, 'Avg Rate'); hdrCell(rowL, 15, 'Amount'); rowL++;
+    const at = data.anchorTools || [];
+    let atQtyT = 0, atTotT = 0;
+    at.forEach((p, i) => {
+      s4(rowL, 12, p.name);
+      s4(rowL, 13, p.qty,         { numFmt: fmtN, align: 'right' });
+      s4(rowL, 14, r2(p.avgRate), { numFmt: fmt$, align: 'right' });
+      s4(rowL, 15, r2(p.total),   { numFmt: fmt$, align: 'right' });
+      altFill(i, [rowL,12],[rowL,13],[rowL,14],[rowL,15]);
+      atQtyT += p.qty; atTotT += p.total; rowL++;
+    });
+    gtCell(rowL, 12, 'Grand Total'); gtCell(rowL, 13, atQtyT, fmtN, 'right'); gtCell(rowL, 15, r2(atTotT), fmt$, 'right');
+    rowL += 2;
+
+    // Datto SaaS Costs sub-section
+    secCell(rowL, 12, 'DATTO SAAS COSTS'); rowL++;
+    hdrCell(rowL, 12, 'Client'); hdrCell(rowL, 13, 'Qty'); rowL++;
+    (data.saasCosts || []).forEach((s, i) => {
+      s4(rowL, 12, s.name);
+      s4(rowL, 13, s.qty, { numFmt: fmtN, align: 'right' });
+      altFill(i, [rowL,12],[rowL,13]);
+      rowL++;
+    });
+
+    // ── Q-T: Datto Backup and Networking ─────────────────────────────────────
+    secCell(rowQ, 17, 'DATTO BACKUP AND NETWORKING'); rowQ++;
+    hdrCell(rowQ, 17, 'Module'); hdrCell(rowQ, 18, 'Qty'); hdrCell(rowQ, 19, 'Avg Rate'); hdrCell(rowQ, 20, 'Amount'); rowQ++;
+    const bp = data.backupProducts || [];
+    let bpQtyT = 0, bpTotT = 0;
+    bp.forEach((p, i) => {
+      s4(rowQ, 17, p.name);
+      s4(rowQ, 18, p.qty,         { numFmt: fmtN, align: 'right' });
+      s4(rowQ, 19, r2(p.avgRate), { numFmt: fmt$, align: 'right' });
+      s4(rowQ, 20, r2(p.total),   { numFmt: fmt$, align: 'right' });
+      altFill(i, [rowQ,17],[rowQ,18],[rowQ,19],[rowQ,20]);
+      bpQtyT += p.qty; bpTotT += p.total; rowQ++;
+    });
+    gtCell(rowQ, 17, 'Grand Total'); gtCell(rowQ, 18, bpQtyT, fmtN, 'right'); gtCell(rowQ, 20, r2(bpTotT), fmt$, 'right');
+    rowQ += 3;
+
+    // Datto Networking devices sub-section
+    secCell(rowQ, 17, 'DATTO NETWORKING'); rowQ++;
+    hdrCell(rowQ, 17, 'Product'); hdrCell(rowQ, 18, 'Qty'); hdrCell(rowQ, 19, 'Avg Rate'); hdrCell(rowQ, 20, 'Amount'); rowQ++;
+    const np = data.networkingProducts || [];
+    np.forEach((p, i) => {
+      s4(rowQ, 17, p.name);
+      s4(rowQ, 18, p.qty,         { numFmt: fmtN, align: 'right' });
+      s4(rowQ, 19, r2(p.avgRate), { numFmt: fmt$, align: 'right' });
+      s4(rowQ, 20, r2(p.total),   { numFmt: fmt$, align: 'right' });
+      altFill(i, [rowQ,17],[rowQ,18],[rowQ,19],[rowQ,20]);
+      rowQ++;
+    });
+    rowQ += 2;
+
+    // Datto BCDR per-client sub-section
+    secCell(rowQ, 17, 'DATTO BCDR'); rowQ++;
+    hdrCell(rowQ, 17, 'Client'); hdrCell(rowQ, 18, 'Amount'); rowQ++;
+    const bcdr = data.bcdrCosts || [];
+    let bcdrGT = 0;
+    bcdr.forEach((b, i) => {
+      s4(rowQ, 17, b.name); s4(rowQ, 18, r2(b.total), { numFmt: fmt$, align: 'right' });
+      altFill(i, [rowQ,17],[rowQ,18]); bcdrGT += b.total; rowQ++;
+    });
+    gtCell(rowQ, 17, 'Grand Total'); gtCell(rowQ, 18, r2(bcdrGT), fmt$, 'right');
+
+    // ── QBO ENTRIES sheet ────────────────────────────────────────────────────
     const ws1 = wb.addWorksheet('QBO Entries');
-    ws1.columns = [{ width: 48 }, { width: 58 }, { width: 20 }, { width: 14 }];
-    applyHdr(ws1.addRow(['Description', 'QBO Account', 'Class', 'Amount']), ORANGE);
+    ws1.columns = [{ width: 50 }, { width: 58 }, { width: 22 }, { width: 14 }];
+    const qboHdr = ws1.addRow(['Description', 'QBO Account', 'Class', 'Amount']);
+    qboHdr.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    qboHdr.eachCell(c => { c.fill = fill(ORANGE); c.alignment = { vertical: 'middle' }; });
     let qboTotal = 0;
     for (const e of (data.qboEntries || [])) {
       const row = ws1.addRow([e.description, e.account, e.class || '', e.amount]);
@@ -2780,42 +3125,9 @@ ipcMain.handle('export-kaseya-report', async (_, data) => {
       if (e.manual) row.eachCell(c => { c.fill = fill(YELLOW); });
       qboTotal += e.amount;
     }
-    const tot1 = ws1.addRow(['TOTAL', '', '', qboTotal]);
-    tot1.font = { bold: true }; tot1.getCell(4).numFmt = fmt$;
-    tot1.eachCell(c => { c.fill = fill(LIGHT_OR); });
-
-    // Sheet 2: Module Summary
-    const ws2 = wb.addWorksheet('Module Summary');
-    ws2.columns = [{ width: 28 }, { width: 14 }];
-    applyHdr(ws2.addRow(['Module', 'Total']), ORANGE);
-    const modEntries = Object.entries(data.modules || {}).sort((a, b) => b[1].total - a[1].total);
-    let modTotal = 0;
-    for (const [name, m] of modEntries) {
-      const row = ws2.addRow([name, m.total]);
-      row.getCell(2).numFmt = fmt$;
-      modTotal += m.total;
-    }
-    const tot2 = ws2.addRow(['GRAND TOTAL', modTotal]);
-    tot2.font = { bold: true }; tot2.getCell(2).numFmt = fmt$;
-    tot2.eachCell(c => { c.fill = fill(LIGHT_OR); });
-
-    // Sheet 3: Client Breakdown
-    const allModules = Object.keys(data.modules || {}).sort();
-    const ws3 = wb.addWorksheet('Client Breakdown');
-    ws3.columns = [{ width: 32 }, ...allModules.map(() => ({ width: 14 })), { width: 14 }];
-    applyHdr(ws3.addRow(['Company', ...allModules, 'Total']), ORANGE);
-    for (const client of (data.clients || [])) {
-      const vals = allModules.map(m => client.modules[m]?.total || '');
-      const row  = ws3.addRow([client.company, ...vals, client.total]);
-      const lastCol = allModules.length + 2;
-      for (let c = 2; c <= lastCol; c++) {
-        if (row.getCell(c).value !== '') row.getCell(c).numFmt = fmt$;
-      }
-    }
-
-    // Sheet 4: Raw Line Items (from modules.lines — not stored in data, but modules totals are)
-    // We store module totals only, so sheet 4 is a client×module pivot
-    ws3.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: allModules.length + 2 } };
+    const totRow = ws1.addRow(['TOTAL', '', '', r2(qboTotal)]);
+    totRow.font = { bold: true }; totRow.getCell(4).numFmt = fmt$;
+    totRow.eachCell(c => { c.fill = fill(LIGHT_O); });
 
     await wb.xlsx.writeFile(result.filePath);
     shell.openPath(result.filePath);
@@ -2853,11 +3165,108 @@ ipcMain.handle('generate-kaseya-at-prompt', (_, data) => {
       lines.push(''); lines.push(`--- ${mod.label} ---`);
       for (const c of clients) {
         const m = c.modules[mod.key];
-        lines.push(`Company: ${c.company} — Qty: ${Math.ceil(m.qty)} | Cost: $${m.total.toFixed(2)}`);
+        lines.push(`Company: ${c.name} — Qty: ${Math.ceil(m.qty)} | Cost: $${m.total.toFixed(2)}`);
       }
     }
     return { prompt: lines.join('\n') };
   } catch (e) { return { prompt: `Error: ${e.message}` }; }
+});
+
+ipcMain.handle('get-kaseya-snapshots', () => {
+  const snaps = loadKaseyaSnapshots();
+  return Object.entries(snaps)
+    .map(([key, s]) => ({ key, invoiceDate: s.invoiceDate, fileName: s.fileName, grandTotal: s.grandTotal, savedAt: s.savedAt }))
+    .sort((a, b) => b.key.localeCompare(a.key));
+});
+
+ipcMain.handle('delete-kaseya-snapshot', (_, key) => {
+  try {
+    const snaps = loadKaseyaSnapshots();
+    delete snaps[key];
+    saveKaseyaSnapshots(snaps);
+    return { success: true };
+  } catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('load-kaseya-snapshot', (_, key) => {
+  try {
+    const snaps = loadKaseyaSnapshots();
+    const s = snaps[key];
+    if (!s) return { success: false, error: 'Snapshot not found' };
+    const clientsSorted = [...(s.clients || [])].sort((a, b) => b.total - a.total);
+    return {
+      success: true,
+      fileName: s.fileName || '',
+      invoiceDate: s.invoiceDate || '',
+      grandTotal: s.grandTotal || 0,
+      modules: s.modules || {},
+      categories: s.categories || {},
+      clients: s.clients || [],
+      clientTotals: clientsSorted,
+      qboEntries: s.qboEntries || [],
+      totalLines: s.totalLines || 0,
+      sheetUsed: s.sheetUsed || '',
+      columnsDetected: s.columnsDetected || {},
+      snapKey: key,
+    };
+  } catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('compare-kaseya-snapshots', (_, { keyA, keyB }) => {
+  try {
+    const snaps = loadKaseyaSnapshots();
+    const a = snaps[keyA], b = snaps[keyB];
+    if (!a) return { error: `Snapshot "${keyA}" not found` };
+    if (!b) return { error: `Snapshot "${keyB}" not found` };
+
+    const r2  = v => Math.round(v * 100) / 100;
+    const pct = (av, bv) => av !== 0 ? Math.round((bv - av) / Math.abs(av) * 1000) / 10 : null;
+    const status = (av, bv) => av === 0 && bv > 0 ? 'new' : bv === 0 && av > 0 ? 'dropped' : bv > av ? 'up' : bv < av ? 'down' : 'same';
+
+    // Grand total
+    const grandTotal = { a: a.grandTotal, b: b.grandTotal, delta: r2(b.grandTotal - a.grandTotal), pct: pct(a.grandTotal, b.grandTotal) };
+
+    // Modules
+    const allModKeys = [...new Set([...Object.keys(a.modules || {}), ...Object.keys(b.modules || {})])].sort();
+    const modules = allModKeys.map(name => {
+      const av = a.modules[name]?.total || 0;
+      const bv = b.modules[name]?.total || 0;
+      return { name, a: av, b: bv, delta: r2(bv - av), pct: pct(av, bv), status: status(av, bv) };
+    }).filter(m => m.delta !== 0);
+
+    // Categories
+    const allCatKeys = [...new Set([...Object.keys(a.categories || {}), ...Object.keys(b.categories || {})])].sort();
+    const categories = allCatKeys.map(name => {
+      const av = a.categories[name] || 0;
+      const bv = b.categories[name] || 0;
+      return { name, a: av, b: bv, delta: r2(bv - av), pct: pct(av, bv), status: status(av, bv) };
+    }).filter(c => c.delta !== 0);
+
+    // Clients — normalized name lookup
+    const aMap = Object.fromEntries((a.clients || []).map(c => [c.name, c]));
+    const bMap = Object.fromEntries((b.clients || []).map(c => [c.name, c]));
+    const allNames = [...new Set([...(a.clients || []).map(c => c.name), ...(b.clients || []).map(c => c.name)])].sort();
+
+    const clients = allNames.map(name => {
+      const ac = aMap[name], bc = bMap[name];
+      const av = ac?.total || 0, bv = bc?.total || 0;
+      if (av === bv) return null; // no change in total
+
+      // Per-client module deltas
+      const aMods = ac?.modules || {}, bMods = bc?.modules || {};
+      const allMNames = [...new Set([...Object.keys(aMods), ...Object.keys(bMods)])];
+      const modDeltas = allMNames.map(m => {
+        const amv = aMods[m]?.total || 0, bmv = bMods[m]?.total || 0;
+        const amq = aMods[m]?.qty  || 0, bmq = bMods[m]?.qty  || 0;
+        if (amv === bmv && amq === bmq) return null;
+        return { name: m, aAmt: amv, bAmt: bmv, deltaAmt: r2(bmv - amv), aQty: amq, bQty: bmq, deltaQty: bmq - amq };
+      }).filter(Boolean).sort((x, y) => Math.abs(y.deltaAmt) - Math.abs(x.deltaAmt));
+
+      return { name, a: av, b: bv, delta: r2(bv - av), pct: pct(av, bv), status: status(av, bv), modDeltas };
+    }).filter(Boolean).sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
+
+    return { keyA, keyB, grandTotal, modules, categories, clients };
+  } catch (e) { return { error: e.message }; }
 });
 
 // ─── Tool Visibility ──────────────────────────────────────────────────────────
@@ -3513,4 +3922,200 @@ ipcMain.handle('run-contract-renewals', async (_, { windowDays }) => {
   renewed.sort((a, b) => a.companyName.localeCompare(b.companyName) || new Date(a.endDate) - new Date(b.endDate));
 
   return { contracts: needs, renewed };
+});
+
+// ─── BlackPoint / CompassOne ──────────────────────────────────────────────────
+const BP_BASE          = 'https://api.blackpointcyber.com';
+const BP_SNAPSHOT_FILE = path.join(USER_DATA, 'anchor-bp-snapshot.json');
+
+async function bpFetch(bpPath, tenantId = null) {
+  const apiKey = await keytar.getPassword(SERVICE_NAME, 'blackpoint_api_key');
+  if (!apiKey) throw new Error('BlackPoint API key not configured. Go to Settings → API & Accounts.');
+  const headers = { 'Authorization': `Bearer ${apiKey}`, 'Accept': 'application/json' };
+  if (tenantId) headers['x-tenant-id'] = tenantId;
+  const res = await fetch(`${BP_BASE}${bpPath}`, { headers });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`BlackPoint API error (${res.status}): ${body.slice(0, 200)}`);
+  }
+  return res.json();
+}
+
+ipcMain.handle('run-blackpoint-usage', async () => {
+  // 1. Fetch all tenants (paginated)
+  const tenants = [];
+  let page = 1;
+  while (true) {
+    const r = await bpFetch(`/v1/tenants?pageSize=50&page=${page}`);
+    const batch = r.data || [];
+    tenants.push(...batch);
+    const meta = r.meta || {};
+    const totalPages = meta.totalPages || meta.pageCount || 1;
+    if (page >= totalPages || batch.length === 0) break;
+    page++;
+  }
+
+  // 2. Fetch device counts for each tenant in batches of 8
+  const BATCH = 8;
+  const sleep = ms => new Promise(res => setTimeout(res, ms));
+
+  for (let i = 0; i < tenants.length; i += BATCH) {
+    const batch = tenants.slice(i, i + BATCH);
+    await Promise.all(batch.map(async t => {
+      try {
+        let activeAgents = 0;
+        let totalDevices = 0;
+        let devPage = 1;
+        while (true) {
+          const r = await bpFetch(`/v1/assets?class=DEVICE&pageSize=200&page=${devPage}`, t.id);
+          const devices = r.data || [];
+          totalDevices += devices.length;
+          activeAgents += devices.filter(d => !d.agentDeactivated).length;
+          const meta = r.meta || {};
+          const devTotalPages = meta.totalPages || meta.pageCount || 1;
+          if (devPage >= devTotalPages || devices.length === 0) break;
+          devPage++;
+        }
+        t.activeAgents = activeAgents;
+        t.totalDevices = totalDevices;
+      } catch (e) {
+        t.activeAgents = null;
+        t.totalDevices = null;
+        t.fetchError   = e.message;
+      }
+    }));
+    if (i + BATCH < tenants.length) await sleep(150);
+  }
+
+  // 3. Load previous snapshot for delta comparison
+  let prevSnapshot = {};
+  if (fs.existsSync(BP_SNAPSHOT_FILE)) {
+    try { prevSnapshot = JSON.parse(fs.readFileSync(BP_SNAPSHOT_FILE, 'utf8')); } catch {}
+  }
+  const prevDate = prevSnapshot._date || null;
+
+  // 4. Build result rows with deltas, sorted by name
+  const result = tenants
+    .map(t => ({
+      id:               t.id,
+      name:             t.name || t.displayName || 'Unknown',
+      activeAgents:     t.activeAgents,
+      totalDevices:     t.totalDevices,
+      prevActiveAgents: prevSnapshot[t.id] != null ? prevSnapshot[t.id].activeAgents : null,
+      delta:            (t.activeAgents != null && prevSnapshot[t.id] != null)
+                          ? t.activeAgents - prevSnapshot[t.id].activeAgents
+                          : null,
+      error:            t.fetchError || null,
+    }))
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+  // 5. Save new snapshot (overwrites previous)
+  const newSnapshot = { _date: new Date().toISOString() };
+  tenants.forEach(t => {
+    if (t.activeAgents != null) {
+      newSnapshot[t.id] = { activeAgents: t.activeAgents, name: t.name };
+    }
+  });
+  fs.writeFileSync(BP_SNAPSHOT_FILE, JSON.stringify(newSnapshot, null, 2));
+
+  const totalActive = result.reduce((sum, t) => sum + (t.activeAgents || 0), 0);
+
+  return {
+    tenants:      result,
+    prevDate,
+    runDate:      newSnapshot._date,
+    totalTenants: result.length,
+    totalActive,
+  };
+});
+
+ipcMain.handle('export-blackpoint-report', async (_, data) => {
+  try {
+    const ExcelJS = require('exceljs');
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Anchor Hub';
+    wb.created = new Date();
+
+    const ws = wb.addWorksheet('Endpoint Usage');
+
+    const H_FILL   = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD0641C' } };
+    const H_FONT   = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11, name: 'Calibri' };
+    const BORDER   = { style: 'thin', color: { argb: 'FFE2E8F0' } };
+    const ALL_BORD = { top: BORDER, left: BORDER, bottom: BORDER, right: BORDER };
+
+    ws.columns = [
+      { header: 'Company',        key: 'name',    width: 38 },
+      { header: 'Active Agents',  key: 'active',  width: 16 },
+      { header: 'Previous Count', key: 'prev',    width: 16 },
+      { header: 'Change',         key: 'delta',   width: 12 },
+      { header: '% Change',       key: 'pct',     width: 12 },
+      { header: 'Status',         key: 'status',  width: 18 },
+    ];
+
+    ws.getRow(1).eachCell(cell => {
+      cell.fill = H_FILL; cell.font = H_FONT; cell.border = ALL_BORD;
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+    });
+    ws.getRow(1).height = 22;
+
+    (data.tenants || []).forEach((t, i) => {
+      const prev  = t.prevActiveAgents;
+      const delta = t.delta;
+      const pct   = (delta != null && prev != null && prev > 0)
+                      ? ((delta / prev) * 100).toFixed(1) + '%'
+                      : '—';
+      const statusText = t.error     ? 'Error'
+                       : delta == null ? 'New Client'
+                       : delta > 0     ? 'Increased'
+                       : delta < 0     ? 'Decreased'
+                       :                 'No Change';
+      const deltaStr = delta == null ? 'New'
+                     : delta > 0    ? `+${delta}`
+                     : delta === 0  ? '0'
+                     :                `${delta}`;
+
+      const row = ws.addRow({
+        name:   t.name,
+        active: t.activeAgents ?? 'Error',
+        prev:   prev != null ? prev : '—',
+        delta:  deltaStr,
+        pct,
+        status: statusText,
+      });
+
+      // Alternate row fill
+      if (i % 2 === 1) {
+        row.eachCell(cell => {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+        });
+      }
+
+      // Status cell colour
+      const statusFg = delta == null ? 'FFFFF3CD'   // new  – yellow
+                     : delta > 0    ? 'FFFFE5D0'   // up   – orange
+                     : delta < 0    ? 'FFD0E8FF'   // down – blue
+                     :                'FFF0F0F0';  // same – grey
+      const statusCell = row.getCell('status');
+      statusCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: statusFg } };
+
+      row.eachCell(cell => { cell.border = ALL_BORD; cell.alignment = { vertical: 'middle' }; });
+      row.height = 18;
+    });
+
+    // Totals row
+    ws.addRow({});
+    const totRow = ws.addRow({ name: 'TOTAL ACTIVE AGENTS', active: data.totalActive || '' });
+    totRow.getCell('name').font  = { bold: true };
+    totRow.getCell('active').font = { bold: true };
+
+    const filePath = path.join(
+      app.getPath('downloads'),
+      `blackpoint-endpoint-${new Date().toISOString().slice(0, 10)}.xlsx`
+    );
+    await wb.xlsx.writeFile(filePath);
+    shell.showItemInFolder(filePath);
+    return { ok: true, filePath };
+  } catch (e) {
+    return { error: e.message };
+  }
 });

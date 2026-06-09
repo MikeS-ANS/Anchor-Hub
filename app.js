@@ -105,13 +105,16 @@ function navigate(view) {
   else if (view === 'kaseya-processor')    renderKaseyaProcessor();
   else if (view === 'contract-changes')    renderContractChanges();
   else if (view === 'contract-renewals')   renderContractRenewals();
+  else if (view === 'blackpoint-processor') renderBlackpointProcessor();
   else if (view === 'settings') renderSettings();
+  else if (view === 'help')     renderHelp();
 }
 
 document.querySelectorAll('.nav-item:not(.coming-soon)').forEach(item => {
   item.addEventListener('click', () => navigate(item.dataset.view));
 });
 document.getElementById('btn-settings').addEventListener('click', () => navigate('settings'));
+document.getElementById('btn-help').addEventListener('click', () => navigate('help'));
 
 // ─── Tool Visibility ──────────────────────────────────────────────────────────
 function applyToolVisibility(vis) {
@@ -183,6 +186,12 @@ const HOME_CARDS = [
     label: 'Autotask Contract Renewals',
     desc:  'Find expiring contracts with no renewal, review services, update pricing, and generate a Claude renewal prompt.',
     icon:  `<svg width="24" height="24" viewBox="0 0 16 16" fill="none"><path d="M13 8A5 5 0 1 1 8 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M8 1l3 2-3 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 8h2v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  },
+  {
+    key:   'blackpoint-processor',
+    label: 'BlackPoint Usage',
+    desc:  'Track BlackPoint protected endpoint counts per client, compare month-over-month, and generate a Claude prompt to update Security+ quantities in Autotask.',
+    icon:  `<svg width="24" height="24" viewBox="0 0 16 16" fill="none"><path d="M8 1.5L2 4.5v4c0 3.3 2.4 5.5 6 6 3.6-.5 6-2.7 6-6v-4L8 1.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 8l1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   },
 ];
 
@@ -591,22 +600,99 @@ function renderInvoiceResults(results, container) {
     <div id="finding-cards"></div>
   `;
 
+  // Helpers for delta rendering
+  const truncateDesc = desc => {
+    if (!desc) return desc;
+    // Step 1: strip "- Azure subscription N - ..." (Beta Health format)
+    let r = desc.replace(/\s*[-–]\s*Azure subscription\s+\d+.*$/i, '').trim();
+    // Step 2: strip "- UUID..." or " UUID..." (Bradford format: "Microsoft Azure - UUID Microsoft Azure...")
+    r = r.replace(/\s*[-–]?\s*[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}.*$/i, '').trim();
+    // Step 3: for any Microsoft Azure item cap at 2 dash-segments to catch remaining edge cases
+    if (/^Microsoft Azure/i.test(r)) {
+      const parts = r.split(/\s*[-–]\s*/);
+      r = parts.slice(0, 2).join(' - ');
+    }
+    return r || desc;
+  };
+  const fmtD = v => {
+    const abs = Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return (v >= 0 ? '+' : '−') + '$' + abs;
+  };
+  const calcDollar = c => {
+    if (typeof c === 'string') return 0;
+    switch (c.type) {
+      case 'QTY_CHANGE':   return (c.qtyDelta  || 0) * (c.currentPrice || 0);
+      case 'PRICE_CHANGE': return (c.priceDelta || 0) * (c.currentQty   || 0);
+      case 'NEW':          return (c.currentQty || 0) * (c.currentPrice || 0);
+      case 'REMOVED':      return -((c.prevQty  || 0) * (c.prevPrice    || 0));
+      default:             return 0;
+    }
+  };
+  const dColor = v => v > 0 ? 'var(--warn)' : v < 0 ? '#4caf97' : 'var(--text-muted)';
+
   const cards = document.getElementById('finding-cards');
+  let grandDollar = 0;
+
   for (const a of results.anomalies) {
     const card = document.createElement('div');
     card.className = 'finding-card';
     const items = a.changes || [];
+
+    let cardDollar = 0;
+    const listItems = items.filter(l => l.trim ? l.trim() : true).map(l => {
+      if (typeof l === 'string') return `<li style="padding:4px 0">${escHtml(l.replace(/^[-•*]\s*/, ''))}</li>`;
+      const delta = calcDollar(l);
+      cardDollar += delta;
+      const desc  = truncateDesc(l.description || l.type || '');
+      const isSpecial = l.type === 'NEW_CLIENT' || l.type === 'CLIENT_REMOVED';
+
+      // Right-side badges (qty + dollar)
+      let badges = '';
+      if (l.type === 'QTY_CHANGE' && l.prevQty != null && l.currentQty != null) {
+        const sign = l.qtyDelta >= 0 ? '+' : '';
+        badges += `<span style="font-size:10.5px;font-family:var(--font-mono);color:var(--text-muted);background:rgba(255,255,255,.06);padding:1px 6px;border-radius:4px;white-space:nowrap">${l.prevQty}→${l.currentQty} (${sign}${l.qtyDelta})</span>`;
+      }
+      if (!isSpecial) {
+        // Always show dollar for qty changes (even $0.00); show for others only if non-zero
+        if (l.type === 'QTY_CHANGE' || Math.abs(delta) >= 0.01) {
+          badges += `<span style="font-size:11.5px;font-weight:700;font-family:var(--font-mono);color:${dColor(delta)};white-space:nowrap">${fmtD(delta)}</span>`;
+        }
+      }
+
+      return `<li style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.04)">
+        <span style="flex:1;min-width:0">${escHtml(desc)}</span>
+        ${badges ? `<span style="display:inline-flex;align-items:center;gap:6px;flex-shrink:0">${badges}</span>` : ''}
+      </li>`;
+    });
+
+    grandDollar += cardDollar;
+
+    const cardTotalHtml = Math.abs(cardDollar) >= 0.01
+      ? `<span style="font-size:12px;font-family:var(--font-mono);font-weight:700;color:${dColor(cardDollar)}">${fmtD(cardDollar)}</span>`
+      : '';
+
     card.innerHTML = `
       <div class="finding-header">
         <span class="finding-company">${escHtml(a.company)}</span>
-        <span class="finding-meta">${items.length} change${items.length !== 1 ? 's' : ''}</span>
+        <div style="display:flex;align-items:center;gap:10px">
+          ${cardTotalHtml}
+          <span class="finding-meta">${items.length} change${items.length !== 1 ? 's' : ''}</span>
+        </div>
       </div>
-      <ul class="finding-list">${items.filter(l => l.trim ? l.trim() : true).map(l => {
-        const text = typeof l === 'string' ? l.replace(/^[-•*]\s*/, '') : (l.description || l.type || '');
-        return `<li>${escHtml(text)}</li>`;
-      }).join('')}</ul>
+      <ul class="finding-list" style="list-style:none;padding:0;margin:0">${listItems.join('')}</ul>
     `;
     cards.appendChild(card);
+  }
+
+  // Grand total net change banner
+  if (results.anomalies.length && Math.abs(grandDollar) >= 0.01) {
+    const banner = document.createElement('div');
+    banner.style.cssText = 'margin-top:12px;padding:10px 18px;border-radius:var(--radius);background:var(--surface);border:1px solid var(--border);display:flex;align-items:center;justify-content:space-between';
+    banner.innerHTML = `
+      <span style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Estimated Net Invoice Change</span>
+      <span style="font-size:18px;font-weight:800;font-family:var(--font-mono);color:${dColor(grandDollar)}">${fmtD(grandDollar)}</span>
+    `;
+    cards.after(banner);
   }
 }
 
@@ -1266,6 +1352,18 @@ Total CommITment Core</textarea>
         </div>
       </div>
 
+      <div class="settings-section">
+        <h2 class="section-title">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1.5L2 4.5v4c0 3.3 2.4 5.5 6 6 3.6-.5 6-2.7 6-6v-4L8 1.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 8l1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          BlackPoint / CompassOne
+        </h2>
+        <div class="field-group">
+          <label class="field-label">API Key</label>
+          <input class="field-input" id="bp-api-key" type="password" placeholder="bpc_..." autocomplete="off" />
+          <p class="field-hint">Used for the BlackPoint Endpoint Usage tool. Find your API key in the CompassOne portal under API settings.</p>
+        </div>
+      </div>
+
       <div class="settings-actions">
         <button class="btn btn-primary" id="btn-save-creds">Save Credentials</button>
         <button class="btn btn-ghost" id="btn-clear-creds">Clear All</button>
@@ -1318,6 +1416,7 @@ const TOOL_VIS_DEFS = [
   { key: 'invoice-processor',   label: 'Pax8 Invoice Processor' },
   { key: 'kaseya-processor',    label: 'Kaseya Invoice Processor' },
   { key: 'contract-changes',    label: 'Autotask Contract Changes' },
+  { key: 'blackpoint-processor', label: 'BlackPoint Usage' },
 ];
 
 async function loadToolVisibilitySettings() {
@@ -1435,6 +1534,7 @@ const CRED_MAP = {
   'at-integration-code':  'autotask_integration_code',
   'at-url':               'autotask_url',
   'claude-api-key':       'claude_api_key',
+  'bp-api-key':           'blackpoint_api_key',
 };
 
 async function loadCredentials() {
@@ -1836,15 +1936,15 @@ function renderInvoiceProcessorResults(data) {
         </thead>
         <tbody>
           ${(data.oneTime || []).map((r, i) => `
-            <tr style="background:${i % 2 === 0 ? '#fffbe6' : '#fff9d6'};color:#1a1a1a">
-              <td style="padding:4px 8px;color:#1a1a1a">${escHtml(r.company)}</td>
-              <td style="padding:4px 8px;font-family:var(--font-mono);font-size:11px;color:#1a1a1a">${escHtml(r.sku)}</td>
-              <td style="padding:4px 8px;color:#1a1a1a">${escHtml(r.description)}</td>
-              <td style="padding:4px 8px;text-align:right;color:#1a1a1a">${r.qty}</td>
-              <td style="padding:4px 8px;text-align:right;font-family:var(--font-mono);color:#1a1a1a">${fmt(r.unitCost)}</td>
-              <td style="padding:4px 8px;text-align:right;font-family:var(--font-mono);color:#1a1a1a">${fmt(r.costTotal)}</td>
-              <td style="padding:4px 8px;text-align:right;font-family:var(--font-mono);color:#1a1a1a">${fmt(r.unitPrice)}</td>
-              <td style="padding:4px 8px;text-align:right;font-family:var(--font-mono);color:#1a1a1a">${fmt(r.subtotal)}</td>
+            <tr style="background:${i % 2 === 0 ? 'rgba(255,251,80,.07)' : 'rgba(255,251,80,.03)'}">
+              <td style="padding:4px 8px">${escHtml(r.company)}</td>
+              <td style="padding:4px 8px;font-family:var(--font-mono);font-size:11px">${escHtml(r.sku)}</td>
+              <td style="padding:4px 8px">${escHtml(r.description)}</td>
+              <td style="padding:4px 8px;text-align:right">${r.qty}</td>
+              <td style="padding:4px 8px;text-align:right;font-family:var(--font-mono)">${fmt(r.unitCost)}</td>
+              <td style="padding:4px 8px;text-align:right;font-family:var(--font-mono)">${fmt(r.costTotal)}</td>
+              <td style="padding:4px 8px;text-align:right;font-family:var(--font-mono)">${fmt(r.unitPrice)}</td>
+              <td style="padding:4px 8px;text-align:right;font-family:var(--font-mono)">${fmt(r.subtotal)}</td>
             </tr>`).join('')}
         </tbody>
       </table>`;
@@ -1876,9 +1976,9 @@ function renderInvoiceProcessorResults(data) {
           </thead>
           <tbody>
             ${rows.map((r, i) => `
-              <tr style="background:${i % 2 === 0 ? svc.color : '#fff'};color:#1a1a1a">
-                <td style="padding:4px 10px;color:#1a1a1a">${escHtml(r.company)}</td>
-                <td style="padding:4px 10px;text-align:right;font-family:var(--font-mono);color:#1a1a1a">${r.qty}</td>
+              <tr style="background:${i % 2 === 0 ? svc.color : 'transparent'}">
+                <td style="padding:4px 10px">${escHtml(r.company)}</td>
+                <td style="padding:4px 10px;text-align:right;font-family:var(--font-mono)">${r.qty}</td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -1964,27 +2064,27 @@ function renderAzureTable(azureRows) {
           const price  = r.price != null ? r.price : (r.marginPct < 100 ? Math.ceil(r.cost / (1 - r.marginPct / 100) / 5) * 5 : r.cost);
           const rowBg  = azureRowColor(r.marginPct);
           return `
-            <tr style="background:${rowBg};color:#1a1a1a" data-row="${i}" data-cost="${r.cost}">
-              <td style="padding:5px 10px;color:#1a1a1a">${escHtml(r.company)}</td>
-              <td style="padding:5px 10px;color:${r.atCompanyId ? '#1a1a1a' : '#666'}">${escHtml(r.atCompanyName || '(not mapped)')}</td>
-              <td style="padding:5px 10px;text-align:right;font-family:var(--font-mono);color:#1a1a1a">${fmt(r.cost)}</td>
+            <tr style="background:${rowBg}" data-row="${i}" data-cost="${r.cost}">
+              <td style="padding:5px 10px">${escHtml(r.company)}</td>
+              <td style="padding:5px 10px;color:${r.atCompanyId ? 'var(--text)' : 'var(--text-muted)'}">${escHtml(r.atCompanyName || '(not mapped)')}</td>
+              <td style="padding:5px 10px;text-align:right;font-family:var(--font-mono)">${fmt(r.cost)}</td>
               <td style="padding:5px 10px;text-align:center">
                 <input type="number" class="margin-input" value="${r.marginPct}" min="0" max="99" step="0.1"
-                  style="width:56px;text-align:center;background:#fff;color:#1a1a1a;border:1px solid #ccc;border-radius:4px;padding:2px 4px;font-size:12px;font-family:var(--font-mono)" />
+                  style="width:56px;text-align:center;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-size:12px;font-family:var(--font-mono)" />
               </td>
               <td style="padding:3px 6px;text-align:right">
                 <input type="number" class="price-input" value="${price.toFixed(2)}" min="0" step="5"
-                  style="width:90px;text-align:right;background:#fff;color:#1a1a1a;border:1px solid #ccc;border-radius:4px;padding:2px 6px;font-size:12px;font-family:var(--font-mono)" />
+                  style="width:90px;text-align:right;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:12px;font-family:var(--font-mono)" />
               </td>
             </tr>`;
         }).join('')}
       </tbody>
       <tfoot>
-        <tr style="background:#ffddb8;color:#1a1a1a;font-weight:700;border-top:2px solid #D0641C">
-          <td colspan="2" style="padding:6px 10px;color:#1a1a1a">TOTALS</td>
-          <td style="padding:6px 10px;text-align:right;font-family:var(--font-mono);color:#1a1a1a">${fmt(totalCost)}</td>
+        <tr style="background:rgba(208,100,28,.18);font-weight:700;border-top:2px solid #D0641C">
+          <td colspan="2" style="padding:6px 10px">TOTALS</td>
+          <td style="padding:6px 10px;text-align:right;font-family:var(--font-mono)">${fmt(totalCost)}</td>
           <td></td>
-          <td id="ip-az-total-price" style="padding:6px 10px;text-align:right;font-family:var(--font-mono);color:#1a1a1a">${fmt(totalPrice)}</td>
+          <td id="ip-az-total-price" style="padding:6px 10px;text-align:right;font-family:var(--font-mono)">${fmt(totalPrice)}</td>
         </tr>
       </tfoot>
     </table>`;
@@ -2058,12 +2158,21 @@ function renderKaseyaProcessor() {
         </button>
         <span id="kp-filename" style="font-size:12px;color:var(--text-muted);font-family:var(--font-mono)"></span>
       </div>
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px">
         <button class="btn btn-primary" id="kp-process-btn" disabled>
           <svg width="13" height="13" viewBox="0 0 13 13" fill="none" style="margin-right:4px"><path d="M2 2.5l9 4-9 4V2.5z" fill="currentColor"/></svg>
           Process Invoice
         </button>
         <span id="kp-status" class="save-status"></span>
+      </div>
+      <!-- Load previous invoice from snapshot -->
+      <div style="display:flex;align-items:center;gap:8px;padding-top:12px;border-top:1px solid var(--border);flex-wrap:wrap">
+        <span style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;white-space:nowrap">Load Previous</span>
+        <select id="kp-load-prev-sel" class="field-input" style="min-width:240px;max-width:380px">
+          <option value="">— select a stored invoice —</option>
+        </select>
+        <button class="btn btn-ghost btn-sm" id="kp-load-prev-btn" disabled>Load</button>
+        <span id="kp-load-prev-status" class="save-status"></span>
       </div>
     </div>
 
@@ -2071,44 +2180,86 @@ function renderKaseyaProcessor() {
       <!-- Metric strip -->
       <div class="metric-strip" id="kp-metrics" style="margin-bottom:16px"></div>
 
-      <!-- QBO Journal Entries -->
-      <div class="settings-section">
-        <div class="section-title" style="display:flex;align-items:center;justify-content:space-between">
-          <span>QBO Journal Entries</span>
-          <div style="display:flex;gap:8px">
-            <button class="btn btn-ghost btn-sm" id="kp-export-btn">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="margin-right:3px"><path d="M1 9v1.5a.5.5 0 00.5.5h9a.5.5 0 00.5-.5V9M6 1v7M3.5 5.5L6 8l2.5-2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              Export Excel
-            </button>
-            <button class="btn btn-ghost btn-sm" id="kp-at-prompt-btn">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="margin-right:3px"><rect x="1" y="1" width="10" height="10" rx="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M3 4h6M3 6h4" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
-              Copy AT Prompt
-            </button>
-            <span id="kp-at-copied" style="font-size:11px;color:var(--success);display:none">Copied!</span>
+      <!-- Action bar -->
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+        <button class="btn btn-primary" id="kp-export-btn">
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none" style="margin-right:4px"><path d="M1 10v1.5a.5.5 0 00.5.5h10a.5.5 0 00.5-.5V10M6.5 1v8M4 6.5L6.5 9 9 6.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Export Excel
+        </button>
+        <button class="btn btn-ghost" id="kp-at-prompt-btn">
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none" style="margin-right:4px"><rect x="1" y="1" width="11" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M3.5 4.5h6M3.5 6.5h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+          Generate AT Prompt
+        </button>
+        <span id="kp-export-status" class="save-status"></span>
+      </div>
+
+      <!-- QBO Journal Entries — full width -->
+      <div class="settings-section wide">
+        <div class="section-title">QBO Journal Entries</div>
+        <p class="field-hint" style="margin-bottom:10px">Enter these as a journal entry in QuickBooks. Highlighted rows cover items (BCDR, Networking) that need to be reconciled and split per-client separately — the total amount is correct but the per-client allocation is manual.</p>
+        <div id="kp-qbo-table" style="overflow-x:auto"></div>
+      </div>
+
+      <!-- Summary box: Module left, Category right -->
+      <div class="settings-section wide">
+        <div class="section-title">Invoice Summary</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start">
+          <div>
+            <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:8px">By Module</div>
+            <div id="kp-module-table"></div>
+          </div>
+          <div>
+            <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:8px">By Category</div>
+            <div id="kp-category-table"></div>
           </div>
         </div>
-        <p class="field-hint" style="margin-bottom:10px">
-          Enter these as a journal entry in QuickBooks.
-          <span style="display:inline-flex;align-items:center;gap:4px;margin-left:8px;font-size:11px;background:rgba(255,200,0,.15);color:#f5c518;padding:2px 7px;border-radius:4px">
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 1L1 9h8L5 1z" stroke="currentColor" stroke-width="1"/><path d="M5 4v2.5M5 7.5v.5" stroke="currentColor" stroke-width="1" stroke-linecap="round"/></svg>
-            Yellow rows require manual verification
-          </span>
-        </p>
-        <div id="kp-qbo-table"></div>
       </div>
 
-      <!-- Module Summary -->
-      <div class="settings-section">
-        <div class="section-title">Module Summary</div>
-        <p class="field-hint" style="margin-bottom:10px">Total cost per Kaseya module.</p>
-        <div id="kp-module-table"></div>
+      <!-- AT Prompt -->
+      <div class="settings-section wide" id="kp-at-section" style="display:none">
+        <div class="section-title" style="display:flex;align-items:center;justify-content:space-between">
+          <span>Autotask Update Prompt</span>
+          <button class="btn btn-ghost btn-sm" id="kp-at-copy-btn">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="margin-right:3px"><rect x="1" y="3" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M3 3V2a1 1 0 011-1h5a1 1 0 011 1v6a1 1 0 01-1 1h-1" stroke="currentColor" stroke-width="1.2"/></svg>
+            Copy
+          </button>
+        </div>
+        <p class="field-hint" style="margin-bottom:10px">Paste this prompt into Claude MCP to update Autotask contract service quantities.</p>
+        <textarea id="kp-at-ta" readonly style="width:100%;min-height:260px;font-family:var(--font-mono);font-size:12px;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;resize:vertical;line-height:1.5;box-sizing:border-box"></textarea>
       </div>
+    </div>
 
-      <!-- Client Breakdown -->
-      <div class="settings-section">
-        <div class="section-title">Client Breakdown</div>
-        <p class="field-hint" style="margin-bottom:10px">Per-client costs across all modules.</p>
-        <div id="kp-client-table" style="overflow-x:auto"></div>
+    <!-- Delta Comparison — always visible if snapshots exist, outside kp-results -->
+    <div class="settings-section wide" id="kp-delta-section" style="display:none">
+      <div class="section-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>Invoice Delta Comparison</span>
+        <span id="kp-delta-saved-badge" style="font-size:11px;color:var(--success);display:none">
+          <svg width="11" height="11" viewBox="0 0 11 11" fill="none" style="margin-right:3px;vertical-align:-1px"><circle cx="5.5" cy="5.5" r="4.5" stroke="currentColor" stroke-width="1.2"/><path d="M3.5 5.5l1.5 1.5 2.5-3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Snapshot saved
+        </span>
+      </div>
+      <p class="field-hint" style="margin-bottom:12px">Compare any two stored invoices to see what changed — new clients, dropped clients, cost increases, quantity shifts. Each invoice you process is automatically saved as a snapshot.</p>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <label style="font-size:11px;color:var(--text-muted)">Baseline (Month A)</label>
+          <select id="kp-delta-a" class="field-input" style="min-width:200px"><option value="">— select month —</option></select>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <label style="font-size:11px;color:var(--text-muted)">Compare (Month B)</label>
+          <select id="kp-delta-b" class="field-input" style="min-width:200px"><option value="">— select month —</option></select>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <label style="font-size:11px;color:transparent">run</label>
+          <button class="btn btn-primary" id="kp-delta-run-btn">Compare</button>
+        </div>
+        <span id="kp-delta-status" class="save-status"></span>
+      </div>
+      <div id="kp-delta-results"></div>
+      <div id="kp-delta-manage" style="margin-top:12px;display:none">
+        <details style="font-size:12px;color:var(--text-muted)">
+          <summary style="cursor:pointer;user-select:none">Manage stored snapshots</summary>
+          <div id="kp-delta-snap-list" style="margin-top:8px;display:flex;flex-direction:column;gap:4px"></div>
+        </details>
       </div>
     </div>
   `;
@@ -2140,31 +2291,78 @@ function renderKaseyaProcessor() {
       document.getElementById('kp-process-btn').disabled = false;
     }
   });
+
+  // Populate "Load Previous" dropdown from stored snapshots
+  (async () => {
+    try {
+      const snaps = await window.api.getKaseyaSnapshots();
+      const sel = document.getElementById('kp-load-prev-sel');
+      const btn = document.getElementById('kp-load-prev-btn');
+      if (!sel || !snaps || !snaps.length) return;
+      snaps.forEach(s => {
+        const label = s.invoiceDate
+          ? new Date(s.invoiceDate + 'T12:00:00').toLocaleDateString('en-US', { year: 'numeric', month: 'long' }) + ` — $${(s.grandTotal || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+          : `${s.key} — $${(s.grandTotal || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        const opt = document.createElement('option');
+        opt.value = s.key;
+        opt.textContent = label;
+        sel.appendChild(opt);
+      });
+      sel.addEventListener('change', () => {
+        btn.disabled = !sel.value;
+      });
+      btn.addEventListener('click', async () => {
+        const key = sel.value;
+        if (!key) return;
+        const st = document.getElementById('kp-load-prev-status');
+        st.textContent = 'Loading…'; st.className = 'save-status';
+        btn.disabled = true;
+        try {
+          const data = await window.api.loadKaseyaSnapshot(key);
+          if (!data.success) throw new Error(data.error || 'Load failed');
+          _kaseyaData = data;
+          renderKaseyaResults(data);
+          saveToolStat('kaseya-processor', `${data.clients ? data.clients.length : 0} clients · ${data.totalLines || 0} rows`, 'ok');
+          st.textContent = '✓ Loaded'; st.className = 'save-status success';
+          setTimeout(() => { st.textContent = ''; }, 3000);
+        } catch (e) {
+          st.textContent = `Error: ${e.message}`; st.className = 'save-status error';
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    } catch (_) { /* non-fatal — snapshots may not exist yet */ }
+  })();
+
+  // Load delta section on tool open (show available snapshots even before processing)
+  kpLoadDeltaSection(null);
 }
 
 function renderKaseyaResults(data) {
   const resultsEl = document.getElementById('kp-results');
   if (!resultsEl) return;
   resultsEl.style.display = '';
+  const fmtAmt = v => '$' + (v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   // Metric strip
   const metricsEl = document.getElementById('kp-metrics');
-  const moduleCount = Object.keys(data.modules || {}).length;
   const clientCount = data.clients ? data.clients.length : 0;
-  const manualCount = (data.qboEntries || []).filter(e => e.manual).length;
+  const invoiceDateLabel = data.invoiceDate
+    ? new Date(data.invoiceDate + 'T12:00:00').toLocaleDateString('en-US', { year: 'numeric', month: 'long' })
+    : '—';
   metricsEl.innerHTML = `
-    <div class="metric-card"><div class="metric-value">$${(data.grandTotal || 0).toFixed(2)}</div><div class="metric-label">Invoice Total</div></div>
-    <div class="metric-card"><div class="metric-value">${data.invoiceDate || '—'}</div><div class="metric-label">Invoice Date</div></div>
-    <div class="metric-card"><div class="metric-value">${moduleCount}</div><div class="metric-label">Modules</div></div>
+    <div class="metric-card m-orange"><div class="metric-value">${fmtAmt(data.grandTotal)}</div><div class="metric-label">Invoice Total</div></div>
+    <div class="metric-card"><div class="metric-value" style="font-size:16px">${invoiceDateLabel}</div><div class="metric-label">Invoice Date</div></div>
     <div class="metric-card"><div class="metric-value">${clientCount}</div><div class="metric-label">Clients</div></div>
-    <div class="metric-card"><div class="metric-value">${data.totalLines || 0}</div><div class="metric-label">Rows Read</div></div>
-    ${manualCount > 0 ? `<div class="metric-card" style="border-color:rgba(245,197,24,.3)"><div class="metric-value" style="color:#f5c518">${manualCount}</div><div class="metric-label" style="color:#f5c518">Manual Items</div></div>` : ''}
   `;
 
-  // Debug info — sheet + columns detected
+  // Debug info — sheet + columns detected (replace if already exists)
+  const existingDebug = document.getElementById('kp-debug-info');
+  if (existingDebug) existingDebug.remove();
   if (data.columnsDetected || data.sheetUsed) {
     const cd = data.columnsDetected || {};
     const debugEl = document.createElement('p');
+    debugEl.id = 'kp-debug-info';
     debugEl.style.cssText = 'font-size:10px;color:var(--text-muted);font-family:var(--font-mono);margin:0 0 12px;opacity:.7';
     debugEl.textContent = `Sheet: "${data.sheetUsed}" | Company→"${cd.company}" Module→"${cd.module}" Qty→"${cd.qty}" Total→"${cd.total}"`;
     metricsEl.after(debugEl);
@@ -2177,112 +2375,371 @@ function renderKaseyaResults(data) {
     qboEl.innerHTML = '<p class="field-hint">No entries generated.</p>';
   } else {
     const qboTotal = entries.reduce((s, e) => s + e.amount, 0);
+    const classPill = cls => {
+      const map = {
+        'Strategic Services': 'background:rgba(139,92,246,.18);color:#c4b5fd',
+        'Service Delivery':   'background:rgba(59,130,246,.18);color:#93c5fd',
+        'Admin':              'background:rgba(148,163,184,.15);color:#94a3b8',
+      };
+      const s = map[cls];
+      return s
+        ? `<span style="display:inline-block;padding:1px 7px;border-radius:4px;font-size:10px;font-weight:700;${s}">${escHtml(cls)}</span>`
+        : `<span style="color:var(--text-muted);font-size:11px">—</span>`;
+    };
+    const thStyle = 'padding:9px 12px;text-align:left;font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:rgba(255,255,255,.75);white-space:nowrap';
     qboEl.innerHTML = `
-      <table class="data-table">
-        <thead><tr>
-          <th>Description</th>
-          <th>QBO Account</th>
-          <th>Class</th>
-          <th style="text-align:right">Amount</th>
-        </tr></thead>
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+        <thead>
+          <tr style="background:rgba(45,77,107,.75)">
+            <th style="${thStyle}">Description</th>
+            <th style="${thStyle}">QBO Account</th>
+            <th style="${thStyle}">Class</th>
+            <th style="${thStyle};text-align:right">Amount</th>
+          </tr>
+        </thead>
         <tbody>
-          ${entries.map(e => `
-            <tr style="${e.manual ? 'background:rgba(245,197,24,.08)' : ''}">
-              <td style="color:#1a1a1a">${escHtml(e.description)}${e.manual ? ' <span style="font-size:10px;color:#f5c518;opacity:.9">⚠ manual</span>' : ''}</td>
-              <td style="color:#1a1a1a;font-size:11px;font-family:var(--font-mono)">${escHtml(e.account)}</td>
-              <td style="color:#1a1a1a">${escHtml(e.class || '—')}</td>
-              <td style="text-align:right;color:#1a1a1a;font-family:var(--font-mono)">$${e.amount.toFixed(2)}</td>
+          ${entries.map((e, i) => `
+            <tr style="border-top:1px solid rgba(255,255,255,.06);${e.manual ? 'background:rgba(245,197,24,.07)' : i % 2 === 1 ? 'background:rgba(255,255,255,.025)' : ''}">
+              <td style="padding:8px 12px">
+                ${escHtml(e.description)}
+                ${e.manual ? '<span style="margin-left:6px;font-size:10px;font-weight:700;color:#f5c518;background:rgba(245,197,24,.12);padding:1px 6px;border-radius:3px">⚠ reconcile</span>' : ''}
+              </td>
+              <td style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--text-muted)">${escHtml(e.account)}</td>
+              <td style="padding:8px 12px">${classPill(e.class || '')}</td>
+              <td style="padding:8px 12px;text-align:right;font-family:var(--font-mono);font-weight:600">${fmtAmt(e.amount)}</td>
             </tr>`).join('')}
         </tbody>
-        <tfoot><tr>
-          <td colspan="3" style="font-weight:600;color:#1a1a1a">Total</td>
-          <td style="text-align:right;font-weight:600;color:#1a1a1a;font-family:var(--font-mono)">$${qboTotal.toFixed(2)}</td>
-        </tr></tfoot>
+        <tfoot>
+          <tr style="border-top:2px solid rgba(45,77,107,.6);background:rgba(45,77,107,.2)">
+            <td colspan="3" style="padding:9px 12px;font-weight:700">Total</td>
+            <td style="padding:9px 12px;text-align:right;font-family:var(--font-mono);font-weight:700">${fmtAmt(qboTotal)}</td>
+          </tr>
+        </tfoot>
       </table>`;
   }
 
-  // Module summary
-  const modEl = document.getElementById('kp-module-table');
-  const mods = data.modules || {};
-  const modKeys = Object.keys(mods).sort();
-  if (modKeys.length === 0) {
-    modEl.innerHTML = '<p class="field-hint">No module data.</p>';
-  } else {
-    modEl.innerHTML = `
-      <table class="data-table">
-        <thead><tr><th>Module</th><th style="text-align:right">Lines</th><th style="text-align:right">Total</th></tr></thead>
+  // Shared bar-table builder for Module and Category summaries
+  const buildBarTable = (rows, gtTotal) => {
+    if (!rows.length) return '<p class="field-hint">No data.</p>';
+    return `
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px">
         <tbody>
-          ${modKeys.map(m => `
-            <tr>
-              <td style="color:#1a1a1a">${escHtml(m)}</td>
-              <td style="text-align:right;color:#1a1a1a">${mods[m].lines || 0}</td>
-              <td style="text-align:right;color:#1a1a1a;font-family:var(--font-mono)">$${(mods[m].total || 0).toFixed(2)}</td>
-            </tr>`).join('')}
-        </tbody>
-        <tfoot><tr>
-          <td style="font-weight:600;color:#1a1a1a">Total</td>
-          <td></td>
-          <td style="text-align:right;font-weight:600;color:#1a1a1a;font-family:var(--font-mono)">$${modKeys.reduce((s, m) => s + (mods[m].total || 0), 0).toFixed(2)}</td>
-        </tr></tfoot>
-      </table>`;
-  }
-
-  // Client breakdown — modules[name] is a plain number (total $)
-  const clientEl = document.getElementById('kp-client-table');
-  const clients = data.clients || [];
-  if (clients.length === 0) {
-    clientEl.innerHTML = '<p class="field-hint">No client data.</p>';
-  } else {
-    const allMods = [...new Set(clients.flatMap(c => Object.keys(c.modules || {})))].sort();
-    clientEl.innerHTML = `
-      <table class="data-table" style="min-width:600px">
-        <thead><tr>
-          <th>Client</th>
-          ${allMods.map(m => `<th style="text-align:right;white-space:nowrap">${escHtml(m)}</th>`).join('')}
-          <th style="text-align:right">Total</th>
-        </tr></thead>
-        <tbody>
-          ${clients.map(c => {
-            const rowTotal = c.total || 0;
-            return `<tr>
-              <td style="color:#1a1a1a;white-space:nowrap">${escHtml(c.name)}</td>
-              ${allMods.map(m => {
-                const v = c.modules[m];
-                return `<td style="text-align:right;color:#1a1a1a;font-family:var(--font-mono)">${v != null ? '$' + Number(v).toFixed(2) : '—'}</td>`;
-              }).join('')}
-              <td style="text-align:right;color:#1a1a1a;font-family:var(--font-mono);font-weight:600">$${rowTotal.toFixed(2)}</td>
+          ${rows.map((r, i) => {
+            const pct = gtTotal > 0 ? (r.val / gtTotal * 100) : 0;
+            return `<tr style="${i > 0 ? 'border-top:1px solid rgba(255,255,255,.04)' : ''}">
+              <td style="padding:7px 10px;font-weight:500">${escHtml(r.name)}</td>
+              <td style="padding:7px 10px;width:90px">
+                <div style="background:rgba(255,255,255,.08);border-radius:3px;height:5px;overflow:hidden">
+                  <div style="height:100%;width:${pct.toFixed(1)}%;background:var(--accent);border-radius:3px"></div>
+                </div>
+              </td>
+              <td style="padding:7px 10px;text-align:right;font-family:var(--font-mono);font-size:12px">${fmtAmt(r.val)}</td>
             </tr>`;
           }).join('')}
         </tbody>
-        <tfoot><tr>
-          <td style="font-weight:600;color:#1a1a1a">Total</td>
-          ${allMods.map(m => {
-            const t = clients.reduce((s, c) => s + (Number(c.modules[m]) || 0), 0);
-            return `<td style="text-align:right;font-weight:600;color:#1a1a1a;font-family:var(--font-mono)">$${t.toFixed(2)}</td>`;
-          }).join('')}
-          <td style="text-align:right;font-weight:600;color:#1a1a1a;font-family:var(--font-mono)">$${clients.reduce((s, c) => s + (c.total || 0), 0).toFixed(2)}</td>
-        </tr></tfoot>
+        <tfoot>
+          <tr style="border-top:2px solid rgba(255,255,255,.1)">
+            <td colspan="2" style="padding:8px 10px;font-weight:700;font-size:12px">Total</td>
+            <td style="padding:8px 10px;text-align:right;font-family:var(--font-mono);font-weight:700;font-size:12px">${fmtAmt(gtTotal)}</td>
+          </tr>
+        </tfoot>
       </table>`;
+  };
+
+  // Module summary — sorted by total desc
+  const modEl = document.getElementById('kp-module-table');
+  const mods = data.modules || {};
+  const modKeys = Object.keys(mods).sort((a, b) => (mods[b].total || 0) - (mods[a].total || 0));
+  const modGT = modKeys.reduce((s, m) => s + (mods[m].total || 0), 0);
+  modEl.innerHTML = buildBarTable(modKeys.map(m => ({ name: m, val: mods[m].total || 0 })), modGT);
+
+  // Category summary — sorted by total desc
+  const catEl = document.getElementById('kp-category-table');
+  if (catEl) {
+    const cats = data.categories || {};
+    const catKeys = Object.keys(cats).sort((a, b) => (cats[b] || 0) - (cats[a] || 0));
+    const catGT = catKeys.reduce((s, k) => s + (cats[k] || 0), 0);
+    catEl.innerHTML = buildBarTable(catKeys.map(k => ({ name: k, val: cats[k] || 0 })), catGT);
   }
 
   // Wire export + AT prompt buttons
   document.getElementById('kp-export-btn').addEventListener('click', async () => {
     if (!_kaseyaData) return;
+    const btn = document.getElementById('kp-export-btn');
+    const st  = document.getElementById('kp-export-status');
+    btn.disabled = true;
+    if (st) { st.textContent = 'Exporting…'; st.className = 'save-status'; }
     try {
       const r = await window.api.exportKaseyaReport(_kaseyaData);
+      if (r.canceled) { if (st) { st.textContent = ''; } return; }
       if (!r.success) throw new Error(r.error || 'Export failed');
-    } catch (e) { alert('Export error: ' + e.message); }
+      if (st) { st.textContent = '✓ Saved'; st.className = 'save-status success'; setTimeout(() => { if (st) st.textContent = ''; }, 3000); }
+    } catch (e) {
+      if (st) { st.textContent = `Error: ${e.message}`; st.className = 'save-status error'; }
+      else alert('Export error: ' + e.message);
+    } finally { btn.disabled = false; }
   });
 
   document.getElementById('kp-at-prompt-btn').addEventListener('click', async () => {
     if (!_kaseyaData) return;
     try {
       const r = await window.api.generateKaseyaAtPrompt(_kaseyaData);
-      if (!r.success) throw new Error(r.error || 'Generation failed');
-      await navigator.clipboard.writeText(r.prompt);
-      const el = document.getElementById('kp-at-copied');
-      if (el) { el.style.display = ''; setTimeout(() => { el.style.display = 'none'; }, 2000); }
+      if (!r || !r.prompt) throw new Error('No prompt returned');
+      const section = document.getElementById('kp-at-section');
+      const ta      = document.getElementById('kp-at-ta');
+      if (ta) ta.value = r.prompt;
+      if (section) section.style.display = '';
+      ta?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (e) { alert('Error: ' + e.message); }
+  });
+
+  const atCopyBtn = document.getElementById('kp-at-copy-btn');
+  if (atCopyBtn) {
+    atCopyBtn.addEventListener('click', async () => {
+      const ta = document.getElementById('kp-at-ta');
+      if (!ta?.value) return;
+      try {
+        await navigator.clipboard.writeText(ta.value);
+        atCopyBtn.textContent = '✓ Copied';
+        setTimeout(() => { atCopyBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="margin-right:3px"><rect x="1" y="3" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M3 3V2a1 1 0 011-1h5a1 1 0 011 1v6a1 1 0 01-1 1h-1" stroke="currentColor" stroke-width="1.2"/></svg>Copy'; }, 2000);
+      } catch { alert('Copy failed'); }
+    });
+  }
+
+  // Load delta section after snapshot auto-save has completed
+  kpLoadDeltaSection(data.snapKey);
+}
+
+async function kpLoadDeltaSection(currentSnapKey) {
+  const section = document.getElementById('kp-delta-section');
+  const selA    = document.getElementById('kp-delta-a');
+  const selB    = document.getElementById('kp-delta-b');
+  if (!section || !selA || !selB) return;
+
+  const snaps = await window.api.getKaseyaSnapshots();
+  if (!snaps || snaps.length < 1) return;
+
+  // Show section
+  section.style.display = '';
+
+  // Show "snapshot saved" badge briefly if we just processed one
+  if (currentSnapKey) {
+    const badge = document.getElementById('kp-delta-saved-badge');
+    if (badge) { badge.style.display = ''; setTimeout(() => { badge.style.display = 'none'; }, 4000); }
+  }
+
+  // Populate dropdowns
+  const opts = snaps.map(s => {
+    const label = s.invoiceDate
+      ? new Date(s.invoiceDate + 'T12:00:00').toLocaleDateString('en-US', { year: 'numeric', month: 'long' })
+      : s.key;
+    const amt = '$' + (s.grandTotal || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return `<option value="${escHtml(s.key)}">${escHtml(label)} — ${amt}</option>`;
+  }).join('');
+  selA.innerHTML = '<option value="">— Baseline month —</option>' + opts;
+  selB.innerHTML = '<option value="">— Compare month —</option>' + opts;
+
+  // Auto-select: A = second newest, B = newest (most common use case)
+  if (snaps.length >= 2) { selA.value = snaps[1].key; selB.value = snaps[0].key; }
+  else if (snaps.length === 1) { selB.value = snaps[0].key; }
+
+  // Compare button
+  document.getElementById('kp-delta-run-btn').addEventListener('click', async () => {
+    const keyA = selA.value, keyB = selB.value;
+    const st = document.getElementById('kp-delta-status');
+    if (!keyA || !keyB) { if (st) { st.textContent = 'Select both months.'; st.className = 'save-status error'; } return; }
+    if (keyA === keyB) { if (st) { st.textContent = 'Select two different months.'; st.className = 'save-status error'; } return; }
+    if (st) { st.textContent = 'Comparing…'; st.className = 'save-status'; }
+    try {
+      const result = await window.api.compareKaseyaSnapshots({ keyA, keyB });
+      if (result.error) throw new Error(result.error);
+      kpRenderDelta(result, snaps);
+      if (st) { st.textContent = ''; }
+    } catch (e) {
+      if (st) { st.textContent = `Error: ${e.message}`; st.className = 'save-status error'; }
+    }
+  });
+
+  // Snapshot manager
+  const mgr = document.getElementById('kp-delta-manage');
+  const lst = document.getElementById('kp-delta-snap-list');
+  if (mgr && lst && snaps.length > 0) {
+    mgr.style.display = '';
+    lst.innerHTML = snaps.map(s => {
+      const label = s.invoiceDate
+        ? new Date(s.invoiceDate + 'T12:00:00').toLocaleDateString('en-US', { year: 'numeric', month: 'long' })
+        : s.key;
+      const saved = s.savedAt ? new Date(s.savedAt).toLocaleDateString() : '?';
+      return `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:4px 8px;background:var(--surface-2);border-radius:4px">
+        <span>${escHtml(label)} <span style="color:var(--text-muted);font-size:10px">(saved ${saved})</span></span>
+        <button class="btn btn-ghost btn-sm kp-del-snap" data-key="${escHtml(s.key)}" style="padding:2px 8px;font-size:11px">Delete</button>
+      </div>`;
+    }).join('');
+    lst.querySelectorAll('.kp-del-snap').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm(`Delete snapshot for ${btn.dataset.key}?`)) return;
+        await window.api.deleteKaseyaSnapshot(btn.dataset.key);
+        await kpLoadDeltaSection(null); // reload
+      });
+    });
+  }
+}
+
+function kpRenderDelta(d, snaps) {
+  const el = document.getElementById('kp-delta-results');
+  if (!el) return;
+
+  const fmtAmt = v => '$' + Math.abs(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtSgn = v => (v > 0 ? '+' : v < 0 ? '−' : '') + fmtAmt(v);
+  const pctStr = p => p != null ? (p > 0 ? '+' : '') + p + '%' : '—';
+  const snapLabel = key => {
+    const s = snaps.find(x => x.key === key);
+    if (!s || !s.invoiceDate) return key;
+    return new Date(s.invoiceDate + 'T12:00:00').toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+  };
+
+  const statusBadge = s => {
+    const map = { new: ['var(--success)', 'NEW'], dropped: ['var(--error)', 'GONE'], up: ['var(--warn)', '↑'], down: ['#4caf97', '↓'], same: ['var(--text-muted)', '–'] };
+    const [color, label] = map[s] || ['var(--text-muted)', '?'];
+    return `<span style="font-size:10px;font-weight:700;color:${color};font-family:var(--font-mono)">${label}</span>`;
+  };
+  const deltaColor = v => v > 0 ? 'var(--warn)' : v < 0 ? '#4caf97' : 'var(--text-muted)';
+
+  // Grand total banner
+  const gt = d.grandTotal;
+  const gtColor = deltaColor(gt.delta);
+  const cardBase = 'background:var(--surface-2);border-radius:var(--radius);padding:18px 22px;display:flex;flex-direction:column;align-items:center;gap:6px;border:1px solid var(--border)';
+  let html = `
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px">
+      <div style="${cardBase};border-left:4px solid #5b8dd9">
+        <div class="metric-value">$${gt.a.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+        <div class="metric-label">${escHtml(snapLabel(d.keyA))}</div>
+      </div>
+      <div style="${cardBase};border-left:4px solid #34d399">
+        <div class="metric-value">$${gt.b.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+        <div class="metric-label">${escHtml(snapLabel(d.keyB))}</div>
+      </div>
+      <div style="${cardBase};border-left:4px solid ${gtColor}">
+        <div class="metric-value" style="color:${gtColor}">${fmtSgn(gt.delta)}</div>
+        <div class="metric-label">Change (${pctStr(gt.pct)})</div>
+      </div>
+    </div>`;
+
+  // Module deltas
+  if (d.modules && d.modules.length > 0) {
+    html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;align-items:start">`;
+
+    // Modules table
+    html += `<div>
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:8px">Module Changes</div>
+      <table class="data-table">
+        <thead><tr><th></th><th>Module</th><th style="text-align:right">${escHtml(snapLabel(d.keyA))}</th><th style="text-align:right">${escHtml(snapLabel(d.keyB))}</th><th style="text-align:right">Δ</th></tr></thead>
+        <tbody>
+          ${d.modules.map(m => `<tr>
+            <td style="width:28px">${statusBadge(m.status)}</td>
+            <td>${escHtml(m.name)}</td>
+            <td style="text-align:right;font-family:var(--font-mono)">${m.a ? fmtAmt(m.a) : '—'}</td>
+            <td style="text-align:right;font-family:var(--font-mono)">${m.b ? fmtAmt(m.b) : '—'}</td>
+            <td style="text-align:right;font-family:var(--font-mono);color:${deltaColor(m.delta)}">${fmtSgn(m.delta)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+
+    // Category deltas
+    if (d.categories && d.categories.length > 0) {
+      html += `<div>
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:8px">Category Changes</div>
+        <table class="data-table">
+          <thead><tr><th></th><th>Category</th><th style="text-align:right">${escHtml(snapLabel(d.keyA))}</th><th style="text-align:right">${escHtml(snapLabel(d.keyB))}</th><th style="text-align:right">Δ</th></tr></thead>
+          <tbody>
+            ${d.categories.map(c => `<tr>
+              <td style="width:28px">${statusBadge(c.status)}</td>
+              <td>${escHtml(c.name)}</td>
+              <td style="text-align:right;font-family:var(--font-mono)">${c.a ? fmtAmt(c.a) : '—'}</td>
+              <td style="text-align:right;font-family:var(--font-mono)">${c.b ? fmtAmt(c.b) : '—'}</td>
+              <td style="text-align:right;font-family:var(--font-mono);color:${deltaColor(c.delta)}">${fmtSgn(c.delta)}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+    }
+    html += `</div>`; // close grid
+  }
+
+  // Client deltas
+  if (d.clients && d.clients.length > 0) {
+    html += `
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:8px">
+        Client Changes <span style="font-weight:400;text-transform:none;letter-spacing:0">(${d.clients.length} changed)</span>
+      </div>
+      <table class="data-table" id="kp-delta-client-tbl">
+        <thead><tr>
+          <th style="width:28px"></th>
+          <th>Client</th>
+          <th style="text-align:right">${escHtml(snapLabel(d.keyA))}</th>
+          <th style="text-align:right">${escHtml(snapLabel(d.keyB))}</th>
+          <th style="text-align:right">Δ Amount</th>
+          <th style="text-align:right">Δ %</th>
+          <th style="width:28px"></th>
+        </tr></thead>
+        <tbody>
+          ${d.clients.map((c, i) => {
+            const hasMods = c.modDeltas && c.modDeltas.length > 0;
+            const detailId = `kp-dc-${i}`;
+            return `<tr class="kp-delta-client-row" data-detail="${detailId}" style="cursor:${hasMods ? 'pointer' : 'default'}">
+              <td>${statusBadge(c.status)}</td>
+              <td>${escHtml(c.name)}</td>
+              <td style="text-align:right;font-family:var(--font-mono)">${c.a ? fmtAmt(c.a) : '—'}</td>
+              <td style="text-align:right;font-family:var(--font-mono)">${c.b ? fmtAmt(c.b) : '—'}</td>
+              <td style="text-align:right;font-family:var(--font-mono);color:${deltaColor(c.delta)}">${fmtSgn(c.delta)}</td>
+              <td style="text-align:right;font-family:var(--font-mono);color:${deltaColor(c.delta)}">${pctStr(c.pct)}</td>
+              <td style="text-align:center;color:var(--text-muted);font-size:11px">${hasMods ? '▶' : ''}</td>
+            </tr>
+            ${hasMods ? `<tr id="${detailId}" style="display:none;background:var(--surface-2)">
+              <td colspan="7" style="padding:8px 12px 8px 36px">
+                <table style="width:100%;border-collapse:collapse;font-size:12px">
+                  <thead><tr>
+                    <th style="text-align:left;padding:3px 8px;color:var(--text-muted);font-weight:500">Module</th>
+                    <th style="text-align:right;padding:3px 8px;color:var(--text-muted);font-weight:500">Qty A→B</th>
+                    <th style="text-align:right;padding:3px 8px;color:var(--text-muted);font-weight:500">Amount A</th>
+                    <th style="text-align:right;padding:3px 8px;color:var(--text-muted);font-weight:500">Amount B</th>
+                    <th style="text-align:right;padding:3px 8px;color:var(--text-muted);font-weight:500">Δ</th>
+                  </tr></thead>
+                  <tbody>
+                    ${c.modDeltas.map(m => `<tr>
+                      <td style="padding:3px 8px">${escHtml(m.name)}</td>
+                      <td style="text-align:right;padding:3px 8px;font-family:var(--font-mono)">${m.aQty || '—'} → ${m.bQty || '—'}</td>
+                      <td style="text-align:right;padding:3px 8px;font-family:var(--font-mono)">${m.aAmt ? fmtAmt(m.aAmt) : '—'}</td>
+                      <td style="text-align:right;padding:3px 8px;font-family:var(--font-mono)">${m.bAmt ? fmtAmt(m.bAmt) : '—'}</td>
+                      <td style="text-align:right;padding:3px 8px;font-family:var(--font-mono);color:${deltaColor(m.deltaAmt)}">${fmtSgn(m.deltaAmt)}</td>
+                    </tr>`).join('')}
+                  </tbody>
+                </table>
+              </td>
+            </tr>` : ''}`;
+          }).join('')}
+        </tbody>
+      </table>`;
+  }
+
+  if (!d.modules?.length && !d.clients?.length) {
+    html += `<p class="field-hint" style="margin-top:8px">No differences found between the two selected months.</p>`;
+  }
+
+  el.innerHTML = html;
+
+  // Wire expand/collapse on client rows
+  el.querySelectorAll('.kp-delta-client-row').forEach(row => {
+    const detailId = row.dataset.detail;
+    const detail = document.getElementById(detailId);
+    if (!detail) return;
+    const arrow = row.querySelector('td:last-child');
+    row.addEventListener('click', () => {
+      const open = detail.style.display !== 'none';
+      detail.style.display = open ? 'none' : '';
+      if (arrow) arrow.textContent = open ? '▶' : '▼';
+    });
   });
 }
 
@@ -2329,28 +2786,50 @@ function renderContractChanges() {
       <span id="cc-status" style="font-size:12px;color:var(--text-muted);margin-left:4px"></span>
     </div>
 
-    <div id="cc-filter-bar" class="${_ccData ? '' : 'hidden'}" style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
-      <select class="field-input" id="cc-filter-by" style="width:210px;padding:6px 10px;height:34px">
-        <option value="">All — Changed By</option>
-      </select>
-      <select class="field-input" id="cc-filter-type" style="width:190px;padding:6px 10px;height:34px">
-        <option value="">All — Change Type</option>
-        <option value="Unit Price">Unit Price</option>
-        <option value="Unit Cost">Unit Cost</option>
-        <option value="Units Changed">Units Changed</option>
-        <option value="Service Added">Service Added</option>
-        <option value="Service Removed">Service Removed</option>
-        <option value="Contract Created">Contract Created</option>
-        <option value="Notification">Notification</option>
-        <option value="Other">Other</option>
-      </select>
-      <select class="field-input" id="cc-filter-actor" style="width:165px;padding:6px 10px;height:34px">
-        <option value="">All — Actor</option>
-        <option value="human">👤 Human</option>
-        <option value="ai">🤖 AI</option>
-        <option value="integration">⚡ Integration</option>
-        <option value="system">⚙ System</option>
-      </select>
+    <div id="cc-filter-bar" class="${_ccData ? '' : 'hidden'}" style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+
+      <!-- Changed By multi-select (populated dynamically from data) -->
+      <div class="ms-wrap">
+        <button class="field-input ms-btn" type="button" id="ms-btn-by">
+          Changed By <span class="ms-count" id="ms-cnt-by" style="display:none"></span>
+        </button>
+        <div class="ms-panel" id="ms-panel-by"></div>
+      </div>
+
+      <!-- Change Type multi-select (static options) -->
+      <div class="ms-wrap">
+        <button class="field-input ms-btn" type="button" id="ms-btn-type">
+          Change Type <span class="ms-count" id="ms-cnt-type" style="display:none"></span>
+        </button>
+        <div class="ms-panel" id="ms-panel-type">
+          ${['Unit Price','Unit Cost','Units Changed','Service Added','Service Removed','Contract Created','Notification','Other'].map(t =>
+            `<label class="ms-item"><input type="checkbox" value="${t}" />${t}</label>`).join('')}
+        </div>
+      </div>
+
+      <!-- Actor multi-select (static options) -->
+      <div class="ms-wrap">
+        <button class="field-input ms-btn" type="button" id="ms-btn-actor">
+          Actor <span class="ms-count" id="ms-cnt-actor" style="display:none"></span>
+        </button>
+        <div class="ms-panel" id="ms-panel-actor">
+          <label class="ms-item"><input type="checkbox" value="human" />👤 Human</label>
+          <label class="ms-item"><input type="checkbox" value="ai" />🤖 AI</label>
+          <label class="ms-item"><input type="checkbox" value="integration" />⚡ Integration</label>
+          <label class="ms-item"><input type="checkbox" value="system" />⚙ System</label>
+        </div>
+      </div>
+
+      <!-- Effective Date filter -->
+      <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+        <span style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;white-space:nowrap">Eff. Date</span>
+        <input class="field-input" type="date" id="cc-eff-from" style="width:140px;height:34px" title="Effective from" />
+        <span style="color:var(--text-muted);font-size:13px">→</span>
+        <input class="field-input" type="date" id="cc-eff-to" style="width:140px;height:34px" title="Effective to" />
+        <button class="btn btn-ghost btn-sm" id="cc-eff-clear" style="padding:5px 9px;height:34px;opacity:.7" title="Clear effective date">✕</button>
+      </div>
+
+      <!-- Search -->
       <div style="position:relative;flex:1;min-width:200px">
         <svg width="13" height="13" viewBox="0 0 14 14" fill="none" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--text-muted);pointer-events:none"><circle cx="5.5" cy="5.5" r="4" stroke="currentColor" stroke-width="1.3"/><path d="M9 9l3.5 3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
         <input class="field-input" type="text" id="cc-search" placeholder="Search service, user, title…" style="padding-left:28px;height:34px;width:100%;box-sizing:border-box" />
@@ -2363,10 +2842,52 @@ function renderContractChanges() {
 
   document.getElementById('cc-run-btn').addEventListener('click', ccRunQuery);
   document.getElementById('cc-export-btn').addEventListener('click', ccExportExcel);
-  document.getElementById('cc-filter-by').addEventListener('change', ccApplyFilters);
-  document.getElementById('cc-filter-type').addEventListener('change', ccApplyFilters);
-  document.getElementById('cc-filter-actor').addEventListener('change', ccApplyFilters);
   document.getElementById('cc-search').addEventListener('input', ccApplyFilters);
+
+  // Multi-select panel toggle behaviour
+  const msToggle = (btnId, panelId) => {
+    const btn   = document.getElementById(btnId);
+    const panel = document.getElementById(panelId);
+    if (!btn || !panel) return;
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const isOpen = panel.style.display === 'block';
+      document.querySelectorAll('.ms-panel').forEach(p => { p.style.display = 'none'; });
+      if (!isOpen) panel.style.display = 'block';
+    });
+  };
+  msToggle('ms-btn-by',    'ms-panel-by');
+  msToggle('ms-btn-type',  'ms-panel-type');
+  msToggle('ms-btn-actor', 'ms-panel-actor');
+
+  // Close all panels when clicking outside a ms-wrap
+  content.addEventListener('click', e => {
+    if (!e.target.closest('.ms-wrap')) {
+      document.querySelectorAll('.ms-panel').forEach(p => { p.style.display = 'none'; });
+    }
+  });
+
+  // Wire static panels (type + actor) — changed by is wired in ccPopulateFilterDropdowns
+  ['ms-panel-type', 'ms-panel-actor'].forEach(panelId => {
+    const panel = document.getElementById(panelId);
+    if (!panel) return;
+    const cntId = panelId.replace('ms-panel-', 'ms-cnt-');
+    panel.addEventListener('change', () => {
+      ccUpdateBadge(panelId, cntId);
+      ccApplyFilters();
+    });
+  });
+
+  // Effective date
+  document.getElementById('cc-eff-from')?.addEventListener('change', ccApplyFilters);
+  document.getElementById('cc-eff-to')?.addEventListener('change', ccApplyFilters);
+  document.getElementById('cc-eff-clear')?.addEventListener('click', () => {
+    const f = document.getElementById('cc-eff-from');
+    const t = document.getElementById('cc-eff-to');
+    if (f) f.value = '';
+    if (t) t.value = '';
+    ccApplyFilters();
+  });
 
   // Restore results if cached
   if (_ccData) {
@@ -2430,26 +2951,55 @@ async function ccRunQuery() {
   }
 }
 
+// Update the count badge on a multi-select button
+function ccUpdateBadge(panelId, cntId) {
+  const panel = document.getElementById(panelId);
+  const cnt   = document.getElementById(cntId);
+  if (!panel || !cnt) return;
+  const checked = panel.querySelectorAll('input[type=checkbox]:checked').length;
+  cnt.textContent  = checked;
+  cnt.style.display = checked > 0 ? '' : 'none';
+}
+
 function ccPopulateFilterDropdowns(rows) {
-  const byEl = document.getElementById('cc-filter-by');
-  if (!byEl) return;
-  const currentBy = byEl.value;
+  const panel = document.getElementById('ms-panel-by');
+  if (!panel) return;
   const users = [...new Set(rows.map(r => r.changedBy).filter(Boolean))].sort();
-  byEl.innerHTML = `<option value="">All — Changed By</option>` +
-    users.map(u => `<option value="${escHtml(u)}"${u === currentBy ? ' selected' : ''}>${escHtml(u)}</option>`).join('');
+  panel.innerHTML = users.map(u =>
+    `<label class="ms-item"><input type="checkbox" value="${escHtml(u)}" />${escHtml(u)}</label>`
+  ).join('');
+  panel.addEventListener('change', () => {
+    ccUpdateBadge('ms-panel-by', 'ms-cnt-by');
+    ccApplyFilters();
+  });
 }
 
 // Returns the currently filtered rows based on all active filter controls.
 function ccGetFiltered() {
   if (!_ccData) return [];
-  const byVal     = document.getElementById('cc-filter-by')?.value    || '';
-  const typeVal   = document.getElementById('cc-filter-type')?.value  || '';
-  const actorVal  = document.getElementById('cc-filter-actor')?.value || '';
-  const searchVal = (document.getElementById('cc-search')?.value      || '').toLowerCase().trim();
+  const checked = panelId => Array.from(
+    (document.getElementById(panelId) || { querySelectorAll: () => [] })
+      .querySelectorAll('input[type=checkbox]:checked')
+  ).map(cb => cb.value);
+
+  const byVals    = checked('ms-panel-by');
+  const typeVals  = checked('ms-panel-type');
+  const actorVals = checked('ms-panel-actor');
+  const searchVal = (document.getElementById('cc-search')?.value || '').toLowerCase().trim();
+  const effFrom   = document.getElementById('cc-eff-from')?.value || '';
+  const effTo     = document.getElementById('cc-eff-to')?.value   || '';
+
   return _ccData.filter(r => {
-    if (byVal    && r.changedBy  !== byVal)   return false;
-    if (typeVal  && r.changeType !== typeVal) return false;
-    if (actorVal && r.actorType  !== actorVal) return false;
+    if (byVals.length    && !byVals.includes(r.changedBy    || '')) return false;
+    if (typeVals.length  && !typeVals.includes(r.changeType  || '')) return false;
+    if (actorVals.length && !actorVals.includes(r.actorType  || '')) return false;
+    if (effFrom || effTo) {
+      const eff = (r.effectiveDate || '').slice(0, 10);
+      if (eff) {
+        if (effFrom && eff < effFrom) return false;
+        if (effTo   && eff > effTo)   return false;
+      }
+    }
     if (searchVal) {
       const hay = [
         r.serviceName, r.changedBy, r.title, r.description,
@@ -3273,6 +3823,493 @@ async function saveRenewalSettingsUI() {
     statusEls.forEach(s => { s.textContent = `Error: ${e.message}`; s.className = 'save-status error'; });
   }
   setTimeout(() => { statusEls.forEach(s => { s.textContent = ''; }); }, 2500);
+}
+
+// ─── BlackPoint Endpoint Usage ────────────────────────────────────────────────
+let bpData = null;
+
+function renderBlackpointProcessor() {
+  content.innerHTML = `
+    <div class="view-header">
+      <div>
+        <h1 class="view-title">BlackPoint Endpoint Usage</h1>
+        <p class="view-subtitle">Track protected endpoint counts per client and identify billing deltas month over month</p>
+      </div>
+      <div class="view-actions">
+        <button class="btn btn-ghost btn-sm" id="bp-export-btn" disabled>
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+            <path d="M7 1v8M4 6l3 3 3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M1 10v1.5A1.5 1.5 0 002.5 13h9A1.5 1.5 0 0013 11.5V10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+          Export Excel
+        </button>
+        <button class="btn btn-primary" id="bp-run-btn">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+            <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.3"/>
+            <path d="M5.5 4.5l4 2.5-4 2.5V4.5z" fill="currentColor"/>
+          </svg>
+          Run Query
+        </button>
+      </div>
+    </div>
+    <div class="view-body">
+      <div id="bp-status" class="bp-status-area" style="display:none"></div>
+      <div id="bp-results"></div>
+    </div>`;
+
+  document.getElementById('bp-run-btn').addEventListener('click', bpRunQuery);
+  document.getElementById('bp-export-btn').addEventListener('click', bpExportReport);
+
+  // Restore previous results if available
+  if (bpData) bpRenderResults();
+}
+
+async function bpRunQuery() {
+  const runBtn    = document.getElementById('bp-run-btn');
+  const statusDiv = document.getElementById('bp-status');
+  const resultsDiv = document.getElementById('bp-results');
+  if (!runBtn || !statusDiv) return;
+
+  runBtn.disabled = true;
+  statusDiv.style.display = '';
+  statusDiv.innerHTML = `
+    <div class="bp-loading">
+      <span class="spinner" style="width:14px;height:14px;border-width:2px"></span>
+      <span>Fetching tenants and endpoint counts from BlackPoint… This may take a minute.</span>
+    </div>`;
+  if (resultsDiv) resultsDiv.innerHTML = '';
+
+  try {
+    bpData = await window.api.runBlackpointUsage();
+    statusDiv.style.display = 'none';
+    bpRenderResults();
+    const exportBtn = document.getElementById('bp-export-btn');
+    if (exportBtn) exportBtn.disabled = false;
+    saveToolStat('blackpoint-processor', `${bpData.totalTenants} tenants · ${bpData.totalActive} active agents`, 'ok');
+  } catch (e) {
+    statusDiv.innerHTML = `<div class="bp-error"><strong>Error:</strong> ${escHtml(e.message)}</div>`;
+    saveToolStat('blackpoint-processor', `Error: ${e.message}`, 'error');
+  } finally {
+    runBtn.disabled = false;
+  }
+}
+
+function bpRenderResults() {
+  const el = document.getElementById('bp-results');
+  if (!el || !bpData) return;
+
+  const { tenants, prevDate, totalTenants, totalActive } = bpData;
+
+  const increased  = tenants.filter(t => t.delta > 0).length;
+  const decreased  = tenants.filter(t => t.delta < 0).length;
+  const newClients = tenants.filter(t => t.delta == null && !t.error).length;
+  const noChange   = tenants.filter(t => t.delta === 0).length;
+  const errCount   = tenants.filter(t => t.error).length;
+
+  const fmtDate = iso => iso
+    ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : null;
+  const prevDateStr = fmtDate(prevDate);
+  const runDateStr  = fmtDate(bpData.runDate) || 'Today';
+
+  const rows = tenants.map(t => {
+    const status = t.error     ? 'error'
+                 : t.delta == null ? 'new'
+                 : t.delta > 0     ? 'up'
+                 : t.delta < 0     ? 'down'
+                 :                   'same';
+    const statusLabel = t.error     ? 'Error'
+                      : t.delta == null ? 'New'
+                      : t.delta > 0     ? `▲ +${t.delta}`
+                      : t.delta < 0     ? `▼ ${t.delta}`
+                      :                   '✓';
+    const deltaHtml = t.delta == null   ? '<span class="bp-delta-new">New</span>'
+                    : t.delta > 0       ? `<span class="bp-delta-up">+${t.delta}</span>`
+                    : t.delta < 0       ? `<span class="bp-delta-down">${t.delta}</span>`
+                    :                     `<span class="bp-delta-same">—</span>`;
+    return `
+      <tr class="bp-row">
+        <td class="bp-td-name">${escHtml(t.name)}</td>
+        <td class="bp-td-num">${t.activeAgents != null ? t.activeAgents : '<span class="bp-err-text">Error</span>'}</td>
+        <td class="bp-td-num bp-td-prev">${t.prevActiveAgents != null ? t.prevActiveAgents : '—'}</td>
+        <td class="bp-td-delta">${deltaHtml}</td>
+        <td class="bp-td-status"><span class="bp-badge bp-badge-${status}">${statusLabel}</span></td>
+      </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="bp-summary">
+      <div class="bp-sum-item">
+        <span class="bp-sum-num">${totalTenants}</span>
+        <span class="bp-sum-lbl">Tenants</span>
+      </div>
+      <div class="bp-sum-item">
+        <span class="bp-sum-num">${totalActive}</span>
+        <span class="bp-sum-lbl">Active Agents</span>
+      </div>
+      ${prevDate ? `
+      <div class="bp-sum-item bp-sum-up">
+        <span class="bp-sum-num">${increased}</span>
+        <span class="bp-sum-lbl">Increased</span>
+      </div>
+      <div class="bp-sum-item bp-sum-down">
+        <span class="bp-sum-num">${decreased}</span>
+        <span class="bp-sum-lbl">Decreased</span>
+      </div>
+      <div class="bp-sum-item bp-sum-new">
+        <span class="bp-sum-num">${newClients}</span>
+        <span class="bp-sum-lbl">New</span>
+      </div>
+      <div class="bp-sum-item bp-sum-same">
+        <span class="bp-sum-num">${noChange}</span>
+        <span class="bp-sum-lbl">No Change</span>
+      </div>` : ''}
+      ${errCount ? `<div class="bp-sum-item bp-sum-err"><span class="bp-sum-num">${errCount}</span><span class="bp-sum-lbl">Errors</span></div>` : ''}
+      <div class="bp-sum-snapshot">
+        ${prevDateStr
+          ? `<svg width="11" height="11" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.2"/><path d="M6 3.5V6l1.5 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> Snapshot: ${prevDateStr} → ${runDateStr}`
+          : `<svg width="11" height="11" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.2"/><path d="M6 3.5V6l1.5 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> First run — saved as baseline`}
+      </div>
+    </div>
+
+    <table class="bp-table">
+      <thead>
+        <tr>
+          <th>Company</th>
+          <th style="text-align:center">Active Agents</th>
+          <th style="text-align:center">Previous</th>
+          <th style="text-align:center">Change</th>
+          <th style="text-align:center">Status</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+
+    <div class="bp-prompt-box">
+      <div class="bp-prompt-hdr">
+        <div>
+          <div class="bp-prompt-title">Generate Autotask Update Prompt</div>
+          <div class="bp-prompt-sub">Creates a Claude MCP prompt to update Security+ service quantities in Autotask for all clients.</div>
+        </div>
+        <button class="btn btn-primary btn-sm" id="bp-gen-btn">Generate Prompt</button>
+      </div>
+      <div id="bp-prompt-wrap" style="display:none">
+        <textarea class="bp-prompt-ta" id="bp-prompt-ta" rows="22" readonly></textarea>
+        <div class="cr-prompt-actions">
+          <button class="btn btn-ghost btn-sm" id="bp-copy-btn">Copy</button>
+        </div>
+      </div>
+    </div>`;
+
+  document.getElementById('bp-gen-btn').addEventListener('click', () => {
+    const wrap = document.getElementById('bp-prompt-wrap');
+    const ta   = document.getElementById('bp-prompt-ta');
+    if (!wrap || !ta) return;
+    ta.value = bpBuildPrompt(tenants);
+    wrap.style.display = '';
+    wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  document.getElementById('bp-copy-btn').addEventListener('click', () => {
+    const ta = document.getElementById('bp-prompt-ta');
+    if (ta) navigator.clipboard.writeText(ta.value).catch(() => {});
+  });
+}
+
+function bpBuildPrompt(tenants) {
+  const runDate = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  const lines = tenants
+    .filter(t => t.activeAgents != null)
+    .map(t => {
+      const note = t.delta == null    ? ' (NEW client — no prior count)'
+                 : t.delta > 0        ? ` (+${t.delta} since last snapshot)`
+                 : t.delta < 0        ? ` (${t.delta} since last snapshot)`
+                 :                      '';
+      return `  - ${t.name}: ${t.activeAgents} active agent${t.activeAgents !== 1 ? 's' : ''}${note}`;
+    })
+    .join('\n');
+
+  return `# BlackPoint Endpoint Count — Autotask Security+ Update
+# Generated: ${runDate}
+
+## Task
+The list below shows the current BlackPoint CompassOne protected endpoint (active agent) count for each client as of ${runDate}. Please update each client's **Security+** contract service quantity in Autotask to match their current agent count.
+
+## Current BlackPoint Active Agent Counts
+${lines}
+
+## Instructions
+Work through each client listed above:
+1. Use autotask_search_companies to find the company by name
+2. Use autotask_search_contracts to find their active contract (status = 1)
+3. Look for a ContractService where the service name contains "Security+" (you can use autotask_search_services or look at the contract's services)
+4. Compare the current unit quantity against the BlackPoint count above
+5. If the quantity doesn't match, update it with autotask_update_contract_service
+6. If a client can't be found or has no Security+ service, note it and move on
+
+When finished, provide a summary:
+- ✅ Updated: [company] — [old qty] → [new qty]
+- ✓ Already correct: [company] — [qty] matches
+- ⚠ Not found: [company] — [reason]`;
+}
+
+async function bpExportReport() {
+  if (!bpData) return;
+  const btn = document.getElementById('bp-export-btn');
+  const origHtml = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Exporting…'; }
+  try {
+    const res = await window.api.exportBlackpointReport(bpData);
+    if (res.error) alert(`Export failed: ${res.error}`);
+  } catch (e) {
+    alert(`Export failed: ${e.message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = origHtml; }
+  }
+}
+
+// ─── Help ─────────────────────────────────────────────────────────────────────
+function renderHelp() {
+  const SECTIONS = [
+    {
+      id: 'getting-started',
+      icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1l1.8 3.6L14 5.6l-3 2.9.7 4.1L8 10.5l-3.7 2.1.7-4.1-3-2.9 4.2-.9L8 1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>`,
+      title: 'Getting Started',
+      open: true,
+      body: `
+        <p class="help-intro">Follow these steps to get Anchor Hub fully configured. The whole process takes about 5 minutes.</p>
+        <ol class="help-steps">
+          <li>
+            <span class="help-step-num">1</span>
+            <div>
+              <strong>Open Settings → API &amp; Accounts</strong>
+              <p>Click the Settings button at the bottom of the sidebar, then select the <em>API &amp; Accounts</em> tab.</p>
+            </div>
+          </li>
+          <li>
+            <span class="help-step-num">2</span>
+            <div>
+              <strong>Enter your Pax8 credentials</strong>
+              <p>Add your Pax8 OAuth2 Client ID and Client Secret. See the <em>API Keys</em> section below for where to find these.</p>
+            </div>
+          </li>
+          <li>
+            <span class="help-step-num">3</span>
+            <div>
+              <strong>Enter your Autotask credentials</strong>
+              <p>Add your API Username, API Key, and Integration Code. Click <strong>Detect</strong> to auto-detect your Autotask data center zone — this only needs to be done once.</p>
+            </div>
+          </li>
+          <li>
+            <span class="help-step-num">4</span>
+            <div>
+              <strong>Save your credentials</strong>
+              <p>Click <strong>Save Credentials</strong>. All credentials are stored securely in Windows Credential Manager — never in plain text on disk.</p>
+            </div>
+          </li>
+          <li>
+            <span class="help-step-num">5</span>
+            <div>
+              <strong>Run Company Mapping</strong>
+              <p>Navigate to <em>Company Mapping</em> and run a sync. This links your Pax8 companies to their matching Autotask accounts and is required for most tools to work correctly.</p>
+            </div>
+          </li>
+          <li>
+            <span class="help-step-num">6</span>
+            <div>
+              <strong>(Optional) Add your Claude API key</strong>
+              <p>Required only for the AI analysis feature in Pax8 Invoice Comparison. Add it under Settings → API &amp; Accounts → Claude.</p>
+            </div>
+          </li>
+        </ol>`
+    },
+    {
+      id: 'api-keys',
+      icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="6" cy="10" r="3.5" stroke="currentColor" stroke-width="1.3"/><path d="M8.5 7.5L13 3M13 3h-2.5M13 3v2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+      title: 'Where to Find Your API Keys',
+      body: `
+        <div class="help-api-block">
+          <div class="help-api-header">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="1" y="3" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M1 6h14" stroke="currentColor" stroke-width="1.3"/></svg>
+            Pax8
+          </div>
+          <ol class="help-api-steps">
+            <li>Log in to <strong>partner.pax8.com</strong></li>
+            <li>Click your profile icon (top right) → <strong>Profile</strong></li>
+            <li>Scroll to <strong>Client Credentials</strong> → click <strong>Generate Credentials</strong></li>
+            <li>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong> — the secret is only shown once</li>
+          </ol>
+        </div>
+
+        <div class="help-api-block">
+          <div class="help-api-header">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2C5.79 2 4 3.79 4 6v1H3a1 1 0 00-1 1v5a1 1 0 001 1h10a1 1 0 001-1V8a1 1 0 00-1-1h-1V6c0-2.21-1.79-4-4-4z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+            Autotask PSA — API Username &amp; Key
+          </div>
+          <ol class="help-api-steps">
+            <li>Go to <strong>Admin → Resources (Users)</strong></li>
+            <li>Create a new resource (or use an existing one) — set the <strong>Security Level</strong> to <em>API User (System)</em></li>
+            <li>The <strong>email address</strong> of that resource is your API Username</li>
+            <li>On the resource record, go to the <strong>API Tracking Identifier</strong> tab → <strong>Generate Key</strong></li>
+            <li>Copy the generated key — this is your API Key</li>
+          </ol>
+        </div>
+
+        <div class="help-api-block">
+          <div class="help-api-header">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2C5.79 2 4 3.79 4 6v1H3a1 1 0 00-1 1v5a1 1 0 001 1h10a1 1 0 001-1V8a1 1 0 00-1-1h-1V6c0-2.21-1.79-4-4-4z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+            Autotask PSA — Integration Code
+          </div>
+          <ol class="help-api-steps">
+            <li>Go to <strong>Admin → Extensions &amp; Integrations → Other Extensions &amp; Tools → Web Services API</strong></li>
+            <li>Click <strong>New</strong> to create a tracking identifier</li>
+            <li>Give it a name (e.g. <em>Anchor Hub</em>) and save</li>
+            <li>Copy the generated <strong>GUID</strong> — this is your Integration Code</li>
+          </ol>
+        </div>
+
+        <div class="help-api-block">
+          <div class="help-api-header">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            Claude (Anthropic) — Optional
+          </div>
+          <ol class="help-api-steps">
+            <li>Go to <strong>console.anthropic.com</strong> and sign in</li>
+            <li>Click <strong>API Keys</strong> in the left sidebar → <strong>Create Key</strong></li>
+            <li>Copy the key — it starts with <code>sk-ant-</code></li>
+            <li>This is only required for the AI analysis feature in <em>Pax8 Invoice Comparison</em></li>
+          </ol>
+        </div>`
+    },
+    {
+      id: 'tools',
+      icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="2" width="14" height="12" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M5 8h6M5 5h3M5 11h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>`,
+      title: 'Tools Overview',
+      body: `
+        <div class="help-tool-grid">
+          <div class="help-tool-card">
+            <div class="help-tool-name">M365 Subscription Comparison</div>
+            <p>Compares your Microsoft 365 subscriptions between Pax8 and Autotask contract services to surface billing discrepancies — seats that exist in one system but not the other. Run this monthly before invoicing clients.</p>
+          </div>
+          <div class="help-tool-card">
+            <div class="help-tool-name">Pax8 Invoice Comparison</div>
+            <p>Pulls a Pax8 invoice and compares line items against Autotask contract services to detect price changes, new charges, and removed items. Optionally uses Claude AI to summarize what changed and why.</p>
+          </div>
+          <div class="help-tool-card">
+            <div class="help-tool-name">M365 Margin Analyzer</div>
+            <p>Pulls Autotask contract service pricing and compares it against current Pax8 costs to show your margin per client. Identifies underpriced services and helps you stay ahead of cost increases.</p>
+          </div>
+          <div class="help-tool-card">
+            <div class="help-tool-name">Company Mapping</div>
+            <p>Syncs and manages the link between your Pax8 company names and their matching Autotask accounts. Run this first during setup and again whenever you add new clients. Most other tools depend on accurate mappings.</p>
+          </div>
+          <div class="help-tool-card">
+            <div class="help-tool-name">Pax8 Invoice Processor</div>
+            <p>Downloads and processes Pax8 invoices into a structured breakdown by client. Generates Claude MCP prompts to update Autotask contract service quantities and Azure costs automatically.</p>
+          </div>
+          <div class="help-tool-card">
+            <div class="help-tool-name">Kaseya Invoice Processor</div>
+            <p>Imports Kaseya/Datto invoices and splits costs across QuickBooks Online accounts and classes based on your configured percentages (PSA, RMM, IT Glue, bundled products). Generates an Autotask update prompt.</p>
+          </div>
+          <div class="help-tool-card">
+            <div class="help-tool-name">Autotask Contract Changes</div>
+            <p>Audits recent changes made to Autotask contracts — showing who changed what field and when. Useful for tracking unexpected modifications, auditing renewals, and seeing what the AI updated after running a prompt.</p>
+          </div>
+          <div class="help-tool-card">
+            <div class="help-tool-name">Autotask Contract Renewals</div>
+            <p>Finds active contracts expiring within your chosen window (30/60/90 days) that don't have a renewal on record. Review services, adjust pricing, and generate a Claude MCP prompt to create the renewal contract — individually or as a batch for multiple clients at once.</p>
+          </div>
+          <div class="help-tool-card">
+            <div class="help-tool-name">BlackPoint Usage</div>
+            <p>Fetches the current protected endpoint (active agent) count for every client from the BlackPoint CompassOne API. Compares against the last saved snapshot to show month-over-month changes, then generates a Claude MCP prompt to update Security+ service quantities in Autotask to match.</p>
+          </div>
+        </div>`
+    },
+    {
+      id: 'troubleshooting',
+      icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3"/><path d="M8 4.5v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11" r="0.8" fill="currentColor"/></svg>`,
+      title: 'Troubleshooting',
+      body: `
+        <div class="help-faq">
+          <div class="help-faq-item">
+            <div class="help-faq-q">The app says my credentials are invalid</div>
+            <p>Go to <strong>Settings → API &amp; Accounts</strong> and re-enter your credentials. Make sure there are no leading or trailing spaces — especially in copied API keys. Click Save, then try the tool again.</p>
+          </div>
+          <div class="help-faq-item">
+            <div class="help-faq-q">Autotask zone detection isn't working</div>
+            <p>Make sure your API <strong>Username</strong> is filled in first — the zone is derived from your username's associated data center. Then click <strong>Detect</strong>. If it still fails, your zone can be found in the Autotask URL when you're logged in (e.g. <code>ww14</code> in <code>ww14.autotask.net</code>).</p>
+          </div>
+          <div class="help-faq-item">
+            <div class="help-faq-q">Contract Renewals is still showing project contracts</div>
+            <p>The tool filters by <strong>Contract Category</strong> (not Contract Type). If your Autotask instance uses a non-standard category name for projects, they may still appear. You can identify them by the contract name and ignore them — this will be configurable in a future update.</p>
+          </div>
+          <div class="help-faq-item">
+            <div class="help-faq-q">Company Mapping shows no matches</div>
+            <p>Make sure both Pax8 and Autotask credentials are saved, then run a fresh sync from the <em>Company Mapping</em> tool. The matching is fuzzy but requires reasonably similar company names in both systems.</p>
+          </div>
+          <div class="help-faq-item">
+            <div class="help-faq-q">No contracts or subscriptions are loading</div>
+            <p>Check that your Autotask API user has sufficient permissions — it needs read access to Contracts, ContractServices, and Companies at minimum. The API user's Security Level should be <em>API User (System)</em>.</p>
+          </div>
+          <div class="help-faq-item">
+            <div class="help-faq-q">An update is available but won't download</div>
+            <p>Click <strong>Check for Updates</strong> on the Home page to trigger a manual check. Make sure you're connected to the internet. If it still fails, you can download the latest installer directly from the <a href="https://github.com/MikeS-ANS/Anchor-Hub/releases" target="_blank" class="help-link">GitHub Releases page</a>.</p>
+          </div>
+          <div class="help-faq-item">
+            <div class="help-faq-q">The app won't open after an update</div>
+            <p>Download and run the latest installer from the <a href="https://github.com/MikeS-ANS/Anchor-Hub/releases" target="_blank" class="help-link">GitHub Releases page</a>. A fresh install over the top will fix most post-update issues without affecting your saved settings.</p>
+          </div>
+          <div class="help-faq-item">
+            <div class="help-faq-q">A Claude prompt ran but nothing changed in Autotask</div>
+            <p>Claude uses the Autotask MCP tools to make changes — make sure you're running Claude with the Autotask MCP server connected and authenticated before pasting a generated prompt. You can verify the connection with the test tool in the Autotask MCP server.</p>
+          </div>
+        </div>`
+    }
+  ];
+
+  content.innerHTML = `
+    <div class="view-header">
+      <div>
+        <h1 class="view-title">Help</h1>
+        <p class="view-subtitle">Setup guide, API key locations, tool descriptions, and troubleshooting</p>
+      </div>
+    </div>
+    <div class="view-body help-body">
+      ${SECTIONS.map(s => `
+        <div class="help-section ${s.open ? 'help-open' : ''}" data-id="${s.id}">
+          <div class="help-section-header">
+            <span class="help-icon">${s.icon}</span>
+            <span class="help-section-title">${s.title}</span>
+            <span class="help-chevron">${s.open ? '▼' : '▶'}</span>
+          </div>
+          <div class="help-section-body" ${s.open ? '' : 'style="display:none"'}>
+            ${s.body}
+          </div>
+        </div>`).join('')}
+      <div class="help-footer">
+        <span>Anchor Hub · v<span id="help-version">…</span></span>
+        <a href="https://github.com/MikeS-ANS/Anchor-Hub/releases" target="_blank" class="help-link">GitHub Releases</a>
+        <a href="https://github.com/MikeS-ANS/Anchor-Hub/issues" target="_blank" class="help-link">Report an Issue</a>
+      </div>
+    </div>`;
+
+  // Accordion toggle
+  content.querySelectorAll('.help-section-header').forEach(header => {
+    header.addEventListener('click', () => {
+      const sec   = header.closest('.help-section');
+      const body  = sec.querySelector('.help-section-body');
+      const chev  = header.querySelector('.help-chevron');
+      const open  = sec.classList.toggle('help-open');
+      body.style.display = open ? '' : 'none';
+      chev.textContent   = open ? '▼' : '▶';
+    });
+  });
+
+  // Show version
+  window.api.getAppVersion().then(v => {
+    const el = document.getElementById('help-version');
+    if (el) el.textContent = v;
+  }).catch(() => {});
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
