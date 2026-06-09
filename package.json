@@ -1,0 +1,55 @@
+{
+  "name": "anchor-hub",
+  "version": "1.1.0",
+  "description": "Anchor Hub — MSP tooling for Autotask & Pax8",
+  "main": "main.js",
+  "scripts": {
+    "start":   "electron .",
+    "dev":     "electron . --dev",
+    "build":   "electron-builder --win --x64 --publish never",
+    "publish": "electron-builder --win --x64 --publish always",
+    "icon":    "node -e \"const {default:p}=require('png-to-ico'),fs=require('fs');p('anchor-icon.png').then(b=>{fs.writeFileSync('icon.ico',b);console.log('icon.ico updated')}).catch(e=>console.error(e.message))\""
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9",
+    "exceljs":          "^4.4.0",
+    "keytar":           "^7.9.0",
+    "node-fetch":       "^2.7.0",
+    "xlsx":             "^0.18.5"
+  },
+  "devDependencies": {
+    "electron":         "^28.0.0",
+    "electron-builder": "^24.0.0",
+    "png-to-ico":       "^3.0.1"
+  },
+  "build": {
+    "appId":       "com.anchorsolutions.anchorhub",
+    "productName": "Anchor Hub",
+    "win": {
+      "target": "nsis",
+      "icon":   "icon.ico"
+    },
+    "nsis": {
+      "oneClick":                          true,
+      "allowToChangeInstallationDirectory": false,
+      "installerIcon":                     "icon.ico",
+      "uninstallerIcon":                   "icon.ico"
+    },
+    "publish": {
+      "provider": "github",
+      "owner":    "MikeS-ANS",
+      "repo":     "Anchor-Hub",
+      "private":  false
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "app.js",
+      "styles.css",
+      "index.html",
+      "icon.ico",
+      "Anchor_Logo_High.png",
+      "package.json"
+    ]
+  }
+}

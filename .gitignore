@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Credentials & local data
+anchor-renewal-settings.json
+anchor-margin-settings.json
+anchor-kaseya-settings.json
+anchor-prompt-templates.json
+anchor-tool-visibility.json
+pax8hub-mappings.json
+
+# CSV / Excel / PDF exports
+*.csv
+*.xlsx
+*.pdf
+
+# Local working folders
+Invoices/
+Kaseya Billing/
+
+# Misc
+*.log
+.DS_Store
+Thumbs.db

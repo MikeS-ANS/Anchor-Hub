@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npx electron *)",
+      "Read(//tmp/**)",
+      "Bash(tasklist)",
+      "Bash(taskkill /IM electron.exe /F)",
+      "WebFetch(domain:ww5.autotask.net)",
+      "WebFetch(domain:devx.pax8.com)",
+      "WebFetch(domain:webservices2.autotask.net)",
+      "Bash(npm start *)",
+      "Bash(node -e \"require\\('exceljs'\\); console.log\\('ok'\\)\")",
+      "Bash(node -e ' *)",
+      "Bash(node --check main.js)",
+      "Bash(node --check app.js)",
+      "Bash(node --check preload.js)",
+      "Bash(timeout 8)",
+      "Bash(pip install *)",
+      "Bash(python -c ' *)",
+      "Bash(node -e \"require\\('./main.js'\\)\")",
+      "Read(//c/Users/Mstew/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/8f0bc635-a272-4690-8c93-91e1202c68e5/a77a2ecf-ba5e-437d-96b1-a84a9fc1ade8/skills/xlsx/**)",
+      "Bash(node -e \"const XLSX=require\\('xlsx'\\);console.log\\('xlsx OK',XLSX.version\\)\")",
+      "Bash(node -e \"require\\('./app.js'\\)\")",
+      "Bash(node --check \"C:\\\\Users\\\\Mstew\\\\OneDrive\\\\Desktop\\\\Claude\\\\Pax8-Hub\\\\app.js\")",
+      "Bash(node --check \"C:\\\\Users\\\\Mstew\\\\OneDrive\\\\Desktop\\\\Claude\\\\Pax8-Hub\\\\main.js\")",
+      "Bash(find \"C:\\\\Users\\\\Mstew\" -maxdepth 4 -name \"*.bat\" 2>/dev/null | grep -i pax8 | head -10)",
+      "mcp__Autotask_MCP_Server__autotask_get_field_info",
+      "Bash(dir /a \"C:\\\\Users\\\\Mstew\\\\OneDrive - Anchor Network Solutions\\\\Desktop\\\\Claude\\\\Pax8-Hub\")",
+      "Bash(del \"C:\\\\Users\\\\Mstew\\\\OneDrive - Anchor Network Solutions\\\\Desktop\\\\Claude\\\\Pax8-Hub\\\\icon_square.png\")",
+      "Bash(powershell -command \"\\(Get-Content 'C:\\\\Users\\\\Mstew\\\\OneDrive - Anchor Network Solutions\\\\Desktop\\\\Claude\\\\Pax8-Hub\\\\styles.css'\\).Count\")"
+    ]
+  }
+}
