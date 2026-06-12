@@ -81,6 +81,15 @@ contextBridge.exposeInMainWorld('api', {
   runBlackpointUsage:     ()     => ipcRenderer.invoke('run-blackpoint-usage'),
   exportBlackpointReport: (data) => ipcRenderer.invoke('export-blackpoint-report', data),
 
+  // Project Time Summary
+  runProjectTimeSummary:     ()  => ipcRenderer.invoke('run-project-time-summary'),
+  getProjectNotes:           ()  => ipcRenderer.invoke('get-project-notes'),
+  saveProjectNote:           (d) => ipcRenderer.invoke('save-project-note', d),
+  getProjectReportSettings:  ()  => ipcRenderer.invoke('get-project-report-settings'),
+  saveProjectReportSettings: (s) => ipcRenderer.invoke('save-project-report-settings', s),
+  exportProjectReport:       (d) => ipcRenderer.invoke('export-project-report', d),
+  emailProjectReport:        (d) => ipcRenderer.invoke('email-project-report', d),
+
   // Tool Visibility
   getToolVisibility:  ()    => ipcRenderer.invoke('get-tool-visibility'),
   saveToolVisibility: (vis) => ipcRenderer.invoke('save-tool-visibility', vis),

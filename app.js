@@ -103,6 +103,7 @@ function navigate(view) {
   else if (view === 'company-mapping')     renderCompanyMapping();
   else if (view === 'invoice-processor')   renderInvoiceProcessor();
   else if (view === 'kaseya-processor')    renderKaseyaProcessor();
+  else if (view === 'project-time-summary') renderProjectTimeSummary();
   else if (view === 'contract-changes')    renderContractChanges();
   else if (view === 'contract-renewals')   renderContractRenewals();
   else if (view === 'blackpoint-processor') renderBlackpointProcessor();
@@ -1415,8 +1416,9 @@ const TOOL_VIS_DEFS = [
   { key: 'company-mapping',     label: 'Company Mapping' },
   { key: 'invoice-processor',   label: 'Pax8 Invoice Processor' },
   { key: 'kaseya-processor',    label: 'Kaseya Invoice Processor' },
-  { key: 'contract-changes',    label: 'Autotask Contract Changes' },
-  { key: 'blackpoint-processor', label: 'BlackPoint Usage' },
+  { key: 'contract-changes',      label: 'Autotask Contract Changes' },
+  { key: 'project-time-summary',  label: 'Project Time Summary' },
+  { key: 'blackpoint-processor',  label: 'BlackPoint Usage' },
 ];
 
 async function loadToolVisibilitySettings() {
@@ -2758,6 +2760,305 @@ function ccTodayStr() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+// ─── Project Time Summary ─────────────────────────────────────────────────────
+let _ptsData = null;
+
+function renderProjectTimeSummary() {
+  content.innerHTML = `
+    <div class="view-header">
+      <div>
+        <h1 class="view-title">Project Time Summary</h1>
+        <p class="view-desc">Pulls active Professional Services projects from Autotask, shows hours worked vs. estimated, and flags projects at risk — then exports a report you can email directly from the app.</p>
+      </div>
+      <img class="view-header-deco" src="Anchor_Logo_Vertical_High.png" alt="" draggable="false" />
+    </div>
+
+    <div class="settings-section wide">
+      <h2 class="section-title">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 2l9 5-9 5V2z" fill="currentColor"/></svg>
+        Run Report
+      </h2>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <button class="btn btn-primary" id="pts-run-btn">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 2l9 5-9 5V2z" fill="currentColor"/></svg>
+          Fetch Projects
+        </button>
+        <span class="audit-status-text" id="pts-status"></span>
+      </div>
+    </div>
+
+    <div id="pts-results" style="display:none">
+      <!-- Metric cards -->
+      <div id="pts-metrics" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px"></div>
+
+      <!-- Action bar -->
+      <div class="settings-section wide" style="padding:12px 18px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-right:4px">Export</span>
+          <button class="btn btn-ghost" id="pts-export-btn" style="font-size:12px">
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M7 1v9M3.5 7l3.5 3.5L10.5 7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 12h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+            Save HTML Report
+          </button>
+          <button class="btn btn-primary" id="pts-email-btn" style="font-size:12px">
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><rect x="1" y="3" width="12" height="8" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M1 4l6 4 6-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            Email via Outlook
+          </button>
+          <span class="save-status" id="pts-action-status" style="margin-left:4px"></span>
+        </div>
+      </div>
+
+      <!-- Results table -->
+      <div class="settings-section wide" style="padding:0;overflow:hidden">
+        <div id="pts-table-wrap" style="overflow-x:auto"></div>
+      </div>
+
+      <!-- Key -->
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:12px;margin-bottom:4px">
+        <div style="display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text-muted)">
+          <div style="width:24px;height:13px;background:rgba(255,193,7,.25);border:1px solid rgba(255,193,7,.5);border-radius:2px"></div>
+          Worked hours ≥ 50% of estimated
+        </div>
+        <div style="display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text-muted)">
+          <div style="width:24px;height:13px;background:rgba(239,68,68,.2);border:1px solid rgba(239,68,68,.4);border-radius:2px"></div>
+          Worked hours exceed estimated
+        </div>
+        <div style="display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text-muted)">
+          <div style="width:24px;height:13px;background:rgba(100,200,120,.15);border:1px solid rgba(100,200,120,.35);border-radius:2px"></div>
+          Active in last 7 days
+        </div>
+      </div>
+    </div>
+
+    <!-- Email settings -->
+    <div class="settings-section" id="pts-email-settings" style="max-width:520px;margin-top:8px">
+      <h2 class="section-title">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="1" y="3" width="12" height="8" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M1 4l6 4 6-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        Email Settings
+      </h2>
+      <div class="field-group">
+        <label class="field-label">To (email address)</label>
+        <input class="field-input" id="pts-email-to" type="email" placeholder="manager@company.com" />
+      </div>
+      <div class="field-group" style="margin-top:10px">
+        <label class="field-label">Subject</label>
+        <input class="field-input" id="pts-email-subject" type="text" placeholder="Project Time Summary Report" />
+      </div>
+      <div class="field-group" style="margin-top:10px">
+        <label class="field-label">Body</label>
+        <textarea class="field-input" id="pts-email-body" rows="4" style="resize:vertical;font-family:var(--font-mono);font-size:12px"></textarea>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
+        <button class="btn btn-ghost" id="pts-save-settings-btn" style="font-size:12px">Save Settings</button>
+        <span class="save-status" id="pts-settings-status"></span>
+      </div>
+    </div>
+  `;
+
+  // Load saved email settings
+  (async () => {
+    try {
+      const s = await window.api.getProjectReportSettings();
+      document.getElementById('pts-email-to').value      = s.emailTo      || '';
+      document.getElementById('pts-email-subject').value = s.emailSubject || '';
+      document.getElementById('pts-email-body').value    = s.emailBody    || '';
+    } catch {}
+  })();
+
+  // Restore previous results if any
+  if (_ptsData) {
+    ptsRenderResults(_ptsData);
+    document.getElementById('pts-status').textContent = `✓ ${_ptsData.length} project${_ptsData.length !== 1 ? 's' : ''} loaded`;
+    document.getElementById('pts-status').className = 'audit-status-text success';
+  }
+
+  // Run button
+  document.getElementById('pts-run-btn').addEventListener('click', async () => {
+    const btn    = document.getElementById('pts-run-btn');
+    const status = document.getElementById('pts-status');
+    btn.disabled = true;
+    btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="animation:spin 1s linear infinite"><path d="M7 1a6 6 0 1 1-4.24 1.76" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Fetching…`;
+    status.textContent = 'Pulling projects and time entries from Autotask…';
+    status.className = 'audit-status-text';
+    try {
+      const res = await window.api.runProjectTimeSummary();
+      if (!res.success) throw new Error(res.error || 'Unknown error');
+      _ptsData = res.projects;
+      ptsRenderResults(res.projects);
+      status.textContent = `✓ ${res.projects.length} project${res.projects.length !== 1 ? 's' : ''} loaded`;
+      status.className = 'audit-status-text success';
+    } catch (e) {
+      status.textContent = `Error: ${e.message}`;
+      status.className = 'audit-status-text error';
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 2l9 5-9 5V2z" fill="currentColor"/></svg> Fetch Projects`;
+    }
+  });
+
+  // Export HTML
+  document.getElementById('pts-export-btn').addEventListener('click', async () => {
+    if (!_ptsData) return;
+    const actionStatus = document.getElementById('pts-action-status');
+    actionStatus.textContent = 'Saving…';
+    actionStatus.className = 'save-status';
+    try {
+      const res = await window.api.exportProjectReport({ projects: _ptsData });
+      if (res.success) {
+        actionStatus.textContent = '✓ Saved to Downloads';
+        actionStatus.className = 'save-status success';
+      } else throw new Error(res.error);
+    } catch (e) {
+      actionStatus.textContent = `Error: ${e.message}`;
+      actionStatus.className = 'save-status error';
+    }
+    setTimeout(() => { const el = document.getElementById('pts-action-status'); if (el) { el.textContent = ''; el.className = 'save-status'; } }, 4000);
+  });
+
+  // Email via Outlook
+  document.getElementById('pts-email-btn').addEventListener('click', async () => {
+    if (!_ptsData) return;
+    const actionStatus = document.getElementById('pts-action-status');
+    actionStatus.textContent = 'Opening Outlook…';
+    actionStatus.className = 'save-status';
+    try {
+      const res = await window.api.emailProjectReport({ projects: _ptsData });
+      if (res.success) {
+        actionStatus.textContent = '✓ Draft opened in Outlook';
+        actionStatus.className = 'save-status success';
+      } else throw new Error(res.error);
+    } catch (e) {
+      actionStatus.textContent = `Error: ${e.message}`;
+      actionStatus.className = 'save-status error';
+    }
+    setTimeout(() => { const el = document.getElementById('pts-action-status'); if (el) { el.textContent = ''; el.className = 'save-status'; } }, 5000);
+  });
+
+  // Save email settings
+  document.getElementById('pts-save-settings-btn').addEventListener('click', async () => {
+    const settingsStatus = document.getElementById('pts-settings-status');
+    try {
+      await window.api.saveProjectReportSettings({
+        emailTo:      document.getElementById('pts-email-to').value.trim(),
+        emailSubject: document.getElementById('pts-email-subject').value.trim(),
+        emailBody:    document.getElementById('pts-email-body').value,
+      });
+      settingsStatus.textContent = '✓ Saved';
+      settingsStatus.className = 'save-status success';
+    } catch (e) {
+      settingsStatus.textContent = `Error: ${e.message}`;
+      settingsStatus.className = 'save-status error';
+    }
+    setTimeout(() => { const el = document.getElementById('pts-settings-status'); if (el) { el.textContent = ''; el.className = 'save-status'; } }, 3000);
+  });
+}
+
+function ptsRenderResults(projects) {
+  const resultsEl = document.getElementById('pts-results');
+  if (!resultsEl) return;
+  resultsEl.style.display = '';
+
+  // Metric cards
+  const over   = projects.filter(p => p.estimatedHours > 0 && p.workedHours > p.estimatedHours).length;
+  const atRisk = projects.filter(p => p.estimatedHours > 0 && p.workedHours <= p.estimatedHours && p.workedHours / p.estimatedHours >= 0.5).length;
+  const recent = projects.filter(p => p.last7Hours > 0).length;
+  const metricsEl = document.getElementById('pts-metrics');
+  metricsEl.innerHTML = `
+    <div class="metric-card"><div class="metric-value">${projects.length}</div><div class="metric-label">Active Projects</div></div>
+    <div class="metric-card" style="${over > 0 ? 'border-top:3px solid var(--error)' : ''}">
+      <div class="metric-value" style="${over > 0 ? 'color:var(--error)' : ''}">${over}</div>
+      <div class="metric-label">Over Budget</div>
+    </div>
+    <div class="metric-card" style="${atRisk > 0 ? 'border-top:3px solid var(--warn)' : ''}">
+      <div class="metric-value" style="${atRisk > 0 ? 'color:var(--warn)' : ''}">${atRisk}</div>
+      <div class="metric-label">At Risk (≥50%)</div>
+    </div>
+    <div class="metric-card"><div class="metric-value">${recent}</div><div class="metric-label">Active Last 7 Days</div></div>
+  `;
+
+  // Table
+  const fmt = v => v.toFixed(2);
+  const rows = projects.map((p, idx) => {
+    const pct     = p.estimatedHours > 0 ? p.workedHours / p.estimatedHours : 0;
+    const over    = p.estimatedHours > 0 && p.workedHours > p.estimatedHours;
+    const atRisk  = !over && pct >= 0.5;
+    const hasRecent = p.last7Hours > 0;
+
+    let rowStyle = '';
+    if (over)       rowStyle = 'background:rgba(239,68,68,.15)';
+    else if (atRisk) rowStyle = 'background:rgba(255,193,7,.15)';
+    else if (hasRecent) rowStyle = 'background:rgba(100,200,120,.08)';
+
+    const pctBar = p.estimatedHours > 0
+      ? `<div style="height:4px;border-radius:2px;background:var(--border);margin-top:4px;overflow:hidden">
+           <div style="height:100%;width:${Math.min(pct * 100, 100).toFixed(1)}%;background:${over ? 'var(--error)' : atRisk ? 'var(--warn)' : 'var(--success)'}"></div>
+         </div>`
+      : '';
+
+    const noteId = `pts-note-${p.id}`;
+    const noteVal = escHtml(p.note || '');
+
+    return `
+      <tr style="${rowStyle}">
+        <td style="padding:6px 10px;font-size:12px;color:var(--text)">${escHtml(p.accountName)}</td>
+        <td style="padding:6px 10px;font-size:12px;color:var(--text)">${escHtml(p.projectName)}</td>
+        <td style="padding:6px 10px;font-size:11px;font-family:var(--font-mono);color:var(--text-muted);white-space:nowrap">${escHtml(p.projectNumber)}</td>
+        <td style="padding:6px 10px;font-size:12px;white-space:nowrap;color:var(--text)">${escHtml(p.projectLead)}</td>
+        <td style="padding:6px 10px;text-align:right;font-family:var(--font-mono);font-size:12px;color:var(--text)">${fmt(p.estimatedHours)}</td>
+        <td style="padding:6px 10px;text-align:right;font-family:var(--font-mono);font-size:12px;font-weight:700;color:${over ? 'var(--error)' : atRisk ? 'var(--warn)' : 'var(--text)'}">
+          ${fmt(p.workedHours)}${pctBar}
+        </td>
+        <td style="padding:6px 10px;text-align:right;font-family:var(--font-mono);font-size:12px;color:var(--text)">${fmt(p.billableHours)}</td>
+        <td style="padding:6px 10px;text-align:right;font-family:var(--font-mono);font-size:12px;color:var(--text-muted)">${fmt(p.nonBillableHours)}</td>
+        <td style="padding:6px 10px;text-align:right;font-family:var(--font-mono);font-size:12px;color:${hasRecent ? 'var(--success)' : 'var(--text-muted)'}">
+          ${hasRecent ? fmt(p.last7Hours) : '—'}
+        </td>
+        <td style="padding:4px 6px;min-width:180px;max-width:260px">
+          <textarea id="${noteId}" data-project-id="${p.id}" rows="2"
+            style="width:100%;background:transparent;border:1px solid transparent;border-radius:4px;
+                   color:var(--text);font-size:11px;font-family:inherit;resize:vertical;padding:3px 6px;
+                   box-sizing:border-box;transition:border-color .15s"
+            placeholder="Click to add note…">${noteVal}</textarea>
+        </td>
+      </tr>`;
+  }).join('');
+
+  const tableWrap = document.getElementById('pts-table-wrap');
+  tableWrap.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead>
+        <tr style="background:rgba(45,77,107,.75);color:#fff">
+          <th style="padding:7px 10px;text-align:left;font-weight:600;font-size:12px">Account Name</th>
+          <th style="padding:7px 10px;text-align:left;font-weight:600;font-size:12px">Project Name</th>
+          <th style="padding:7px 10px;text-align:left;font-weight:600;font-size:12px">Project #</th>
+          <th style="padding:7px 10px;text-align:left;font-weight:600;font-size:12px">Project Lead</th>
+          <th style="padding:7px 10px;text-align:right;font-weight:600;font-size:12px">Est. Hours</th>
+          <th style="padding:7px 10px;text-align:right;font-weight:600;font-size:12px">Worked Hours</th>
+          <th style="padding:7px 10px;text-align:right;font-weight:600;font-size:12px">Billable</th>
+          <th style="padding:7px 10px;text-align:right;font-weight:600;font-size:12px">Non-Billable</th>
+          <th style="padding:7px 10px;text-align:right;font-weight:600;font-size:12px">Last 7 Days</th>
+          <th style="padding:7px 10px;text-align:left;font-weight:600;font-size:12px">Notes</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+
+  // Wire note textarea — save on blur, highlight border on focus
+  tableWrap.querySelectorAll('textarea[data-project-id]').forEach(ta => {
+    ta.addEventListener('focus', () => { ta.style.borderColor = 'var(--border)'; ta.style.background = 'var(--surface-2)'; });
+    ta.addEventListener('blur', async () => {
+      ta.style.borderColor = 'transparent';
+      ta.style.background = 'transparent';
+      const projectId = Number(ta.dataset.projectId);
+      const note      = ta.value;
+      // Update local cache
+      const proj = (_ptsData || []).find(p => p.id === projectId);
+      if (proj) proj.note = note.trim();
+      try { await window.api.saveProjectNote({ projectId, note }); } catch {}
+    });
+  });
+}
+
+// ─── Contract Changes ─────────────────────────────────────────────────────────
 function renderContractChanges() {
   // Restore date range from cache, default to today
   const today      = ccTodayStr();

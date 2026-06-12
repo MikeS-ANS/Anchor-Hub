@@ -4119,3 +4119,285 @@ ipcMain.handle('export-blackpoint-report', async (_, data) => {
     return { error: e.message };
   }
 });
+
+// ─── Project Time Summary ─────────────────────────────────────────────────────
+const PROJECT_NOTES_FILE           = path.join(USER_DATA, 'project-notes.json');
+const PROJECT_REPORT_SETTINGS_FILE = path.join(USER_DATA, 'project-report-settings.json');
+
+function loadProjectNotes() {
+  try { return JSON.parse(fs.readFileSync(PROJECT_NOTES_FILE, 'utf8')); } catch { return {}; }
+}
+function saveProjectNotesFn(notes) {
+  fs.writeFileSync(PROJECT_NOTES_FILE, JSON.stringify(notes, null, 2));
+}
+function loadProjectReportSettings() {
+  try { return JSON.parse(fs.readFileSync(PROJECT_REPORT_SETTINGS_FILE, 'utf8')); }
+  catch {
+    return {
+      emailTo:      '',
+      emailSubject: 'Project Time Summary Report',
+      emailBody:    'Hi,\n\nPlease find this week\'s Project Time Summary Report attached.\n\nThank you,\nAnchor Network Solutions',
+    };
+  }
+}
+function saveProjectReportSettingsFn(s) {
+  fs.writeFileSync(PROJECT_REPORT_SETTINGS_FILE, JSON.stringify(s, null, 2));
+}
+
+ipcMain.handle('run-project-time-summary', async () => {
+  try {
+    // 1. Discover which status IDs map to Complete / On Hold / Canceled
+    let excludeStatusIds = [];
+    try {
+      const fieldsRes = await atFetch('/Projects/entityInformation/fields');
+      const statusField = (fieldsRes.fields || []).find(f => f.name === 'status');
+      if (statusField?.picklistValues) {
+        excludeStatusIds = statusField.picklistValues
+          .filter(v => /^(complete|on.?hold|cancel)/i.test(v.label || ''))
+          .map(v => Number(v.value));
+      }
+    } catch {}
+
+    // 2. Find the Professional Services department ID
+    let psDeptId = null;
+    try {
+      const depts = await atQuery('/Departments');
+      const psDept = depts.find(d => /professional\s*services/i.test(d.name || ''));
+      psDeptId = psDept?.id ?? null;
+    } catch {}
+
+    // 3. Query active PS projects
+    const projectFilters = [];
+    if (excludeStatusIds.length) projectFilters.push({ op: 'notIn', field: 'status', value: excludeStatusIds });
+    if (psDeptId !== null)        projectFilters.push({ op: 'eq',    field: 'departmentID', value: psDeptId });
+    if (!projectFilters.length)   projectFilters.push({ op: 'gt',    field: 'id', value: 0 });
+
+    const projects = await atQuery('/Projects', projectFilters);
+    if (!projects.length) return { success: true, projects: [] };
+
+    const projectIds = projects.map(p => p.id);
+
+    // 4. Batch-lookup company names and project lead resources concurrently
+    const companyIds  = [...new Set(projects.map(p => p.companyID).filter(Boolean))];
+    const resourceIds = [...new Set(projects.map(p => p.projectLeadResourceID).filter(Boolean))];
+    const [companies, resources] = await Promise.all([
+      atBatchLookup('Companies', companyIds),
+      atBatchLookup('Resources', resourceIds),
+    ]);
+    const companyMap  = Object.fromEntries(companies.map(c => [c.id, c.companyName || c.name || '']));
+    const resourceMap = Object.fromEntries(
+      resources.map(r => [r.id, [r.lastName, r.firstName].filter(Boolean).join(', ')])
+    );
+
+    // 5. Get Tasks for each project (time entries are usually on tasks, not projects directly)
+    const taskMap = new Map(); // taskId → projectId
+    const CHUNK = 50;
+    for (let i = 0; i < projectIds.length; i += CHUNK) {
+      const chunk = projectIds.slice(i, i + CHUNK);
+      try {
+        const tasks = await atQuery('/Tasks', [{ op: 'in', field: 'projectID', value: chunk }]);
+        tasks.forEach(t => taskMap.set(t.id, t.projectID));
+      } catch {}
+    }
+
+    // 6. Fetch time entries — both direct (projectID) and task-linked (taskID)
+    const teById = new Map();
+    const addEntries = (entries, taskIdProjectMap) => {
+      for (const te of entries) {
+        if (!te.projectID && te.taskID && taskIdProjectMap) {
+          te.projectID = taskIdProjectMap.get(te.taskID) || null;
+        }
+        if (te.projectID) teById.set(te.id, te);
+      }
+    };
+
+    // Direct project time entries
+    for (let i = 0; i < projectIds.length; i += CHUNK) {
+      const chunk = projectIds.slice(i, i + CHUNK);
+      try {
+        const entries = await atQuery('/TimeEntries', [{ op: 'in', field: 'projectID', value: chunk }]);
+        addEntries(entries, null);
+      } catch {}
+    }
+
+    // Task-linked time entries
+    const taskIds = [...taskMap.keys()];
+    for (let i = 0; i < taskIds.length; i += 100) {
+      const chunk = taskIds.slice(i, i + 100);
+      try {
+        const entries = await atQuery('/TimeEntries', [{ op: 'in', field: 'taskID', value: chunk }]);
+        addEntries(entries, taskMap);
+      } catch {}
+    }
+
+    // 7. Aggregate hours per project
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const hoursMap = {}; // projectId → { total, billable, nonBillable, last7 }
+    for (const te of teById.values()) {
+      const pid = te.projectID;
+      if (!pid) continue;
+      if (!hoursMap[pid]) hoursMap[pid] = { total: 0, billable: 0, nonBillable: 0, last7: 0 };
+      const hrs = typeof te.hoursWorked === 'number' ? te.hoursWorked : 0;
+      hoursMap[pid].total += hrs;
+      if (te.isNonBillable) hoursMap[pid].nonBillable += hrs;
+      else                  hoursMap[pid].billable     += hrs;
+      const worked = (te.dateWorked || '').slice(0, 10);
+      if (worked && worked >= sevenDaysAgo) hoursMap[pid].last7 += hrs;
+    }
+
+    // 8. Load saved notes
+    const notes = loadProjectNotes();
+
+    // 9. Build sorted result rows
+    const round2 = v => Math.round(v * 100) / 100;
+    const result = projects
+      .map(p => ({
+        id:               p.id,
+        projectName:      p.projectName || p.name || '',
+        projectNumber:    p.projectNumber || '',
+        accountName:      companyMap[p.companyID] || '',
+        projectLead:      resourceMap[p.projectLeadResourceID] || '',
+        estimatedHours:   p.estimatedHours || 0,
+        workedHours:      round2(hoursMap[p.id]?.total        || 0),
+        billableHours:    round2(hoursMap[p.id]?.billable     || 0),
+        nonBillableHours: round2(hoursMap[p.id]?.nonBillable  || 0),
+        last7Hours:       round2(hoursMap[p.id]?.last7        || 0),
+        note:             notes[p.id] || '',
+      }))
+      .sort((a, b) => a.accountName.localeCompare(b.accountName) || a.projectName.localeCompare(b.projectName));
+
+    return { success: true, projects: result };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('get-project-notes', () => loadProjectNotes());
+
+ipcMain.handle('save-project-note', (_, { projectId, note }) => {
+  const notes = loadProjectNotes();
+  if (note?.trim()) notes[projectId] = note.trim();
+  else              delete notes[projectId];
+  saveProjectNotesFn(notes);
+  return { success: true };
+});
+
+ipcMain.handle('get-project-report-settings', () => loadProjectReportSettings());
+
+ipcMain.handle('save-project-report-settings', (_, s) => {
+  saveProjectReportSettingsFn(s);
+  return { success: true };
+});
+
+ipcMain.handle('export-project-report', async (_, { projects }) => {
+  try {
+    const settings = loadProjectReportSettings();
+    const html     = buildProjectReportHtml(projects, settings);
+    const dateStr  = new Date().toISOString().slice(0, 10);
+    const filePath = path.join(app.getPath('downloads'), `project-time-summary-${dateStr}.html`);
+    fs.writeFileSync(filePath, html, 'utf8');
+    return { success: true, filePath };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('email-project-report', async (_, { projects }) => {
+  try {
+    const settings  = loadProjectReportSettings();
+    const html      = buildProjectReportHtml(projects, settings);
+    const dateStr   = new Date().toISOString().slice(0, 10);
+    const filePath  = path.join(app.getPath('downloads'), `project-time-summary-${dateStr}.html`);
+    fs.writeFileSync(filePath, html, 'utf8');
+
+    const { execFileSync } = require('child_process');
+    const esc = s => String(s || '').replace(/'/g, "''");
+    const ps = `
+$ol   = New-Object -ComObject Outlook.Application
+$mail = $ol.CreateItem(0)
+$mail.To      = '${esc(settings.emailTo)}'
+$mail.Subject = '${esc(settings.emailSubject)}'
+$mail.Body    = '${esc(settings.emailBody)}'
+[void]$mail.Attachments.Add('${esc(filePath)}')
+$mail.Display()
+`;
+    execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps]);
+    return { success: true, filePath };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+function ptsEsc(str) {
+  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function buildProjectReportHtml(projects) {
+  const now     = new Date();
+  const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+  const rows = projects.map(p => {
+    const pct = p.estimatedHours > 0 ? p.workedHours / p.estimatedHours : 0;
+    const over    = p.estimatedHours > 0 && p.workedHours > p.estimatedHours;
+    const atRisk  = !over && pct >= 0.5;
+    const rowBg   = over ? 'background:#f8c8c8' : atRisk ? 'background:#fff59d' : '';
+    const fmt = v => v.toFixed(2);
+    return `
+      <tr style="${rowBg}">
+        <td>${ptsEsc(p.accountName)}</td>
+        <td>${ptsEsc(p.projectName)}</td>
+        <td style="white-space:nowrap">${ptsEsc(p.projectNumber)}</td>
+        <td style="white-space:nowrap">${ptsEsc(p.projectLead)}</td>
+        <td style="text-align:right">${fmt(p.estimatedHours)}</td>
+        <td style="text-align:right;font-weight:bold">${fmt(p.workedHours)}</td>
+        <td style="text-align:right">${fmt(p.billableHours)}</td>
+        <td style="text-align:right">${fmt(p.nonBillableHours)}</td>
+        <td style="text-align:right">${p.last7Hours > 0 ? fmt(p.last7Hours) : '—'}</td>
+        <td style="color:#333">${ptsEsc(p.note)}</td>
+      </tr>`;
+  }).join('');
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Project Time Summary</title>
+<style>
+  body { font-family: Calibri, Arial, sans-serif; font-size: 10.5pt; margin: 28px; color: #222; }
+  .brand { color: #D0641C; font-size: 13pt; font-weight: 700; margin-bottom: 2px; }
+  h1 { font-size: 15pt; margin: 0 0 2px; }
+  .subtitle { color: #666; font-size: 9.5pt; margin-bottom: 22px; }
+  table { border-collapse: collapse; width: 100%; }
+  th { background: #D0641C; color: #fff; padding: 6px 9px; text-align: left; font-size: 9.5pt; font-weight: 600; white-space: nowrap; }
+  td { padding: 5px 9px; border-bottom: 1px solid #e0e0e0; font-size: 9.5pt; vertical-align: top; }
+  tr:nth-child(even) td { background: rgba(0,0,0,.03); }
+  tr[style*="f8c8c8"] td { background: #f8c8c8 !important; }
+  tr[style*="fff59d"] td { background: #fff59d !important; }
+  .key { margin-top: 20px; border: 1px solid #ccc; display: inline-block; padding: 10px 18px; border-radius: 4px; }
+  .key b { display: block; margin-bottom: 6px; font-size: 9.5pt; }
+  .key-row { display: flex; align-items: center; gap: 10px; margin: 3px 0; font-size: 9.5pt; }
+  .swatch { width: 30px; height: 14px; border: 1px solid #bbb; flex-shrink: 0; }
+</style>
+</head>
+<body>
+  <div class="brand">Anchor Network Solutions</div>
+  <h1>Project Time Summary Report</h1>
+  <div class="subtitle">Generated: ${ptsEsc(dateStr)}</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Account Name</th><th>Project Name</th><th>Project #</th>
+        <th>Project Lead</th><th>Est. Hours</th><th>Worked Hours</th>
+        <th>Billable Hours</th><th>Non-Billable Hours</th><th>Hours (Last 7 Days)</th><th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>
+  <div class="key">
+    <b>KEY</b>
+    <div class="key-row"><div class="swatch" style="background:#fff59d"></div>Worked hours ≥ 50% of estimated</div>
+    <div class="key-row"><div class="swatch" style="background:#f8c8c8"></div>Worked hours exceed estimated</div>
+  </div>
+</body>
+</html>`;
+}
