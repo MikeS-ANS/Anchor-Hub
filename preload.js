@@ -81,6 +81,10 @@ contextBridge.exposeInMainWorld('api', {
   runBlackpointUsage:     ()     => ipcRenderer.invoke('run-blackpoint-usage'),
   exportBlackpointReport: (data) => ipcRenderer.invoke('export-blackpoint-report', data),
 
+  // Sidebar config
+  getSidebarConfig:  ()  => ipcRenderer.invoke('get-sidebar-config'),
+  saveSidebarConfig: (c) => ipcRenderer.invoke('save-sidebar-config', c),
+
   // Project Time Summary
   runProjectTimeSummary:     ()  => ipcRenderer.invoke('run-project-time-summary'),
   getProjectNotes:           ()  => ipcRenderer.invoke('get-project-notes'),

@@ -3269,27 +3269,92 @@ ipcMain.handle('compare-kaseya-snapshots', (_, { keyA, keyB }) => {
   } catch (e) { return { error: e.message }; }
 });
 
-// ─── Tool Visibility ──────────────────────────────────────────────────────────
-const TOOL_VIS_KEY = 'tool_visibility';
-const DEFAULT_TOOL_VIS = {
-  'subscription-audit':  true,
-  'invoice-monitor':     true,
-  'margin-analyzer':     true,
-  'company-mapping':     true,
-  'invoice-processor':   true,
-  'kaseya-processor':    true,
-};
+// ─── Sidebar Config ───────────────────────────────────────────────────────────
+// Stored as sidebar-config.json in userData so it survives updates and can hold
+// the full layout (order + named groups) in addition to visibility.
+const SIDEBAR_CONFIG_FILE = path.join(USER_DATA, 'sidebar-config.json');
+const TOOL_VIS_KEY        = 'tool_visibility'; // kept for migration from old keytar store
 
-ipcMain.handle('get-tool-visibility', async () => {
+// Master list of all known tool keys — order here is the out-of-the-box default.
+// New tools added in future updates should be appended to this array; they will
+// automatically default to visibility=false for existing users.
+const ALL_TOOL_KEYS = [
+  'subscription-audit',
+  'invoice-monitor',
+  'margin-analyzer',
+  'company-mapping',
+  'invoice-processor',
+  'kaseya-processor',
+  'project-time-summary',
+  'contract-changes',
+  'contract-renewals',
+  'blackpoint-processor',
+];
+
+function getDefaultSidebarConfig() {
+  return {
+    visibility: Object.fromEntries(ALL_TOOL_KEYS.map(k => [k, false])),
+    layout:     ALL_TOOL_KEYS.map(k => ({ type: 'tool', key: k })),
+  };
+}
+
+function mergeSidebarConfig(saved) {
+  const def = getDefaultSidebarConfig();
+  // Merge visibility — new tool keys default to false
+  const visibility = { ...def.visibility, ...(saved.visibility || {}) };
+  // Find which tool keys are already placed in the saved layout
+  const placed = new Set();
+  (saved.layout || []).forEach(item => {
+    if (item.type === 'tool')   placed.add(item.key);
+    if (item.type === 'bucket') (item.items || []).forEach(k => placed.add(k));
+  });
+  // Append missing tool keys (added by an update) at the end with visibility=false
+  const missing = ALL_TOOL_KEYS.filter(k => !placed.has(k));
+  const layout  = [...(saved.layout || def.layout), ...missing.map(k => ({ type: 'tool', key: k }))];
+  return { visibility, layout };
+}
+
+ipcMain.handle('get-sidebar-config', async () => {
   try {
-    const raw = await keytar.getPassword(SERVICE_NAME, TOOL_VIS_KEY);
-    if (!raw) return { ...DEFAULT_TOOL_VIS };
-    return { ...DEFAULT_TOOL_VIS, ...JSON.parse(raw) };
-  } catch { return { ...DEFAULT_TOOL_VIS }; }
+    const raw = JSON.parse(fs.readFileSync(SIDEBAR_CONFIG_FILE, 'utf8'));
+    return mergeSidebarConfig(raw);
+  } catch {
+    // No config file yet — try to migrate existing keytar visibility for existing users
+    try {
+      const raw    = await keytar.getPassword(SERVICE_NAME, TOOL_VIS_KEY);
+      const oldVis = raw ? JSON.parse(raw) : null;
+      const config = getDefaultSidebarConfig();
+      if (oldVis) ALL_TOOL_KEYS.forEach(k => { if (k in oldVis) config.visibility[k] = oldVis[k]; });
+      fs.writeFileSync(SIDEBAR_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
+      return config;
+    } catch {
+      return getDefaultSidebarConfig();
+    }
+  }
 });
 
+ipcMain.handle('save-sidebar-config', (_, config) => {
+  fs.writeFileSync(SIDEBAR_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
+  return { success: true };
+});
+
+// Backward-compat: get-tool-visibility reads from sidebar config
+ipcMain.handle('get-tool-visibility', async () => {
+  try {
+    const raw = JSON.parse(fs.readFileSync(SIDEBAR_CONFIG_FILE, 'utf8'));
+    return mergeSidebarConfig(raw).visibility;
+  } catch { return getDefaultSidebarConfig().visibility; }
+});
+
+// Backward-compat: save-tool-visibility patches visibility in sidebar config
 ipcMain.handle('save-tool-visibility', async (_, vis) => {
-  await keytar.setPassword(SERVICE_NAME, TOOL_VIS_KEY, JSON.stringify(vis));
+  try {
+    let config;
+    try   { config = JSON.parse(fs.readFileSync(SIDEBAR_CONFIG_FILE, 'utf8')); }
+    catch { config = getDefaultSidebarConfig(); }
+    config.visibility = { ...config.visibility, ...vis };
+    fs.writeFileSync(SIDEBAR_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
+  } catch {}
   return { success: true };
 });
 
@@ -4131,14 +4196,16 @@ function saveProjectNotesFn(notes) {
   fs.writeFileSync(PROJECT_NOTES_FILE, JSON.stringify(notes, null, 2));
 }
 function loadProjectReportSettings() {
-  try { return JSON.parse(fs.readFileSync(PROJECT_REPORT_SETTINGS_FILE, 'utf8')); }
-  catch {
-    return {
-      emailTo:      '',
-      emailSubject: 'Project Time Summary Report',
-      emailBody:    'Hi,\n\nPlease find this week\'s Project Time Summary Report attached.\n\nThank you,\nAnchor Network Solutions',
-    };
-  }
+  const defaults = {
+    emailTo:              '',
+    emailSubject:         'Project Time Summary Report',
+    emailBody:            'Hi,\n\nPlease find this week\'s Project Time Summary Report attached.\n\nThank you,\nAnchor Network Solutions',
+    excludeProjectNumbers: '',
+  };
+  try {
+    const saved = JSON.parse(fs.readFileSync(PROJECT_REPORT_SETTINGS_FILE, 'utf8'));
+    return { ...defaults, ...saved };
+  } catch { return defaults; }
 }
 function saveProjectReportSettingsFn(s) {
   fs.writeFileSync(PROJECT_REPORT_SETTINGS_FILE, JSON.stringify(s, null, 2));
@@ -4270,7 +4337,14 @@ ipcMain.handle('run-project-time-summary', async () => {
     }
 
     // 9. Load saved notes and build result
-    const notes  = loadProjectNotes();
+    const notes    = loadProjectNotes();
+    const settings = loadProjectReportSettings();
+    const excludeNums = new Set(
+      (settings.excludeProjectNumbers || '')
+        .split(/[\n,]+/)
+        .map(s => s.trim().toLowerCase())
+        .filter(Boolean)
+    );
     const round2 = v => Math.round(v * 100) / 100;
     const result = projects
       .map(p => ({
@@ -4279,7 +4353,6 @@ ipcMain.handle('run-project-time-summary', async () => {
         projectNumber:    p.projectNumber || '',
         accountName:      companyMap[p.companyID] || '',
         projectLead:      resourceMap[p.projectLeadResourceID] || '',
-        // Task-summed estimated hours match what the report builder shows
         estimatedHours:   round2(estHoursMap[p.id] || p.estimatedHours || 0),
         workedHours:      round2(hoursMap[p.id]?.total        || 0),
         billableHours:    round2(hoursMap[p.id]?.billable     || 0),
@@ -4287,6 +4360,7 @@ ipcMain.handle('run-project-time-summary', async () => {
         last7Hours:       round2(hoursMap[p.id]?.last7        || 0),
         note:             notes[p.id] || '',
       }))
+      .filter(p => !excludeNums.has((p.projectNumber || '').toLowerCase()))
       .sort((a, b) => a.accountName.localeCompare(b.accountName) || a.projectName.localeCompare(b.projectName));
 
     return { success: true, projects: result };
@@ -4327,24 +4401,23 @@ ipcMain.handle('export-project-report', async (_, { projects }) => {
 
 ipcMain.handle('email-project-report', async (_, { projects }) => {
   try {
-    const settings  = loadProjectReportSettings();
-    const html      = buildProjectReportHtml(projects, settings);
-    const dateStr   = new Date().toISOString().slice(0, 10);
-    const filePath  = path.join(app.getPath('downloads'), `project-time-summary-${dateStr}.html`);
+    const settings       = loadProjectReportSettings();
+    const html           = buildProjectReportHtml(projects, settings);
+    const dateStr        = new Date().toISOString().slice(0, 10);
+    const reportFilename = `project-time-summary-${dateStr}.html`;
+    const filePath       = path.join(app.getPath('downloads'), reportFilename);
     fs.writeFileSync(filePath, html, 'utf8');
 
-    const { execFileSync } = require('child_process');
-    const esc = s => String(s || '').replace(/'/g, "''");
-    const ps = `
-$ol   = New-Object -ComObject Outlook.Application
-$mail = $ol.CreateItem(0)
-$mail.To      = '${esc(settings.emailTo)}'
-$mail.Subject = '${esc(settings.emailSubject)}'
-$mail.Body    = '${esc(settings.emailBody)}'
-[void]$mail.Attachments.Add('${esc(filePath)}')
-$mail.Display()
-`;
-    execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps]);
+    // No email protocol supports attachments natively (mailto: is attachment-less,
+    // and .eml opens as a received message in new Outlook). Best cross-client UX:
+    // open a compose window pre-filled via mailto: and reveal the file in Explorer
+    // so the user can drag it into the email in one move.
+    const to      = settings.emailTo      || '';
+    const subject = encodeURIComponent(settings.emailSubject || 'Project Time Summary Report');
+    const body    = encodeURIComponent(settings.emailBody    || '');
+    shell.openExternal(`mailto:${encodeURIComponent(to)}?subject=${subject}&body=${body}`);
+    shell.showItemInFolder(filePath);
+
     return { success: true, filePath };
   } catch (e) {
     return { success: false, error: e.message };
@@ -4358,25 +4431,28 @@ function ptsEsc(str) {
 function buildProjectReportHtml(projects) {
   const now     = new Date();
   const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  const fmt     = v => Number(v || 0).toFixed(2);
 
   const rows = projects.map(p => {
-    const pct = p.estimatedHours > 0 ? p.workedHours / p.estimatedHours : 0;
-    const over    = p.estimatedHours > 0 && p.workedHours > p.estimatedHours;
-    const atRisk  = !over && pct >= 0.5;
-    const rowBg   = over ? 'background:#f8c8c8' : atRisk ? 'background:#fff59d' : '';
-    const fmt = v => v.toFixed(2);
+    const pct    = p.estimatedHours > 0 ? p.workedHours / p.estimatedHours : 0;
+    const over   = p.estimatedHours > 0 && p.workedHours > p.estimatedHours;
+    const atRisk = !over && pct >= 0.5;
+    const cls    = over ? 'row-over' : atRisk ? 'row-risk' : '';
     return `
-      <tr style="${rowBg}">
+      <tr class="${cls}" data-account="${ptsEsc(p.accountName)}" data-project="${ptsEsc(p.projectName)}"
+          data-num="${ptsEsc(p.projectNumber)}" data-lead="${ptsEsc(p.projectLead)}"
+          data-est="${p.estimatedHours}" data-worked="${p.workedHours}"
+          data-bill="${p.billableHours}" data-nonbill="${p.nonBillableHours}" data-last7="${p.last7Hours}">
         <td>${ptsEsc(p.accountName)}</td>
         <td>${ptsEsc(p.projectName)}</td>
-        <td style="white-space:nowrap">${ptsEsc(p.projectNumber)}</td>
-        <td style="white-space:nowrap">${ptsEsc(p.projectLead)}</td>
-        <td style="text-align:right">${fmt(p.estimatedHours)}</td>
-        <td style="text-align:right;font-weight:bold">${fmt(p.workedHours)}</td>
-        <td style="text-align:right">${fmt(p.billableHours)}</td>
-        <td style="text-align:right">${fmt(p.nonBillableHours)}</td>
-        <td style="text-align:right">${p.last7Hours > 0 ? fmt(p.last7Hours) : '—'}</td>
-        <td style="color:#333">${ptsEsc(p.note)}</td>
+        <td class="num">${ptsEsc(p.projectNumber)}</td>
+        <td class="num">${ptsEsc(p.projectLead)}</td>
+        <td class="r">${fmt(p.estimatedHours)}</td>
+        <td class="r bold">${fmt(p.workedHours)}</td>
+        <td class="r">${fmt(p.billableHours)}</td>
+        <td class="r">${fmt(p.nonBillableHours)}</td>
+        <td class="r">${p.last7Hours > 0 ? fmt(p.last7Hours) : '—'}</td>
+        <td>${ptsEsc(p.note)}</td>
       </tr>`;
   }).join('');
 
@@ -4389,13 +4465,19 @@ function buildProjectReportHtml(projects) {
   body { font-family: Calibri, Arial, sans-serif; font-size: 10.5pt; margin: 28px; color: #222; }
   .brand { color: #D0641C; font-size: 13pt; font-weight: 700; margin-bottom: 2px; }
   h1 { font-size: 15pt; margin: 0 0 2px; }
-  .subtitle { color: #666; font-size: 9.5pt; margin-bottom: 22px; }
+  .subtitle { color: #666; font-size: 9.5pt; margin-bottom: 16px; }
   table { border-collapse: collapse; width: 100%; }
-  th { background: #D0641C; color: #fff; padding: 6px 9px; text-align: left; font-size: 9.5pt; font-weight: 600; white-space: nowrap; }
+  th { background: #D0641C; color: #fff; padding: 6px 9px; text-align: left; font-size: 9.5pt;
+       font-weight: 600; white-space: nowrap; cursor: pointer; user-select: none; }
+  th:hover { background: #b8541a; }
+  th .sort-arrow { margin-left: 4px; opacity: .6; }
   td { padding: 5px 9px; border-bottom: 1px solid #e0e0e0; font-size: 9.5pt; vertical-align: top; }
-  tr:nth-child(even) td { background: rgba(0,0,0,.03); }
-  tr[style*="f8c8c8"] td { background: #f8c8c8 !important; }
-  tr[style*="fff59d"] td { background: #fff59d !important; }
+  tbody tr:nth-child(even) td { background: rgba(0,0,0,.03); }
+  tr.row-over td { background: #f8c8c8 !important; }
+  tr.row-risk td { background: #fff59d !important; }
+  .r { text-align: right; }
+  .num { white-space: nowrap; }
+  .bold { font-weight: bold; }
   .key { margin-top: 20px; border: 1px solid #ccc; display: inline-block; padding: 10px 18px; border-radius: 4px; }
   .key b { display: block; margin-bottom: 6px; font-size: 9.5pt; }
   .key-row { display: flex; align-items: center; gap: 10px; margin: 3px 0; font-size: 9.5pt; }
@@ -4405,13 +4487,20 @@ function buildProjectReportHtml(projects) {
 <body>
   <div class="brand">Anchor Network Solutions</div>
   <h1>Project Time Summary Report</h1>
-  <div class="subtitle">Generated: ${ptsEsc(dateStr)}</div>
-  <table>
+  <div class="subtitle">Generated: ${ptsEsc(dateStr)} &nbsp;·&nbsp; Click any column header to sort</div>
+  <table id="pts-tbl">
     <thead>
       <tr>
-        <th>Account Name</th><th>Project Name</th><th>Project #</th>
-        <th>Project Lead</th><th>Est. Hours</th><th>Worked Hours</th>
-        <th>Billable Hours</th><th>Non-Billable Hours</th><th>Hours (Last 7 Days)</th><th>Notes</th>
+        <th data-col="account">Account Name<span class="sort-arrow"></span></th>
+        <th data-col="project">Project Name<span class="sort-arrow"></span></th>
+        <th data-col="num">Project #<span class="sort-arrow"></span></th>
+        <th data-col="lead">Project Lead<span class="sort-arrow"></span></th>
+        <th data-col="est" class="r">Est. Hours<span class="sort-arrow"></span></th>
+        <th data-col="worked" class="r">Worked Hours<span class="sort-arrow"></span></th>
+        <th data-col="bill" class="r">Billable<span class="sort-arrow"></span></th>
+        <th data-col="nonbill" class="r">Non-Billable<span class="sort-arrow"></span></th>
+        <th data-col="last7" class="r">Last 7 Days<span class="sort-arrow"></span></th>
+        <th data-col="notes">Notes<span class="sort-arrow"></span></th>
       </tr>
     </thead>
     <tbody>${rows}</tbody>
@@ -4421,6 +4510,30 @@ function buildProjectReportHtml(projects) {
     <div class="key-row"><div class="swatch" style="background:#fff59d"></div>Worked hours ≥ 50% of estimated</div>
     <div class="key-row"><div class="swatch" style="background:#f8c8c8"></div>Worked hours exceed estimated</div>
   </div>
+<script>
+(function(){
+  var tbl=document.getElementById('pts-tbl'), col=null, dir=1;
+  var dataAttr={account:'account',project:'project',num:'num',lead:'lead',
+                est:'est',worked:'worked',bill:'bill',nonbill:'nonbill',last7:'last7',notes:'notes'};
+  tbl.querySelectorAll('th[data-col]').forEach(function(th){
+    th.addEventListener('click',function(){
+      var key=th.getAttribute('data-col');
+      if(col===key) dir*=-1; else{col=key;dir=1;}
+      tbl.querySelectorAll('th .sort-arrow').forEach(function(s){s.textContent='';});
+      th.querySelector('.sort-arrow').textContent=dir===1?' ▲':' ▼';
+      var tbody=tbl.querySelector('tbody');
+      var rows=Array.from(tbody.querySelectorAll('tr'));
+      var numCols={est:1,worked:1,bill:1,nonbill:1,last7:1};
+      rows.sort(function(a,b){
+        var av=a.getAttribute('data-'+key)||'', bv=b.getAttribute('data-'+key)||'';
+        if(numCols[key]){return((parseFloat(av)||0)-(parseFloat(bv)||0))*dir;}
+        return av.localeCompare(bv)*dir;
+      });
+      rows.forEach(function(r){tbody.appendChild(r);});
+    });
+  });
+})();
+</script>
 </body>
 </html>`;
 }

@@ -117,26 +117,98 @@ document.querySelectorAll('.nav-item:not(.coming-soon)').forEach(item => {
 document.getElementById('btn-settings').addEventListener('click', () => navigate('settings'));
 document.getElementById('btn-help').addEventListener('click', () => navigate('help'));
 
-// ─── Tool Visibility ──────────────────────────────────────────────────────────
-function applyToolVisibility(vis) {
-  document.querySelectorAll('.nav-item[data-view]').forEach(el => {
-    const view = el.dataset.view;
-    if (view in vis) {
-      el.style.display = vis[view] ? '' : 'none';
+// ─── Sidebar / Tool Defs ──────────────────────────────────────────────────────
+const TOOL_DEFS = [
+  { key: 'subscription-audit',  label: 'M365 Subscription Comparison',
+    icon: `<path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>` },
+  { key: 'invoice-monitor',     label: 'Pax8 Invoice Comparison',
+    icon: `<rect x="2" y="3" width="12" height="10" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M5 7h6M5 10h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>` },
+  { key: 'margin-analyzer',     label: 'M365 Margin Analyzer',
+    icon: `<path d="M2 12l4-4 3 3 5-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="14" cy="4" r="1.5" fill="currentColor" opacity="0.6"/>` },
+  { key: 'company-mapping',     label: 'Company Mapping',
+    icon: `<circle cx="4" cy="8" r="2.5" stroke="currentColor" stroke-width="1.3"/><circle cx="12" cy="8" r="2.5" stroke="currentColor" stroke-width="1.3"/><path d="M6.5 8h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>` },
+  { key: 'invoice-processor',   label: 'Pax8 Invoice Processor',
+    icon: `<rect x="2" y="1" width="12" height="14" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M5 5h6M5 8h6M5 11h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>` },
+  { key: 'kaseya-processor',    label: 'Kaseya Invoice Processor',
+    icon: `<rect x="2" y="1" width="12" height="14" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M5 4h6M5 7h6M5 10h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M9 11.5l1.5 1.5L13 10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>` },
+  { key: 'project-time-summary', label: 'Project Time Summary',
+    icon: `<rect x="1" y="2" width="14" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M4 6h4M4 9h6M4 12h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M10 8l2 2 3-3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>` },
+  { key: 'contract-changes',    label: 'Autotask Contract Changes',
+    icon: `<rect x="2" y="2" width="9" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M5 5.5h5M5 8.5h3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="12.5" cy="12.5" r="2.8" fill="var(--bg,#0d0f14)" stroke="currentColor" stroke-width="1.3"/><path d="M12.5 11.3v1.2l.9.9" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>` },
+  { key: 'contract-renewals',   label: 'Autotask Contract Renewals',
+    icon: `<path d="M13 8A5 5 0 1 1 8 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M8 1l3 2-3 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 8h2v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>` },
+  { key: 'blackpoint-processor', label: 'BlackPoint Usage',
+    icon: `<path d="M8 1.5L2 4.5v4c0 3.3 2.4 5.5 6 6 3.6-.5 6-2.7 6-6v-4L8 1.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 8l1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>` },
+];
+
+let _sidebarConfig  = { visibility: {}, layout: [] };
+const _bucketExpanded = {};
+
+function renderSidebar(config) {
+  if (config) _sidebarConfig = config;
+  const { visibility = {}, layout = [] } = _sidebarConfig;
+  const toolsNav = document.getElementById('tools-nav');
+  if (!toolsNav) return;
+
+  const activeView = document.querySelector('.nav-item.active')?.dataset.view;
+  let html = '';
+
+  for (const item of layout) {
+    if (item.type === 'tool') {
+      if (visibility[item.key] === false) continue;
+      const def = TOOL_DEFS.find(d => d.key === item.key);
+      if (!def) continue;
+      const active = activeView === item.key ? ' active' : '';
+      html += `<li class="nav-item${active}" data-view="${item.key}">
+        <div class="nav-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none">${def.icon}</svg></div>
+        <span>${def.label}</span>
+      </li>`;
+    } else if (item.type === 'bucket') {
+      const visItems = (item.items || []).filter(k => visibility[k] !== false && TOOL_DEFS.find(d => d.key === k));
+      if (!visItems.length) continue;
+      const expanded = _bucketExpanded[item.id] !== false;
+      html += `<li class="nav-bucket${expanded ? ' expanded' : ''}" data-bucket-id="${item.id}">
+        <div class="nav-bucket-header" data-bucket-id="${item.id}">
+          <svg class="nav-bucket-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none">
+            <path d="M3 2l4 3-4 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>${escHtml(item.name)}</span>
+        </div>
+        <ul class="nav-bucket-tools">`;
+      for (const key of visItems) {
+        const def = TOOL_DEFS.find(d => d.key === key);
+        const active = activeView === key ? ' active' : '';
+        html += `<li class="nav-item nav-nested${active}" data-view="${key}">
+          <div class="nav-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none">${def.icon}</svg></div>
+          <span>${def.label}</span>
+        </li>`;
+      }
+      html += `</ul></li>`;
     }
+  }
+
+  toolsNav.innerHTML = html;
+
+  toolsNav.querySelectorAll('.nav-item[data-view]').forEach(el => {
+    el.addEventListener('click', () => navigate(el.dataset.view));
   });
+  toolsNav.querySelectorAll('.nav-bucket-header').forEach(hdr => {
+    hdr.addEventListener('click', () => {
+      const id = hdr.dataset.bucketId;
+      _bucketExpanded[id] = _bucketExpanded[id] === false; // toggle (default=expanded)
+      renderSidebar();
+    });
+  });
+
+  // If the currently active view is hidden, go home
+  if (activeView && activeView !== 'home') {
+    const still = toolsNav.querySelector(`.nav-item[data-view="${activeView}"]`);
+    if (!still) navigate('home');
+  }
 }
 
-// Apply on startup
-window.api.getToolVisibility().then(vis => {
-  applyToolVisibility(vis);
-  // If the active view is now hidden, navigate to the first visible tool
-  const activeEl = document.querySelector('.nav-item.active');
-  if (activeEl && activeEl.style.display === 'none') {
-    const firstVisible = document.querySelector('.nav-item[data-view]:not([style*="display: none"]):not([style*="display:none"])');
-    if (firstVisible) navigate(firstVisible.dataset.view);
-  }
-});
+// Load sidebar config and render on startup
+window.api.getSidebarConfig().then(cfg => renderSidebar(cfg));
 
 // ─── Home / Dashboard ─────────────────────────────────────────────────────────
 const HOME_CARDS = [
@@ -193,6 +265,12 @@ const HOME_CARDS = [
     label: 'BlackPoint Usage',
     desc:  'Track BlackPoint protected endpoint counts per client, compare month-over-month, and generate a Claude prompt to update Security+ quantities in Autotask.',
     icon:  `<svg width="24" height="24" viewBox="0 0 16 16" fill="none"><path d="M8 1.5L2 4.5v4c0 3.3 2.4 5.5 6 6 3.6-.5 6-2.7 6-6v-4L8 1.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 8l1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  },
+  {
+    key:   'project-time-summary',
+    label: 'Project Time Summary',
+    desc:  'Pull active Professional Services projects from Autotask, view hours vs. estimates, flag at-risk projects, and email a formatted report.',
+    icon:  `<svg width="24" height="24" viewBox="0 0 16 16" fill="none"><rect x="1" y="2" width="14" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M4 6h4M4 9h6M4 12h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M10 8l2 2 3-3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   },
 ];
 
@@ -1093,6 +1171,10 @@ function renderSettings(activeTab = 'general') {
         <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="2.2" stroke="currentColor" stroke-width="1.3"/><path d="M7 1v1.5M7 11.5V13M1 7h1.5M11.5 7H13M2.93 2.93l1.06 1.06M10.01 10.01l1.06 1.06M2.93 11.07l1.06-1.06M10.01 3.99l1.06-1.06" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
         General
       </button>
+      <button class="stab ${activeTab==='customize'?'active':''}" data-tab="customize">
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><rect x="1" y="1" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="8" y="1" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="1" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="8" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/></svg>
+        Customize
+      </button>
       <button class="stab ${activeTab==='prompts'?'active':''}" data-tab="prompts">
         <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M2 3h10M2 6.5h7M2 10h5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
         AI Prompts
@@ -1103,23 +1185,30 @@ function renderSettings(activeTab = 'general') {
       </button>
     </div>
 
+    <!-- ── Tab: Customize ── -->
+    <div class="stab-panel ${activeTab==='customize'?'active':''}" data-panel="customize">
+      <div class="settings-section wide">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:4px">
+          <h2 class="section-title" style="margin:0">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="1" y="1" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="8" y="1" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="1" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="8" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/></svg>
+            Sidebar Layout
+          </h2>
+          <div style="display:flex;align-items:center;gap:8px">
+            <button class="btn btn-ghost btn-sm" id="cust-add-group">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6h8M6 2v8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              Add Group
+            </button>
+            <button class="btn btn-primary btn-sm" id="cust-save">Save Layout</button>
+            <span class="save-status" id="cust-save-status"></span>
+          </div>
+        </div>
+        <p class="field-hint" style="margin-bottom:16px">Check tools to show them in the sidebar and home screen. Drag <strong style="color:var(--text)">⠿</strong> to reorder. Use groups to create named sections — drag tools into or out of them.</p>
+        <div id="cust-list" class="cust-list"></div>
+      </div>
+    </div>
+
     <!-- ── Tab 1: General ── -->
     <div class="stab-panel ${activeTab==='general'?'active':''}" data-panel="general">
-
-      <div class="settings-section">
-        <h2 class="section-title">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="2" width="14" height="12" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M5 8h6M5 5h3M5 11h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-          Tool Visibility
-        </h2>
-        <p class="field-hint" style="margin-bottom:14px">Show or hide tools in the sidebar. Hidden tools are completely removed — useful when sharing with team members who only need specific tools.</p>
-        <div id="tool-vis-list" style="display:flex;flex-direction:column;gap:10px">
-          <div class="field-hint">Loading…</div>
-        </div>
-        <div style="margin-top:14px">
-          <button class="btn btn-primary btn-sm" id="btn-save-tool-vis">Save</button>
-          <span class="save-status" id="tool-vis-status"></span>
-        </div>
-      </div>
 
       <div class="settings-section">
         <h2 class="section-title">
@@ -1393,8 +1482,7 @@ Total CommITment Core</textarea>
   loadCsvStatus();
   loadMarginSettings();
   document.getElementById('btn-save-margin-settings').addEventListener('click', saveMarginSettings);
-  loadToolVisibilitySettings();
-  document.getElementById('btn-save-tool-vis').addEventListener('click', saveToolVisibilitySettings);
+  custInit();
   loadPromptTemplateSettings();
   document.getElementById('btn-save-prompt-templates').addEventListener('click', savePromptTemplateSettings);
   document.getElementById('btn-reset-prompt-templates').addEventListener('click', resetPromptTemplateSettings);
@@ -1408,49 +1496,283 @@ Total CommITment Core</textarea>
   document.getElementById('btn-save-renewal-settings').addEventListener('click', saveRenewalSettingsUI);
 }
 
-const TOOL_VIS_DEFS = [
-  { key: 'subscription-audit',  label: 'M365 Subscription Comparison' },
-  { key: 'invoice-monitor',     label: 'Pax8 Invoice Comparison' },
-  { key: 'margin-analyzer',     label: 'M365 Margin Analyzer' },
-  { key: 'contract-renewals',   label: 'Autotask Contract Renewals' },
-  { key: 'company-mapping',     label: 'Company Mapping' },
-  { key: 'invoice-processor',   label: 'Pax8 Invoice Processor' },
-  { key: 'kaseya-processor',    label: 'Kaseya Invoice Processor' },
-  { key: 'contract-changes',      label: 'Autotask Contract Changes' },
-  { key: 'project-time-summary',  label: 'Project Time Summary' },
-  { key: 'blackpoint-processor',  label: 'BlackPoint Usage' },
-];
+// ─── Customize Tab ────────────────────────────────────────────────────────────
+let _custLayout = [];  // working copy of layout being edited
+let _custVis    = {};  // working copy of visibility being edited
+let _custDragKey     = null;  // tool key being dragged
+let _custDragBucket  = null;  // source bucket id ('top' or id string)
+let _custDragBktId   = null;  // bucket id being dragged (bucket drag)
 
-async function loadToolVisibilitySettings() {
-  const vis = await window.api.getToolVisibility();
-  const list = document.getElementById('tool-vis-list');
-  if (!list) return;
-  list.innerHTML = TOOL_VIS_DEFS.map(t => `
-    <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:var(--text)">
-      <input type="checkbox" data-tool="${t.key}" ${vis[t.key] !== false ? 'checked' : ''}
-        style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer" />
-      ${t.label}
-    </label>`).join('');
+async function custInit() {
+  const cfg = await window.api.getSidebarConfig();
+  _custLayout = JSON.parse(JSON.stringify(cfg.layout));
+  _custVis    = { ...cfg.visibility };
+  custRender();
+  document.getElementById('cust-save').addEventListener('click', custSave);
+  document.getElementById('cust-add-group').addEventListener('click', custAddGroup);
 }
 
-async function saveToolVisibilitySettings() {
-  const status = document.getElementById('tool-vis-status');
-  const vis = {};
-  TOOL_VIS_DEFS.forEach(t => {
-    const el = document.querySelector(`input[data-tool="${t.key}"]`);
-    vis[t.key] = el ? el.checked : true;
-  });
-  // Must keep at least one tool enabled
-  if (!Object.values(vis).some(v => v)) {
-    status.textContent = 'At least one tool must be enabled.';
-    status.className = 'save-status error';
-    return;
+function custRender() {
+  const list = document.getElementById('cust-list');
+  if (!list) return;
+
+  let html = '';
+  for (let i = 0; i < _custLayout.length; i++) {
+    const item = _custLayout[i];
+    if (item.type === 'tool') {
+      html += custToolRowHtml(item.key, i, 'top');
+    } else if (item.type === 'bucket') {
+      html += custBucketHtml(item, i);
+    }
   }
-  await window.api.saveToolVisibility(vis);
-  applyToolVisibility(vis);
-  status.textContent = '✓ Saved';
-  status.className = 'save-status success';
-  setTimeout(() => { if (status) status.textContent = ''; }, 2500);
+  // Drop zone at end of top-level list
+  html += `<div class="cust-drop-zone" data-zone="end" data-container="top" style="height:32px"></div>`;
+  list.innerHTML = html;
+  custWireEvents(list);
+}
+
+function custToolRowHtml(key, idx, container) {
+  const def     = TOOL_DEFS.find(d => d.key === key) || { label: key };
+  const checked = _custVis[key] !== false;
+  const nested  = container !== 'top';
+  return `
+    <div class="cust-row${nested ? ' cust-nested' : ''}" draggable="true"
+         data-key="${key}" data-idx="${idx}" data-container="${container}">
+      <span class="cust-handle" title="Drag to reorder">⠿</span>
+      <label class="cust-label">
+        <input type="checkbox" data-vis="${key}" ${checked ? 'checked' : ''}
+               style="accent-color:var(--accent);cursor:pointer;width:15px;height:15px;flex-shrink:0" />
+        <span style="font-size:13px">${def.label}</span>
+      </label>
+    </div>`;
+}
+
+function custBucketHtml(bucket, idx) {
+  const tools = (bucket.items || []).map((key, ti) => custToolRowHtml(key, ti, bucket.id)).join('');
+  return `
+    <div class="cust-group" data-bucket-id="${bucket.id}" data-idx="${idx}">
+      <div class="cust-group-header" draggable="true" data-bucket-id="${bucket.id}" data-idx="${idx}">
+        <span class="cust-handle" title="Drag to reorder">⠿</span>
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;opacity:.7">
+          <path d="M1 4.5C1 3.4 1.9 2.5 3 2.5h2.6l1.4 1.5H11c1.1 0 2 .9 2 2v4c0 1.1-.9 2-2 2H3c-1.1 0-2-.9-2-2V4.5z" stroke="currentColor" stroke-width="1.3"/>
+        </svg>
+        <input type="text" class="cust-group-name" value="${escHtml(bucket.name)}"
+               data-bucket-id="${bucket.id}"
+               placeholder="Group name"
+               style="background:transparent;border:none;border-bottom:1px solid var(--border);
+                      color:var(--text);font-size:13px;font-weight:600;padding:1px 4px;
+                      flex:1;min-width:0;outline:none" />
+        <button class="cust-group-del btn-icon" data-bucket-id="${bucket.id}"
+                title="Remove group — tools return to main list"
+                style="color:var(--text-muted);font-size:14px;padding:0 4px;background:none;border:none;cursor:pointer;line-height:1">✕</button>
+      </div>
+      <div class="cust-group-body" data-bucket-id="${bucket.id}">
+        ${tools}
+        <div class="cust-drop-zone" data-zone="bucket-end" data-container="${bucket.id}"
+             style="height:28px;display:flex;align-items:center;justify-content:center;
+                    font-size:11px;color:var(--text-muted);opacity:.5;pointer-events:all">
+          Drop tools here
+        </div>
+      </div>
+    </div>`;
+}
+
+function custWireEvents(list) {
+  // Visibility checkboxes
+  list.querySelectorAll('input[data-vis]').forEach(cb => {
+    cb.addEventListener('change', () => { _custVis[cb.dataset.vis] = cb.checked; });
+  });
+
+  // Group name live-edit
+  list.querySelectorAll('.cust-group-name').forEach(inp => {
+    inp.addEventListener('input', () => {
+      const b = _custLayout.find(x => x.type === 'bucket' && x.id === inp.dataset.bucketId);
+      if (b) b.name = inp.value;
+    });
+    // Prevent drag propagation from input
+    inp.addEventListener('mousedown', e => e.stopPropagation());
+  });
+
+  // Delete group — move tools back to top level
+  list.querySelectorAll('.cust-group-del').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id  = btn.dataset.bucketId;
+      const idx = _custLayout.findIndex(x => x.type === 'bucket' && x.id === id);
+      if (idx === -1) return;
+      const tools = (_custLayout[idx].items || []).map(k => ({ type: 'tool', key: k }));
+      _custLayout.splice(idx, 1, ...tools);
+      custRender();
+    });
+  });
+
+  // ── Drag-and-drop ──
+  list.querySelectorAll('[draggable="true"]').forEach(el => {
+    el.addEventListener('dragstart', e => {
+      if (el.classList.contains('cust-row')) {
+        _custDragKey    = el.dataset.key;
+        _custDragBucket = el.dataset.container;
+        _custDragBktId  = null;
+      } else if (el.classList.contains('cust-group-header')) {
+        _custDragBktId  = el.dataset.bucketId;
+        _custDragKey    = null;
+        _custDragBucket = null;
+      }
+      el.classList.add('cust-dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.stopPropagation();
+    });
+    el.addEventListener('dragend', () => {
+      list.querySelectorAll('.cust-dragging, .cust-over-top, .cust-over-bottom, .cust-over-bucket')
+          .forEach(x => x.classList.remove('cust-dragging','cust-over-top','cust-over-bottom','cust-over-bucket'));
+    });
+  });
+
+  // Rows: dragover shows top/bottom indicator; drop reorders or moves into group
+  list.querySelectorAll('.cust-row').forEach(row => {
+    row.addEventListener('dragover', e => {
+      e.preventDefault(); e.stopPropagation();
+      const rect = row.getBoundingClientRect();
+      const half = e.clientY < rect.top + rect.height / 2;
+      row.classList.toggle('cust-over-top',    half);
+      row.classList.toggle('cust-over-bottom', !half);
+    });
+    row.addEventListener('dragleave', () => {
+      row.classList.remove('cust-over-top', 'cust-over-bottom');
+    });
+    row.addEventListener('drop', e => {
+      e.preventDefault(); e.stopPropagation();
+      row.classList.remove('cust-over-top', 'cust-over-bottom');
+      if (!_custDragKey) return;
+      const rect     = row.getBoundingClientRect();
+      const before   = e.clientY < rect.top + rect.height / 2;
+      const targetKey     = row.dataset.key;
+      const targetContainer = row.dataset.container;
+      custMoveTool(_custDragKey, _custDragBucket, targetKey, targetContainer, before);
+      custRender();
+    });
+  });
+
+  // Group headers: dragover highlights whole group for tool drops
+  list.querySelectorAll('.cust-group-header').forEach(hdr => {
+    hdr.addEventListener('dragover', e => {
+      e.preventDefault(); e.stopPropagation();
+      if (_custDragKey) {
+        hdr.classList.add('cust-over-bucket');
+      } else if (_custDragBktId) {
+        // Bucket reorder — show top/bottom on the group container
+        const group = hdr.closest('.cust-group');
+        const rect  = group.getBoundingClientRect();
+        group.classList.toggle('cust-over-top',    e.clientY < rect.top + rect.height / 2);
+        group.classList.toggle('cust-over-bottom', e.clientY >= rect.top + rect.height / 2);
+      }
+    });
+    hdr.addEventListener('dragleave', () => {
+      hdr.classList.remove('cust-over-bucket');
+      hdr.closest('.cust-group')?.classList.remove('cust-over-top','cust-over-bottom');
+    });
+    hdr.addEventListener('drop', e => {
+      e.preventDefault(); e.stopPropagation();
+      hdr.classList.remove('cust-over-bucket');
+      const group = hdr.closest('.cust-group');
+      group?.classList.remove('cust-over-top','cust-over-bottom');
+
+      if (_custDragKey) {
+        // Move tool into this bucket (at the start)
+        const bucketId = hdr.dataset.bucketId;
+        custRemoveTool(_custDragKey, _custDragBucket);
+        const bucket = _custLayout.find(x => x.type === 'bucket' && x.id === bucketId);
+        if (bucket) bucket.items.unshift(_custDragKey);
+        custRender();
+      } else if (_custDragBktId && _custDragBktId !== hdr.dataset.bucketId) {
+        // Reorder buckets
+        const rect   = group.getBoundingClientRect();
+        const before = e.clientY < rect.top + rect.height / 2;
+        custMoveBucket(_custDragBktId, hdr.dataset.bucketId, before);
+        custRender();
+      }
+    });
+  });
+
+  // Drop zones (end of list, end of bucket body)
+  list.querySelectorAll('.cust-drop-zone').forEach(dz => {
+    dz.addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); dz.classList.add('cust-over-bucket'); });
+    dz.addEventListener('dragleave', () => dz.classList.remove('cust-over-bucket'));
+    dz.addEventListener('drop', e => {
+      e.preventDefault(); e.stopPropagation();
+      dz.classList.remove('cust-over-bucket');
+      if (!_custDragKey) return;
+      const container = dz.dataset.container;
+      custRemoveTool(_custDragKey, _custDragBucket);
+      if (container === 'top') {
+        _custLayout.push({ type: 'tool', key: _custDragKey });
+      } else {
+        const bucket = _custLayout.find(x => x.type === 'bucket' && x.id === container);
+        if (bucket) bucket.items.push(_custDragKey);
+      }
+      custRender();
+    });
+  });
+}
+
+function custRemoveTool(key, fromContainer) {
+  if (fromContainer === 'top') {
+    const i = _custLayout.findIndex(x => x.type === 'tool' && x.key === key);
+    if (i !== -1) _custLayout.splice(i, 1);
+  } else {
+    const bucket = _custLayout.find(x => x.type === 'bucket' && x.id === fromContainer);
+    if (bucket) bucket.items = bucket.items.filter(k => k !== key);
+  }
+}
+
+function custMoveTool(key, fromContainer, targetKey, targetContainer, insertBefore) {
+  custRemoveTool(key, fromContainer);
+  if (targetContainer === 'top') {
+    const ti = _custLayout.findIndex(x => x.type === 'tool' && x.key === targetKey);
+    if (ti !== -1) _custLayout.splice(insertBefore ? ti : ti + 1, 0, { type: 'tool', key });
+    else           _custLayout.push({ type: 'tool', key });
+  } else {
+    const bucket = _custLayout.find(x => x.type === 'bucket' && x.id === targetContainer);
+    if (bucket) {
+      const ti = bucket.items.indexOf(targetKey);
+      if (ti !== -1) bucket.items.splice(insertBefore ? ti : ti + 1, 0, key);
+      else           bucket.items.push(key);
+    }
+  }
+}
+
+function custMoveBucket(dragId, targetId, insertBefore) {
+  const di = _custLayout.findIndex(x => x.type === 'bucket' && x.id === dragId);
+  if (di === -1) return;
+  const [bucket] = _custLayout.splice(di, 1);
+  const ti = _custLayout.findIndex(x => x.type === 'bucket' && x.id === targetId);
+  if (ti !== -1) _custLayout.splice(insertBefore ? ti : ti + 1, 0, bucket);
+  else           _custLayout.push(bucket);
+}
+
+function custAddGroup() {
+  const id = `b-${Date.now()}`;
+  _custLayout.push({ type: 'bucket', id, name: 'New Group', items: [] });
+  custRender();
+  // Focus the name input of the new group
+  setTimeout(() => {
+    const inp = document.querySelector(`.cust-group-name[data-bucket-id="${id}"]`);
+    if (inp) { inp.focus(); inp.select(); }
+  }, 50);
+}
+
+async function custSave() {
+  const status = document.getElementById('cust-save-status');
+  try {
+    const config = { visibility: _custVis, layout: _custLayout };
+    await window.api.saveSidebarConfig(config);
+    renderSidebar(config);
+    status.textContent = '✓ Saved';
+    status.className = 'save-status success';
+  } catch (e) {
+    status.textContent = `Error: ${e.message}`;
+    status.className = 'save-status error';
+  }
+  setTimeout(() => { const el = document.getElementById('cust-save-status'); if (el) { el.textContent = ''; el.className = 'save-status'; } }, 3000);
 }
 
 // ─── Prompt Template Settings ─────────────────────────────────────────────────
@@ -2761,7 +3083,10 @@ function ccTodayStr() {
 }
 
 // ─── Project Time Summary ─────────────────────────────────────────────────────
-let _ptsData = null;
+let _ptsData     = null;
+let _ptsExcluded = new Set();  // project IDs unchecked from HTML export
+let _ptsSortKey  = 'accountName';
+let _ptsSortDir  = 1;
 
 function renderProjectTimeSummary() {
   content.innerHTML = `
@@ -2801,7 +3126,7 @@ function renderProjectTimeSummary() {
           </button>
           <button class="btn btn-primary" id="pts-email-btn" style="font-size:12px">
             <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><rect x="1" y="3" width="12" height="8" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M1 4l6 4 6-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-            Email via Outlook
+            Email Report
           </button>
           <span class="save-status" id="pts-action-status" style="margin-left:4px"></span>
         </div>
@@ -2829,28 +3154,50 @@ function renderProjectTimeSummary() {
       </div>
     </div>
 
-    <!-- Email settings -->
-    <div class="settings-section" id="pts-email-settings" style="max-width:520px;margin-top:8px">
-      <h2 class="section-title">
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="1" y="3" width="12" height="8" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M1 4l6 4 6-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-        Email Settings
-      </h2>
-      <div class="field-group">
-        <label class="field-label">To (email address)</label>
-        <input class="field-input" id="pts-email-to" type="email" placeholder="manager@company.com" />
+    <!-- Settings row: Email + Exclusions side by side -->
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;margin-top:8px">
+
+      <div class="settings-section" id="pts-email-settings" style="flex:1;min-width:300px;max-width:480px">
+        <h2 class="section-title">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="1" y="3" width="12" height="8" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M1 4l6 4 6-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+          Email Settings
+        </h2>
+        <div class="field-group">
+          <label class="field-label">To (email address)</label>
+          <input class="field-input" id="pts-email-to" type="email" placeholder="manager@company.com" />
+        </div>
+        <div class="field-group" style="margin-top:10px">
+          <label class="field-label">Subject</label>
+          <input class="field-input" id="pts-email-subject" type="text" placeholder="Project Time Summary Report" />
+        </div>
+        <div class="field-group" style="margin-top:10px">
+          <label class="field-label">Body</label>
+          <textarea class="field-input" id="pts-email-body" rows="4" style="resize:vertical;font-family:var(--font-mono);font-size:12px"></textarea>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
+          <button class="btn btn-ghost" id="pts-save-settings-btn" style="font-size:12px">Save Settings</button>
+          <span class="save-status" id="pts-settings-status"></span>
+        </div>
       </div>
-      <div class="field-group" style="margin-top:10px">
-        <label class="field-label">Subject</label>
-        <input class="field-input" id="pts-email-subject" type="text" placeholder="Project Time Summary Report" />
+
+      <div class="settings-section" style="flex:1;min-width:240px;max-width:340px">
+        <h2 class="section-title">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="6" stroke="currentColor" stroke-width="1.3"/><path d="M4.5 7l1.5 1.5L9.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Always Exclude Projects
+        </h2>
+        <p class="field-hint" style="margin-bottom:10px">Project numbers to permanently hide from the GUI and all reports. One per line or comma-separated. Re-fetch after saving.</p>
+        <div class="field-group">
+          <label class="field-label">Project Numbers</label>
+          <textarea class="field-input" id="pts-exclude-nums" rows="5"
+            style="resize:vertical;font-family:var(--font-mono);font-size:12px"
+            placeholder="P20260101.0001&#10;P20260102.0002"></textarea>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
+          <button class="btn btn-ghost" id="pts-save-exclude-btn" style="font-size:12px">Save &amp; Re-fetch</button>
+          <span class="save-status" id="pts-exclude-status"></span>
+        </div>
       </div>
-      <div class="field-group" style="margin-top:10px">
-        <label class="field-label">Body</label>
-        <textarea class="field-input" id="pts-email-body" rows="4" style="resize:vertical;font-family:var(--font-mono);font-size:12px"></textarea>
-      </div>
-      <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
-        <button class="btn btn-ghost" id="pts-save-settings-btn" style="font-size:12px">Save Settings</button>
-        <span class="save-status" id="pts-settings-status"></span>
-      </div>
+
     </div>
   `;
 
@@ -2858,9 +3205,10 @@ function renderProjectTimeSummary() {
   (async () => {
     try {
       const s = await window.api.getProjectReportSettings();
-      document.getElementById('pts-email-to').value      = s.emailTo      || '';
-      document.getElementById('pts-email-subject').value = s.emailSubject || '';
-      document.getElementById('pts-email-body').value    = s.emailBody    || '';
+      document.getElementById('pts-email-to').value      = s.emailTo               || '';
+      document.getElementById('pts-email-subject').value = s.emailSubject          || '';
+      document.getElementById('pts-email-body').value    = s.emailBody             || '';
+      document.getElementById('pts-exclude-nums').value  = s.excludeProjectNumbers || '';
     } catch {}
   })();
 
@@ -2902,28 +3250,10 @@ function renderProjectTimeSummary() {
     actionStatus.textContent = 'Saving…';
     actionStatus.className = 'save-status';
     try {
-      const res = await window.api.exportProjectReport({ projects: _ptsData });
+      const visible = _ptsData.filter(p => !_ptsExcluded.has(p.id));
+      const res = await window.api.exportProjectReport({ projects: visible });
       if (res.success) {
-        actionStatus.textContent = '✓ Saved to Downloads';
-        actionStatus.className = 'save-status success';
-      } else throw new Error(res.error);
-    } catch (e) {
-      actionStatus.textContent = `Error: ${e.message}`;
-      actionStatus.className = 'save-status error';
-    }
-    setTimeout(() => { const el = document.getElementById('pts-action-status'); if (el) { el.textContent = ''; el.className = 'save-status'; } }, 4000);
-  });
-
-  // Email via Outlook
-  document.getElementById('pts-email-btn').addEventListener('click', async () => {
-    if (!_ptsData) return;
-    const actionStatus = document.getElementById('pts-action-status');
-    actionStatus.textContent = 'Opening Outlook…';
-    actionStatus.className = 'save-status';
-    try {
-      const res = await window.api.emailProjectReport({ projects: _ptsData });
-      if (res.success) {
-        actionStatus.textContent = '✓ Draft opened in Outlook';
+        actionStatus.textContent = `✓ Saved to Downloads (${visible.length} project${visible.length !== 1 ? 's' : ''})`;
         actionStatus.className = 'save-status success';
       } else throw new Error(res.error);
     } catch (e) {
@@ -2933,14 +3263,35 @@ function renderProjectTimeSummary() {
     setTimeout(() => { const el = document.getElementById('pts-action-status'); if (el) { el.textContent = ''; el.className = 'save-status'; } }, 5000);
   });
 
+  // Email Report — opens default mail app, saves HTML to Downloads
+  document.getElementById('pts-email-btn').addEventListener('click', async () => {
+    if (!_ptsData) return;
+    const actionStatus = document.getElementById('pts-action-status');
+    actionStatus.textContent = 'Saving report…';
+    actionStatus.className = 'save-status';
+    try {
+      const visible = _ptsData.filter(p => !_ptsExcluded.has(p.id));
+      const res = await window.api.emailProjectReport({ projects: visible });
+      if (res.success) {
+        actionStatus.textContent = '✓ Compose window opened + report highlighted in Explorer — drag it in to attach';
+        actionStatus.className = 'save-status success';
+      } else throw new Error(res.error);
+    } catch (e) {
+      actionStatus.textContent = `Error: ${e.message}`;
+      actionStatus.className = 'save-status error';
+    }
+    setTimeout(() => { const el = document.getElementById('pts-action-status'); if (el) { el.textContent = ''; el.className = 'save-status'; } }, 7000);
+  });
+
   // Save email settings
   document.getElementById('pts-save-settings-btn').addEventListener('click', async () => {
     const settingsStatus = document.getElementById('pts-settings-status');
     try {
       await window.api.saveProjectReportSettings({
-        emailTo:      document.getElementById('pts-email-to').value.trim(),
-        emailSubject: document.getElementById('pts-email-subject').value.trim(),
-        emailBody:    document.getElementById('pts-email-body').value,
+        emailTo:               document.getElementById('pts-email-to').value.trim(),
+        emailSubject:          document.getElementById('pts-email-subject').value.trim(),
+        emailBody:             document.getElementById('pts-email-body').value,
+        excludeProjectNumbers: document.getElementById('pts-exclude-nums').value.trim(),
       });
       settingsStatus.textContent = '✓ Saved';
       settingsStatus.className = 'save-status success';
@@ -2950,6 +3301,48 @@ function renderProjectTimeSummary() {
     }
     setTimeout(() => { const el = document.getElementById('pts-settings-status'); if (el) { el.textContent = ''; el.className = 'save-status'; } }, 3000);
   });
+
+  // Save exclude list + re-fetch
+  document.getElementById('pts-save-exclude-btn').addEventListener('click', async () => {
+    const excludeStatus = document.getElementById('pts-exclude-status');
+    try {
+      await window.api.saveProjectReportSettings({
+        emailTo:               document.getElementById('pts-email-to').value.trim(),
+        emailSubject:          document.getElementById('pts-email-subject').value.trim(),
+        emailBody:             document.getElementById('pts-email-body').value,
+        excludeProjectNumbers: document.getElementById('pts-exclude-nums').value.trim(),
+      });
+      excludeStatus.textContent = '✓ Saved — re-fetching…';
+      excludeStatus.className = 'save-status success';
+      document.getElementById('pts-run-btn').click();
+    } catch (e) {
+      excludeStatus.textContent = `Error: ${e.message}`;
+      excludeStatus.className = 'save-status error';
+    }
+    setTimeout(() => { const el = document.getElementById('pts-exclude-status'); if (el) { el.textContent = ''; el.className = 'save-status'; } }, 5000);
+  });
+}
+
+const PTS_COLS = [
+  { key: 'accountName',      label: 'Account Name',  align: 'left',  num: false },
+  { key: 'projectName',      label: 'Project Name',  align: 'left',  num: false },
+  { key: 'projectNumber',    label: 'Project #',     align: 'left',  num: false },
+  { key: 'projectLead',      label: 'Project Lead',  align: 'left',  num: false },
+  { key: 'estimatedHours',   label: 'Est. Hours',    align: 'right', num: true  },
+  { key: 'workedHours',      label: 'Worked Hours',  align: 'right', num: true  },
+  { key: 'billableHours',    label: 'Billable',      align: 'right', num: true  },
+  { key: 'nonBillableHours', label: 'Non-Billable',  align: 'right', num: true  },
+  { key: 'last7Hours',       label: 'Last 7 Days',   align: 'right', num: true  },
+];
+
+function ptsSortBy(key) {
+  if (_ptsSortKey === key) {
+    _ptsSortDir = -_ptsSortDir;
+  } else {
+    _ptsSortKey = key;
+    _ptsSortDir = 1;
+  }
+  if (_ptsData) ptsRenderTable(_ptsData);
 }
 
 function ptsRenderResults(projects) {
@@ -2975,18 +3368,47 @@ function ptsRenderResults(projects) {
     <div class="metric-card"><div class="metric-value">${recent}</div><div class="metric-label">Active Last 7 Days</div></div>
   `;
 
-  // Table
-  const fmt = v => v.toFixed(2);
-  const rows = projects.map((p, idx) => {
-    const pct     = p.estimatedHours > 0 ? p.workedHours / p.estimatedHours : 0;
-    const over    = p.estimatedHours > 0 && p.workedHours > p.estimatedHours;
-    const atRisk  = !over && pct >= 0.5;
-    const hasRecent = p.last7Hours > 0;
+  ptsRenderTable(projects);
+}
 
-    let rowStyle = '';
-    if (over)       rowStyle = 'background:rgba(239,68,68,.15)';
-    else if (atRisk) rowStyle = 'background:rgba(255,193,7,.15)';
-    else if (hasRecent) rowStyle = 'background:rgba(100,200,120,.08)';
+function ptsRenderTable(projects) {
+  const tableWrap = document.getElementById('pts-table-wrap');
+  if (!tableWrap) return;
+
+  // Sort
+  const sorted = [...projects].sort((a, b) => {
+    const av = a[_ptsSortKey];
+    const bv = b[_ptsSortKey];
+    if (typeof av === 'number') return ((av || 0) - (bv || 0)) * _ptsSortDir;
+    return String(av || '').localeCompare(String(bv || '')) * _ptsSortDir;
+  });
+
+  const fmt = v => (v || 0).toFixed(2);
+
+  // Sortable header cells
+  const thCells = PTS_COLS.map(col => {
+    const active = _ptsSortKey === col.key;
+    const arrow  = active ? (_ptsSortDir === 1 ? ' ▲' : ' ▼') : ' ⇅';
+    const arrowClr = active ? '#fff' : 'rgba(255,255,255,.3)';
+    return `<th data-sort="${col.key}" style="padding:7px 10px;text-align:${col.align};font-weight:600;font-size:12px;cursor:pointer;user-select:none;white-space:nowrap">
+      ${col.label}<span style="color:${arrowClr};font-size:10px;margin-left:3px">${arrow}</span>
+    </th>`;
+  }).join('');
+
+  const rows = sorted.map(p => {
+    const pct       = p.estimatedHours > 0 ? p.workedHours / p.estimatedHours : 0;
+    const over      = p.estimatedHours > 0 && p.workedHours > p.estimatedHours;
+    const atRisk    = !over && pct >= 0.5;
+    const hasRecent = p.last7Hours > 0;
+    const excluded  = _ptsExcluded.has(p.id);
+
+    let rowBg = '';
+    if (!excluded) {
+      if (over)            rowBg = 'rgba(239,68,68,.15)';
+      else if (atRisk)     rowBg = 'rgba(255,193,7,.15)';
+      else if (hasRecent)  rowBg = 'rgba(100,200,120,.08)';
+    }
+    const rowStyle = `${excluded ? 'opacity:.4;' : ''}${rowBg ? 'background:' + rowBg + ';' : ''}`;
 
     const pctBar = p.estimatedHours > 0
       ? `<div style="height:4px;border-radius:2px;background:var(--border);margin-top:4px;overflow:hidden">
@@ -2994,11 +3416,15 @@ function ptsRenderResults(projects) {
          </div>`
       : '';
 
-    const noteId = `pts-note-${p.id}`;
     const noteVal = escHtml(p.note || '');
 
     return `
       <tr style="${rowStyle}">
+        <td style="padding:5px 8px;text-align:center;vertical-align:middle">
+          <input type="checkbox" data-exclude-id="${p.id}" ${excluded ? '' : 'checked'}
+            title="${excluded ? 'Excluded from export — click to include' : 'Included in export — click to exclude'}"
+            style="cursor:pointer;accent-color:var(--accent);width:14px;height:14px" />
+        </td>
         <td style="padding:6px 10px;font-size:12px;color:var(--text)">${escHtml(p.accountName)}</td>
         <td style="padding:6px 10px;font-size:12px;color:var(--text)">${escHtml(p.projectName)}</td>
         <td style="padding:6px 10px;font-size:11px;font-family:var(--font-mono);color:var(--text-muted);white-space:nowrap">${escHtml(p.projectNumber)}</td>
@@ -3013,7 +3439,7 @@ function ptsRenderResults(projects) {
           ${hasRecent ? fmt(p.last7Hours) : '—'}
         </td>
         <td style="padding:4px 6px;min-width:180px;max-width:260px">
-          <textarea id="${noteId}" data-project-id="${p.id}" rows="2"
+          <textarea data-project-id="${p.id}" rows="2"
             style="width:100%;background:transparent;border:1px solid transparent;border-radius:4px;
                    color:var(--text);font-size:11px;font-family:inherit;resize:vertical;padding:3px 6px;
                    box-sizing:border-box;transition:border-color .15s"
@@ -3022,27 +3448,42 @@ function ptsRenderResults(projects) {
       </tr>`;
   }).join('');
 
-  const tableWrap = document.getElementById('pts-table-wrap');
   tableWrap.innerHTML = `
     <table style="width:100%;border-collapse:collapse;font-size:13px">
       <thead>
         <tr style="background:rgba(45,77,107,.75);color:#fff">
-          <th style="padding:7px 10px;text-align:left;font-weight:600;font-size:12px">Account Name</th>
-          <th style="padding:7px 10px;text-align:left;font-weight:600;font-size:12px">Project Name</th>
-          <th style="padding:7px 10px;text-align:left;font-weight:600;font-size:12px">Project #</th>
-          <th style="padding:7px 10px;text-align:left;font-weight:600;font-size:12px">Project Lead</th>
-          <th style="padding:7px 10px;text-align:right;font-weight:600;font-size:12px">Est. Hours</th>
-          <th style="padding:7px 10px;text-align:right;font-weight:600;font-size:12px">Worked Hours</th>
-          <th style="padding:7px 10px;text-align:right;font-weight:600;font-size:12px">Billable</th>
-          <th style="padding:7px 10px;text-align:right;font-weight:600;font-size:12px">Non-Billable</th>
-          <th style="padding:7px 10px;text-align:right;font-weight:600;font-size:12px">Last 7 Days</th>
+          <th style="padding:7px 8px;width:30px" title="Uncheck to exclude row from export/email"></th>
+          ${thCells}
           <th style="padding:7px 10px;text-align:left;font-weight:600;font-size:12px">Notes</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>`;
 
-  // Wire note textarea — save on blur, highlight border on focus
+  // Sortable column headers
+  tableWrap.querySelectorAll('th[data-sort]').forEach(th => {
+    th.addEventListener('click', () => ptsSortBy(th.dataset.sort));
+  });
+
+  // Checkbox → _ptsExcluded, update row appearance inline
+  tableWrap.querySelectorAll('input[data-exclude-id]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const id  = Number(cb.dataset.excludeId);
+      const row = cb.closest('tr');
+      if (cb.checked) {
+        _ptsExcluded.delete(id);
+        if (row) row.style.opacity = '';
+      } else {
+        _ptsExcluded.add(id);
+        if (row) row.style.opacity = '0.4';
+      }
+      cb.title = cb.checked
+        ? 'Included in export — click to exclude'
+        : 'Excluded from export — click to include';
+    });
+  });
+
+  // Note textarea — focus/blur styles + save on blur
   tableWrap.querySelectorAll('textarea[data-project-id]').forEach(ta => {
     ta.addEventListener('focus', () => { ta.style.borderColor = 'var(--border)'; ta.style.background = 'var(--surface-2)'; });
     ta.addEventListener('blur', async () => {
@@ -3050,7 +3491,6 @@ function ptsRenderResults(projects) {
       ta.style.background = 'transparent';
       const projectId = Number(ta.dataset.projectId);
       const note      = ta.value;
-      // Update local cache
       const proj = (_ptsData || []).find(p => p.id === projectId);
       if (proj) proj.note = note.trim();
       try { await window.api.saveProjectNote({ projectId, note }); } catch {}
