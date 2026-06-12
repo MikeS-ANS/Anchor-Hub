@@ -4158,7 +4158,7 @@ ipcMain.handle('run-project-time-summary', async () => {
       }
     } catch {}
 
-    // 2. Find the Professional Services department ID
+    // 2. Find the Professional Services department ID for client-side filtering
     let psDeptId = null;
     try {
       const depts = await atQuery('/Departments');
@@ -4166,13 +4166,24 @@ ipcMain.handle('run-project-time-summary', async () => {
       psDeptId = psDept?.id ?? null;
     } catch {}
 
-    // 3. Query active PS projects
-    const projectFilters = [];
-    if (excludeStatusIds.length) projectFilters.push({ op: 'notIn', field: 'status', value: excludeStatusIds });
-    if (psDeptId !== null)        projectFilters.push({ op: 'eq',    field: 'departmentID', value: psDeptId });
-    if (!projectFilters.length)   projectFilters.push({ op: 'gt',    field: 'id', value: 0 });
+    // 3. Query active projects (status filter only — departmentID is not a queryable field)
+    const projectFilters = excludeStatusIds.length
+      ? [{ op: 'notIn', field: 'status', value: excludeStatusIds }]
+      : [{ op: 'gt', field: 'id', value: 0 }];
 
-    const projects = await atQuery('/Projects', projectFilters);
+    let projects = await atQuery('/Projects', projectFilters);
+
+    // Filter client-side by PS department if we found the dept ID
+    if (psDeptId !== null) {
+      const psDeptIdNum = Number(psDeptId);
+      const filtered = projects.filter(p => {
+        const d = p.departmentID ?? p.department ?? p.departmentId;
+        return d !== undefined ? Number(d) === psDeptIdNum : true;
+      });
+      // Only apply the filter if it actually narrows things (otherwise keep all active)
+      if (filtered.length > 0) projects = filtered;
+    }
+
     if (!projects.length) return { success: true, projects: [] };
 
     const projectIds = projects.map(p => p.id);
