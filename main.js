@@ -4146,49 +4146,62 @@ function saveProjectReportSettingsFn(s) {
 
 ipcMain.handle('run-project-time-summary', async () => {
   try {
-    // 1. Discover which status IDs map to Complete / On Hold / Canceled
+    // 1. Get project field metadata — status picklist + projectType picklist
     let excludeStatusIds = [];
+    let clientTypeId     = null;
     try {
       const fieldsRes = await atFetch('/Projects/entityInformation/fields');
-      const statusField = (fieldsRes.fields || []).find(f => f.name === 'status');
+      const fields    = fieldsRes.fields || [];
+
+      // Exact status labels to exclude (from the report filter definition)
+      const EXCLUDE_STATUSES = /^(ans.?hold|canceled|cancelled|client.?hold|complete|inactive|proposal|queued)$/i;
+      const statusField = fields.find(f => f.name === 'status');
       if (statusField?.picklistValues) {
         excludeStatusIds = statusField.picklistValues
-          .filter(v => /^(complete|on.?hold|cancel)/i.test(v.label || ''))
+          .filter(v => EXCLUDE_STATUSES.test((v.label || '').trim()))
           .map(v => Number(v.value));
+      }
+
+      // Project Type = 'Client'
+      const typeField = fields.find(f => f.name === 'projectType' || f.name === 'type');
+      if (typeField?.picklistValues) {
+        const cv = typeField.picklistValues.find(v => /^client$/i.test((v.label || '').trim()));
+        if (cv) clientTypeId = Number(cv.value);
       }
     } catch {}
 
-    // 2. Find the Professional Services department ID for client-side filtering
+    // 2. Find PS department ID for client-side filtering
     let psDeptId = null;
     try {
-      const depts = await atQuery('/Departments');
+      const depts  = await atQuery('/Departments');
       const psDept = depts.find(d => /professional\s*services/i.test(d.name || ''));
       psDeptId = psDept?.id ?? null;
     } catch {}
 
-    // 3. Query active projects (status filter only — departmentID is not a queryable field)
-    const projectFilters = excludeStatusIds.length
-      ? [{ op: 'notIn', field: 'status', value: excludeStatusIds }]
-      : [{ op: 'gt', field: 'id', value: 0 }];
+    // 3. Query projects — only API-filterable fields (status, projectType)
+    const projectFilters = [];
+    if (excludeStatusIds.length) projectFilters.push({ op: 'notIn', field: 'status',      value: excludeStatusIds });
+    if (clientTypeId !== null)   projectFilters.push({ op: 'eq',    field: 'projectType', value: clientTypeId });
+    if (!projectFilters.length)  projectFilters.push({ op: 'gt',    field: 'id',          value: 0 });
 
     let projects = await atQuery('/Projects', projectFilters);
 
-    // Filter client-side by PS department if we found the dept ID
-    if (psDeptId !== null) {
+    // 4. Client-side department filter (departmentID is not queryable via API)
+    if (psDeptId !== null && projects.length) {
       const psDeptIdNum = Number(psDeptId);
       const filtered = projects.filter(p => {
         const d = p.departmentID ?? p.department ?? p.departmentId;
         return d !== undefined ? Number(d) === psDeptIdNum : true;
       });
-      // Only apply the filter if it actually narrows things (otherwise keep all active)
       if (filtered.length > 0) projects = filtered;
     }
 
     if (!projects.length) return { success: true, projects: [] };
 
     const projectIds = projects.map(p => p.id);
+    const CHUNK = 50;
 
-    // 4. Batch-lookup company names and project lead resources concurrently
+    // 5. Batch-lookup company names and project lead resources
     const companyIds  = [...new Set(projects.map(p => p.companyID).filter(Boolean))];
     const resourceIds = [...new Set(projects.map(p => p.projectLeadResourceID).filter(Boolean))];
     const [companies, resources] = await Promise.all([
@@ -4200,48 +4213,48 @@ ipcMain.handle('run-project-time-summary', async () => {
       resources.map(r => [r.id, [r.lastName, r.firstName].filter(Boolean).join(', ')])
     );
 
-    // 5. Get Tasks for each project (time entries are usually on tasks, not projects directly)
-    const taskMap = new Map(); // taskId → projectId
-    const CHUNK = 50;
+    // 6. Get Tasks — build taskId→projectId map AND sum estimatedHours per project
+    //    (report uses AggSum({*Task.Estimated Hours}), so task-level is authoritative)
+    const taskMap      = new Map(); // taskId → projectId
+    const estHoursMap  = {};        // projectId → summed task estimatedHours
     for (let i = 0; i < projectIds.length; i += CHUNK) {
       const chunk = projectIds.slice(i, i + CHUNK);
       try {
         const tasks = await atQuery('/Tasks', [{ op: 'in', field: 'projectID', value: chunk }]);
-        tasks.forEach(t => taskMap.set(t.id, t.projectID));
+        for (const t of tasks) {
+          taskMap.set(t.id, t.projectID);
+          if (t.projectID) {
+            estHoursMap[t.projectID] = (estHoursMap[t.projectID] || 0) + (t.estimatedHours || 0);
+          }
+        }
       } catch {}
     }
 
-    // 6. Fetch time entries — both direct (projectID) and task-linked (taskID)
+    // 7. Fetch time entries — direct (projectID) and task-linked (taskID), deduplicated
     const teById = new Map();
-    const addEntries = (entries, taskIdProjectMap) => {
+    const addEntries = (entries, tMap) => {
       for (const te of entries) {
-        if (!te.projectID && te.taskID && taskIdProjectMap) {
-          te.projectID = taskIdProjectMap.get(te.taskID) || null;
-        }
+        if (!te.projectID && te.taskID && tMap) te.projectID = tMap.get(te.taskID) || null;
         if (te.projectID) teById.set(te.id, te);
       }
     };
 
-    // Direct project time entries
     for (let i = 0; i < projectIds.length; i += CHUNK) {
       const chunk = projectIds.slice(i, i + CHUNK);
       try {
-        const entries = await atQuery('/TimeEntries', [{ op: 'in', field: 'projectID', value: chunk }]);
-        addEntries(entries, null);
+        addEntries(await atQuery('/TimeEntries', [{ op: 'in', field: 'projectID', value: chunk }]), null);
       } catch {}
     }
 
-    // Task-linked time entries
     const taskIds = [...taskMap.keys()];
     for (let i = 0; i < taskIds.length; i += 100) {
       const chunk = taskIds.slice(i, i + 100);
       try {
-        const entries = await atQuery('/TimeEntries', [{ op: 'in', field: 'taskID', value: chunk }]);
-        addEntries(entries, taskMap);
+        addEntries(await atQuery('/TimeEntries', [{ op: 'in', field: 'taskID', value: chunk }]), taskMap);
       } catch {}
     }
 
-    // 7. Aggregate hours per project
+    // 8. Aggregate worked/billable/nonBillable/last7 hours per project from time entries
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const hoursMap = {}; // projectId → { total, billable, nonBillable, last7 }
     for (const te of teById.values()) {
@@ -4256,10 +4269,8 @@ ipcMain.handle('run-project-time-summary', async () => {
       if (worked && worked >= sevenDaysAgo) hoursMap[pid].last7 += hrs;
     }
 
-    // 8. Load saved notes
-    const notes = loadProjectNotes();
-
-    // 9. Build sorted result rows
+    // 9. Load saved notes and build result
+    const notes  = loadProjectNotes();
     const round2 = v => Math.round(v * 100) / 100;
     const result = projects
       .map(p => ({
@@ -4268,7 +4279,8 @@ ipcMain.handle('run-project-time-summary', async () => {
         projectNumber:    p.projectNumber || '',
         accountName:      companyMap[p.companyID] || '',
         projectLead:      resourceMap[p.projectLeadResourceID] || '',
-        estimatedHours:   p.estimatedHours || 0,
+        // Task-summed estimated hours match what the report builder shows
+        estimatedHours:   round2(estHoursMap[p.id] || p.estimatedHours || 0),
         workedHours:      round2(hoursMap[p.id]?.total        || 0),
         billableHours:    round2(hoursMap[p.id]?.billable     || 0),
         nonBillableHours: round2(hoursMap[p.id]?.nonBillable  || 0),
