@@ -94,6 +94,12 @@ contextBridge.exposeInMainWorld('api', {
   exportProjectReport:       (d) => ipcRenderer.invoke('export-project-report', d),
   emailProjectReport:        (d) => ipcRenderer.invoke('email-project-report', d),
 
+  // MSC Agreements
+  getMscSettings:  ()    => ipcRenderer.invoke('get-msc-settings'),
+  saveMscSettings: (s)   => ipcRenderer.invoke('save-msc-settings', s),
+  readMscData:     (p)   => ipcRenderer.invoke('read-msc-data', p),
+  browseMscFile:   ()    => ipcRenderer.invoke('browse-msc-file'),
+
   // Tool Visibility
   getToolVisibility:  ()    => ipcRenderer.invoke('get-tool-visibility'),
   saveToolVisibility: (vis) => ipcRenderer.invoke('save-tool-visibility', vis),

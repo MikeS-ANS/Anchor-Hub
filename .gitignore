@@ -8,6 +8,7 @@ node_modules/
 dist/
 
 # Credentials & local data
+anchor-msc-settings.json
 anchor-renewal-settings.json
 anchor-margin-settings.json
 anchor-kaseya-settings.json

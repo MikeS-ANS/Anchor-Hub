@@ -107,6 +107,7 @@ function navigate(view) {
   else if (view === 'contract-changes')    renderContractChanges();
   else if (view === 'contract-renewals')   renderContractRenewals();
   else if (view === 'blackpoint-processor') renderBlackpointProcessor();
+  else if (view === 'msc-agreements')      renderMscAgreements();
   else if (view === 'settings') renderSettings();
   else if (view === 'help')     renderHelp();
 }
@@ -133,6 +134,8 @@ const TOOL_DEFS = [
     icon: `<rect x="2" y="1" width="12" height="14" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M5 4h6M5 7h6M5 10h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M9 11.5l1.5 1.5L13 10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>` },
   { key: 'project-time-summary', label: 'Project Time Summary',
     icon: `<rect x="1" y="2" width="14" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M4 6h4M4 9h6M4 12h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M10 8l2 2 3-3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>` },
+  { key: 'msc-agreements',      label: 'MSC Agreements',
+    icon: `<rect x="2" y="1" width="12" height="14" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M5 4h6M5 7h6M5 10h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="11" cy="11" r="3" fill="var(--bg,#0d0f14)" stroke="currentColor" stroke-width="1.2"/><path d="M11 9.8v1.2l.8.8" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>` },
   { key: 'contract-changes',    label: 'Autotask Contract Changes',
     icon: `<rect x="2" y="2" width="9" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M5 5.5h5M5 8.5h3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="12.5" cy="12.5" r="2.8" fill="var(--bg,#0d0f14)" stroke="currentColor" stroke-width="1.3"/><path d="M12.5 11.3v1.2l.9.9" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>` },
   { key: 'contract-renewals',   label: 'Autotask Contract Renewals',
@@ -271,6 +274,12 @@ const HOME_CARDS = [
     label: 'Project Time Summary',
     desc:  'Pull active Professional Services projects from Autotask, view hours vs. estimates, flag at-risk projects, and email a formatted report.',
     icon:  `<svg width="24" height="24" viewBox="0 0 16 16" fill="none"><rect x="1" y="2" width="14" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M4 6h4M4 9h6M4 12h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M10 8l2 2 3-3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  },
+  {
+    key:   'msc-agreements',
+    label: 'MSC Agreements',
+    desc:  'View Managed Service Client agreement rates from your shared OneDrive file. TC Increase and S+ Increase rates are surfaced directly in the Contract Renewals tool.',
+    icon:  `<svg width="24" height="24" viewBox="0 0 16 16" fill="none"><rect x="2" y="1" width="12" height="14" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M5 4h6M5 7h6M5 10h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.2" fill="var(--surface,#141720)" stroke="currentColor" stroke-width="1.2"/><path d="M12 10.8v1.2l.9.9" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   },
 ];
 
@@ -1310,6 +1319,27 @@ Total CommITment Core</textarea>
         </div>
       </div>
 
+      <div class="settings-section">
+        <h2 class="section-title">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="1" width="12" height="14" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M5 4h6M5 7h6M5 10h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+          MSC Agreements File
+        </h2>
+        <p class="field-hint" style="margin-bottom:8px">Path to the MSC Agreements Excel file on OneDrive. The file stays on your machine — it is never stored in the app or uploaded anywhere.</p>
+        <div class="field-group">
+          <label class="field-label">File Path</label>
+          <div class="field-row">
+            <input class="field-input" id="msc-file-path" type="text"
+              placeholder="C:\\Users\\...\\OneDrive - Anchor Network Solutions\\ANS-Finance\\Managed Service Clients\\MSC Agreements Tab.xlsx"
+              autocomplete="off" spellcheck="false" />
+            <button class="btn btn-ghost btn-sm" id="btn-browse-msc">Browse</button>
+          </div>
+        </div>
+        <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
+          <button class="btn btn-primary btn-sm" id="btn-save-msc-settings">Save</button>
+          <span class="save-status" id="msc-settings-status"></span>
+        </div>
+      </div>
+
     </div><!-- /general -->
 
     <!-- ── Tab 2: AI Prompts ── -->
@@ -1494,6 +1524,12 @@ Total CommITment Core</textarea>
   loadRenewalSettingsUI();
   document.getElementById('btn-save-renewal-eligible').addEventListener('click', saveRenewalSettingsUI);
   document.getElementById('btn-save-renewal-settings').addEventListener('click', saveRenewalSettingsUI);
+  loadMscSettingsUI();
+  document.getElementById('btn-save-msc-settings').addEventListener('click', saveMscSettingsUI);
+  document.getElementById('btn-browse-msc').addEventListener('click', async () => {
+    const fp = await window.api.browseMscFile();
+    if (fp) document.getElementById('msc-file-path').value = fp;
+  });
 }
 
 // ─── Customize Tab ────────────────────────────────────────────────────────────
@@ -3954,6 +3990,34 @@ let crData     = { contracts: [], renewed: [] };
 let crWindow   = 30;
 let crEligible = [];
 let crSelected = new Set(); // indices of contracts selected for combined prompt
+let _mscData   = null;     // cached MSC agreement rows, loaded on first use
+
+function mscNorm(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function mscFindClient(companyName) {
+  if (!_mscData || !_mscData.length) return null;
+  const target = mscNorm(companyName);
+  if (!target) return null;
+  let best = null, bestScore = 0;
+  for (const row of _mscData) {
+    const cand = mscNorm(row.company);
+    if (!cand) continue;
+    if (target === cand) return row;
+    let score = 0;
+    if (target.includes(cand) || cand.includes(target)) {
+      score = Math.min(target.length, cand.length) / Math.max(target.length, cand.length) * 0.9;
+    } else {
+      const wt = companyName.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+      const wc = row.company.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+      const overlap = wt.filter(w => wc.some(c => c === w));
+      if (overlap.length) score = overlap.length / Math.max(wt.length, wc.length) * 0.8;
+    }
+    if (score > bestScore) { bestScore = score; best = row; }
+  }
+  return bestScore >= 0.55 ? best : null;
+}
 
 async function renderContractRenewals() {
   content.innerHTML = `
@@ -3981,6 +4045,13 @@ async function renderContractRenewals() {
 
   const settings = await window.api.getRenewalSettings();
   crEligible = settings.eligibleServices || [];
+
+  // Load MSC data silently so contract blocks can show agreement rates
+  if (!_mscData) {
+    window.api.getMscSettings().then(s => {
+      if (s.filePath) window.api.readMscData(s.filePath).then(r => { if (r.success) _mscData = r.data; });
+    });
+  }
 
   document.querySelectorAll('.cr-tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -4148,6 +4219,24 @@ function crRenderResults() {
     });
   });
 
+  // ── Wire Apply MSC Rates buttons ──
+  el.querySelectorAll('.cr-apply-msc-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const ci    = +btn.dataset.ci;
+      const tcPct = parseFloat(btn.dataset.tc) || 0;
+      const spPct = parseFloat(btn.dataset.sp) || 0;
+      crData.contracts[ci]?.services.forEach(s => {
+        if (!s.isEligible) return;
+        const isSP = s.serviceName.toLowerCase().includes('security');
+        const pct  = isSP ? spPct : tcPct;
+        if (!pct) return;
+        s._pct     = pct;
+        s.newPrice = Math.round(s._origPrice * (1 + pct / 100) * 100) / 100;
+      });
+      crRenderResults();
+    });
+  });
+
   // ── Wire generate-prompt buttons ──
   el.querySelectorAll('.cr-gen-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -4262,8 +4351,25 @@ function crRenderResults() {
 }
 
 function crContractBlock(c, ci) {
-  const daysLeft = Math.ceil((new Date(c.endDate + 'T00:00:00') - Date.now()) / 86400000);
-  const urgClass = daysLeft <= 14 ? 'cr-urgent' : daysLeft <= 30 ? 'cr-soon' : '';
+  const daysLeft  = Math.ceil((new Date(c.endDate + 'T00:00:00') - Date.now()) / 86400000);
+  const urgClass  = daysLeft <= 14 ? 'cr-urgent' : daysLeft <= 30 ? 'cr-soon' : '';
+  const mscMatch  = mscFindClient(c.companyName);
+  const mscTcPct  = mscMatch?.tcIncrease    != null ? mscMatch.tcIncrease    * 100 : null;
+  const mscSpPct  = mscMatch?.splusIncrease != null ? mscMatch.splusIncrease * 100 : null;
+  const hasElig   = c.services.some(s => s.isEligible);
+  const mscStrip  = mscMatch ? `
+    <div class="cr-msc-strip">
+      <span class="cr-msc-label">
+        <svg width="11" height="11" viewBox="0 0 14 14" fill="none"><rect x="2" y="1" width="10" height="12" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M4 4h6M4 7h6M4 10h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+        MSC Agreement
+      </span>
+      ${mscTcPct  != null ? `<span class="cr-msc-chip">TC ↑ ${mscTcPct.toFixed(1)}%</span>`  : ''}
+      ${mscSpPct  != null ? `<span class="cr-msc-chip cr-msc-chip-sp">S+ ↑ ${mscSpPct.toFixed(1)}%</span>` : ''}
+      ${mscMatch.yearSigned ? `<span class="cr-msc-chip cr-msc-dim">Signed ${mscMatch.yearSigned}</span>` : ''}
+      ${(mscTcPct != null || mscSpPct != null) && hasElig
+        ? `<button class="btn btn-ghost btn-xs cr-apply-msc-btn" data-ci="${ci}" data-tc="${mscTcPct ?? 0}" data-sp="${mscSpPct ?? 0}">Apply Rates</button>`
+        : ''}
+    </div>` : '';
 
   const serviceRows = c.services.map((s, si) => {
     const costChanged  = s.newCost  !== s._origCost;
@@ -4326,6 +4432,7 @@ function crContractBlock(c, ci) {
         </div>
       </div>
       <div class="cr-block-detail" style="display:none">
+        ${mscStrip}
         ${c.services.length ? `
           <table class="cr-table cr-svc-table">
             <thead><tr>
@@ -4524,6 +4631,120 @@ ${sections}
 Please work through them in order and present a clean summary for each.`;
 }
 
+// ─── MSC Agreements ───────────────────────────────────────────────────────────
+async function renderMscAgreements() {
+  content.innerHTML = `
+    <div class="view-header">
+      <div>
+        <h1 class="view-title">MSC Agreements</h1>
+        <p class="view-subtitle">Managed Service Client agreement rates — TC &amp; S+ increase % used in Contract Renewals</p>
+      </div>
+      <button class="btn btn-ghost btn-sm" id="msc-reload-btn">
+        <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M13 8A5 5 0 1 1 8 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M8 1l3 2-3 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Reload
+      </button>
+    </div>
+    <div class="view-body">
+      <div id="msc-status" class="tool-status" style="display:none"></div>
+      <div id="msc-content"></div>
+    </div>`;
+
+  document.getElementById('msc-reload-btn').addEventListener('click', () => {
+    _mscData = null;
+    mscLoad();
+  });
+  await mscLoad();
+}
+
+async function mscLoad() {
+  const statusEl  = document.getElementById('msc-status');
+  const contentEl = document.getElementById('msc-content');
+  if (!statusEl || !contentEl) return;
+
+  statusEl.style.display = '';
+  statusEl.className = 'tool-status running';
+  statusEl.textContent = 'Loading MSC data…';
+  contentEl.innerHTML = '';
+
+  const settings = await window.api.getMscSettings();
+  if (!settings.filePath) {
+    statusEl.className = 'tool-status warn';
+    statusEl.innerHTML = `No file configured. Go to <strong>Settings → General</strong> and set the MSC Agreements file path.`;
+    return;
+  }
+
+  const res = await window.api.readMscData(settings.filePath);
+  if (res.error) {
+    statusEl.className = 'tool-status error';
+    statusEl.textContent = `Error: ${res.error}`;
+    return;
+  }
+
+  _mscData = res.data;
+  statusEl.style.display = 'none';
+  mscRenderTable(res.data);
+}
+
+function mscRenderTable(data) {
+  const contentEl = document.getElementById('msc-content');
+  if (!contentEl) return;
+
+  const total      = data.length;
+  const withRates  = data.filter(r => r.tcIncrease != null || r.splusIncrease != null).length;
+  const totalMsa   = data.reduce((s, r) => s + (r.msaTotal || 0), 0);
+  const avgMonthly = totalMsa / (total || 1);
+
+  const fmtPct = v => v != null ? `${(v * 100).toFixed(1)}%` : '—';
+  const fmtCur = v => v != null ? `$${v.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '—';
+
+  const rows = data.map(r => {
+    const tcClass = r.tcIncrease    != null ? (r.tcIncrease    >= 0.05 ? 'msc-rate-high' : r.tcIncrease    >= 0.03 ? 'msc-rate-mid' : 'msc-rate-low') : 'msc-rate-none';
+    const spClass = r.splusIncrease != null ? (r.splusIncrease >= 0.05 ? 'msc-rate-high' : r.splusIncrease >= 0.03 ? 'msc-rate-mid' : 'msc-rate-low') : 'msc-rate-none';
+    return `<tr>
+      <td>${escHtml(r.company)}</td>
+      <td class="msc-td-num">${r.userSupport ?? '—'}</td>
+      <td class="msc-td-num">${fmtCur(r.msaTotal)}</td>
+      <td class="msc-td-center">${r.yearSigned || '—'}</td>
+      <td class="msc-td-center"><span class="msc-rate ${tcClass}">${fmtPct(r.tcIncrease)}</span></td>
+      <td class="msc-td-center"><span class="msc-rate ${spClass}">${fmtPct(r.splusIncrease)}</span></td>
+      <td class="msc-td-center">${escHtml(r.industry || '—')}</td>
+    </tr>`;
+  }).join('');
+
+  contentEl.innerHTML = `
+    <div class="msc-stats">
+      <div class="msc-stat-card"><span class="msc-stat-val">${total}</span><span class="msc-stat-label">Total Clients</span></div>
+      <div class="msc-stat-card"><span class="msc-stat-val">${fmtCur(totalMsa)}</span><span class="msc-stat-label">Total Monthly MSA</span></div>
+      <div class="msc-stat-card"><span class="msc-stat-val">${fmtCur(avgMonthly)}</span><span class="msc-stat-label">Avg Monthly MSA</span></div>
+      <div class="msc-stat-card"><span class="msc-stat-val">${withRates}</span><span class="msc-stat-label">With Increase Rates</span></div>
+    </div>
+    <div class="msc-toolbar">
+      <input type="text" id="msc-search" class="field-input" placeholder="Search by company name…" style="max-width:300px" />
+      <span class="field-hint">${total} clients</span>
+    </div>
+    <div class="msc-table-wrap">
+      <table class="msc-table">
+        <thead><tr>
+          <th>Company</th>
+          <th class="msc-th-num">Users</th>
+          <th class="msc-th-num">Monthly MSA</th>
+          <th class="msc-th-center">Year Signed</th>
+          <th class="msc-th-center">TC Increase</th>
+          <th class="msc-th-center">S+ Increase</th>
+          <th class="msc-th-center">Industry</th>
+        </tr></thead>
+        <tbody id="msc-tbody">${rows}</tbody>
+      </table>
+    </div>`;
+
+  document.getElementById('msc-search').addEventListener('input', e => {
+    const q = e.target.value.toLowerCase();
+    document.querySelectorAll('#msc-tbody tr').forEach(tr => {
+      tr.style.display = tr.cells[0]?.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  });
+}
+
 function crFmtDate(dateStr) {
   if (!dateStr) return '—';
   const d = new Date(dateStr + 'T00:00:00');
@@ -4571,6 +4792,28 @@ async function saveRenewalSettingsUI() {
     statusEls.forEach(s => { s.textContent = `Error: ${e.message}`; s.className = 'save-status error'; });
   }
   setTimeout(() => { statusEls.forEach(s => { s.textContent = ''; }); }, 2500);
+}
+
+async function loadMscSettingsUI() {
+  try {
+    const s  = await window.api.getMscSettings();
+    const el = document.getElementById('msc-file-path');
+    if (el) el.value = s.filePath || '';
+  } catch (e) { console.warn('loadMscSettingsUI:', e.message); }
+}
+
+async function saveMscSettingsUI() {
+  const statusEl = document.getElementById('msc-settings-status');
+  const pathEl   = document.getElementById('msc-file-path');
+  if (!pathEl) return;
+  try {
+    await window.api.saveMscSettings({ filePath: pathEl.value.trim() });
+    _mscData = null; // clear cache so next use re-reads from file
+    if (statusEl) { statusEl.textContent = '✓ Saved'; statusEl.className = 'save-status success'; }
+  } catch (e) {
+    if (statusEl) { statusEl.textContent = `Error: ${e.message}`; statusEl.className = 'save-status error'; }
+  }
+  setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2500);
 }
 
 // ─── BlackPoint Endpoint Usage ────────────────────────────────────────────────

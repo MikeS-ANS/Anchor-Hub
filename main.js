@@ -3269,6 +3269,87 @@ ipcMain.handle('compare-kaseya-snapshots', (_, { keyA, keyB }) => {
   } catch (e) { return { error: e.message }; }
 });
 
+// ─── MSC Agreements ───────────────────────────────────────────────────────────
+const MSC_SETTINGS_FILE = path.join(USER_DATA, 'anchor-msc-settings.json');
+
+function loadMscSettings() {
+  const defaults = { filePath: '' };
+  if (!fs.existsSync(MSC_SETTINGS_FILE)) return defaults;
+  try { return { ...defaults, ...JSON.parse(fs.readFileSync(MSC_SETTINGS_FILE, 'utf8')) }; }
+  catch { return defaults; }
+}
+
+ipcMain.handle('get-msc-settings', () => loadMscSettings());
+
+ipcMain.handle('save-msc-settings', (_, s) => {
+  fs.writeFileSync(MSC_SETTINGS_FILE, JSON.stringify(s, null, 2), 'utf8');
+  return { success: true };
+});
+
+ipcMain.handle('browse-msc-file', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Select MSC Agreements Excel File',
+    defaultPath: path.join(app.getPath('home'), 'OneDrive - Anchor Network Solutions', 'ANS-Finance', 'Managed Service Clients'),
+    filters: [{ name: 'Excel Files', extensions: ['xlsx', 'xls'] }],
+    properties: ['openFile'],
+  });
+  return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle('read-msc-data', async (_, filePath) => {
+  try {
+    if (!filePath) return { error: 'No file path configured. Set it in Settings → General.' };
+    if (!fs.existsSync(filePath)) return { error: `File not found: ${filePath}` };
+    const ExcelJS = require('exceljs');
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(filePath);
+    const ws = wb.worksheets[0];
+    const rows = [];
+
+    const parseRate = val => {
+      if (val == null) return null;
+      if (typeof val === 'number') return val <= 1 ? val : val / 100;
+      if (typeof val === 'string') {
+        const m = val.match(/([\d.]+)/);
+        return m ? parseFloat(m[1]) / 100 : null;
+      }
+      return null;
+    };
+    const parseCurrency = val => {
+      if (val == null) return null;
+      if (typeof val === 'number') return val;
+      if (typeof val === 'string') {
+        const m = val.replace(/[$,]/g, '').match(/([\d.]+)/);
+        return m ? parseFloat(m[1]) : null;
+      }
+      return null;
+    };
+
+    ws.eachRow((row, rowNum) => {
+      if (rowNum < 3) return; // row 1 = super-header, row 2 = column labels
+      const v = row.values; // 1-indexed
+      const company = v[2];
+      if (!company) return;
+      const companyStr = String(company).trim();
+      if (!companyStr || companyStr.toLowerCase().startsWith('average')) return;
+      rows.push({
+        company:       companyStr,
+        userSupport:   v[3] != null ? Number(v[3]) : null,
+        msaTotal:      parseCurrency(v[4]),
+        month:         v[5] != null ? String(v[5]).trim() : null,
+        yearSigned:    v[6] != null ? String(v[6]).trim() : null,
+        tcIncrease:    parseRate(v[7]),
+        splusIncrease: parseRate(v[8]),
+        industry:      v[9]  != null ? String(v[9]).trim()  : null,
+        lifetimeValue: parseCurrency(v[10]),
+      });
+    });
+    return { success: true, data: rows };
+  } catch (e) {
+    return { error: e.message };
+  }
+});
+
 // ─── Sidebar Config ───────────────────────────────────────────────────────────
 // Stored as sidebar-config.json in userData so it survives updates and can hold
 // the full layout (order + named groups) in addition to visibility.
@@ -3289,6 +3370,7 @@ const ALL_TOOL_KEYS = [
   'contract-changes',
   'contract-renewals',
   'blackpoint-processor',
+  'msc-agreements',
 ];
 
 function getDefaultSidebarConfig() {
