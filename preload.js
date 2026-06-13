@@ -98,6 +98,7 @@ contextBridge.exposeInMainWorld('api', {
   getMscSettings:  ()    => ipcRenderer.invoke('get-msc-settings'),
   saveMscSettings: (s)   => ipcRenderer.invoke('save-msc-settings', s),
   readMscData:     (p)   => ipcRenderer.invoke('read-msc-data', p),
+  saveMscData:     (d)   => ipcRenderer.invoke('save-msc-data', d),
   browseMscFile:   ()    => ipcRenderer.invoke('browse-msc-file'),
 
   // Tool Visibility

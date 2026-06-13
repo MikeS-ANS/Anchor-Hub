@@ -3991,6 +3991,7 @@ let crWindow   = 30;
 let crEligible = [];
 let crSelected = new Set(); // indices of contracts selected for combined prompt
 let _mscData   = null;     // cached MSC agreement rows, loaded on first use
+let _mscEdits  = {};      // pending edits: { rowNum: { field: value } }
 
 function mscNorm(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -4685,6 +4686,45 @@ async function mscLoad() {
   mscRenderTable(res.data);
 }
 
+const MSC_COLS = [
+  { key: 'company',       label: 'Company',        type: 'text',     align: 'left'   },
+  { key: 'userSupport',   label: 'Users',           type: 'number',   align: 'right'  },
+  { key: 'msaTotal',      label: 'Monthly MSA',     type: 'currency', align: 'right'  },
+  { key: 'month',         label: 'Month',           type: 'text',     align: 'center' },
+  { key: 'yearSigned',    label: 'Year Signed',     type: 'text',     align: 'center' },
+  { key: 'tcIncrease',    label: 'TC Increase',     type: 'rate',     align: 'center' },
+  { key: 'splusIncrease', label: 'S+ Increase',     type: 'rate',     align: 'center' },
+  { key: 'industry',      label: 'Industry',        type: 'text',     align: 'left'   },
+  { key: 'lifetimeValue', label: 'Lifetime Value',  type: 'currency', align: 'right'  },
+];
+
+function mscFmtDisplay(val, type) {
+  if (val == null) return '—';
+  if (type === 'currency') return `$${Number(val).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+  if (type === 'rate')     return `${(val * 100).toFixed(1)}%`;
+  if (type === 'number')   return String(val);
+  return escHtml(String(val));
+}
+
+function mscRateClass(val) {
+  if (val == null) return 'msc-rate-none';
+  return val >= 0.05 ? 'msc-rate-high' : val >= 0.03 ? 'msc-rate-mid' : 'msc-rate-low';
+}
+
+function mscCellHtml(r, col) {
+  const edited  = _mscEdits[r.rowNum]?.[col.key] !== undefined;
+  const val     = edited ? _mscEdits[r.rowNum][col.key] : r[col.key];
+  const editCls = edited ? ' msc-edited' : '';
+  const alignCls = col.align === 'right' ? ' msc-td-num' : col.align === 'center' ? ' msc-td-center' : '';
+  let inner;
+  if (col.type === 'rate') {
+    inner = `<span class="msc-rate ${mscRateClass(val)}">${mscFmtDisplay(val, 'rate')}</span>`;
+  } else {
+    inner = mscFmtDisplay(val, col.type);
+  }
+  return `<td class="msc-cell${alignCls}${editCls}" data-rownum="${r.rowNum}" data-field="${col.key}" data-type="${col.type}">${inner}</td>`;
+}
+
 function mscRenderTable(data) {
   const contentEl = document.getElementById('msc-content');
   if (!contentEl) return;
@@ -4693,23 +4733,13 @@ function mscRenderTable(data) {
   const withRates  = data.filter(r => r.tcIncrease != null || r.splusIncrease != null).length;
   const totalMsa   = data.reduce((s, r) => s + (r.msaTotal || 0), 0);
   const avgMonthly = totalMsa / (total || 1);
+  const fmtCur     = v => `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 
-  const fmtPct = v => v != null ? `${(v * 100).toFixed(1)}%` : '—';
-  const fmtCur = v => v != null ? `$${v.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '—';
+  const rows = data.map(r =>
+    `<tr data-rownum="${r.rowNum}">${MSC_COLS.map(col => mscCellHtml(r, col)).join('')}</tr>`
+  ).join('');
 
-  const rows = data.map(r => {
-    const tcClass = r.tcIncrease    != null ? (r.tcIncrease    >= 0.05 ? 'msc-rate-high' : r.tcIncrease    >= 0.03 ? 'msc-rate-mid' : 'msc-rate-low') : 'msc-rate-none';
-    const spClass = r.splusIncrease != null ? (r.splusIncrease >= 0.05 ? 'msc-rate-high' : r.splusIncrease >= 0.03 ? 'msc-rate-mid' : 'msc-rate-low') : 'msc-rate-none';
-    return `<tr>
-      <td>${escHtml(r.company)}</td>
-      <td class="msc-td-num">${r.userSupport ?? '—'}</td>
-      <td class="msc-td-num">${fmtCur(r.msaTotal)}</td>
-      <td class="msc-td-center">${r.yearSigned || '—'}</td>
-      <td class="msc-td-center"><span class="msc-rate ${tcClass}">${fmtPct(r.tcIncrease)}</span></td>
-      <td class="msc-td-center"><span class="msc-rate ${spClass}">${fmtPct(r.splusIncrease)}</span></td>
-      <td class="msc-td-center">${escHtml(r.industry || '—')}</td>
-    </tr>`;
-  }).join('');
+  const editCount = Object.keys(_mscEdits).length;
 
   contentEl.innerHTML = `
     <div class="msc-stats">
@@ -4719,29 +4749,143 @@ function mscRenderTable(data) {
       <div class="msc-stat-card"><span class="msc-stat-val">${withRates}</span><span class="msc-stat-label">With Increase Rates</span></div>
     </div>
     <div class="msc-toolbar">
-      <input type="text" id="msc-search" class="field-input" placeholder="Search by company name…" style="max-width:300px" />
-      <span class="field-hint">${total} clients</span>
+      <input type="text" id="msc-search" class="field-input" placeholder="Search by company name…" style="max-width:280px" />
+      <span class="field-hint">${total} clients — click any cell to edit</span>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        <span class="msc-edit-count" id="msc-edit-count" style="${editCount ? '' : 'display:none'}">${editCount} unsaved change${editCount !== 1 ? 's' : ''}</span>
+        <button class="btn btn-primary btn-sm" id="msc-save-btn" ${editCount ? '' : 'disabled'}>
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 7l4 4 6-6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Save to Excel
+        </button>
+      </div>
     </div>
     <div class="msc-table-wrap">
       <table class="msc-table">
-        <thead><tr>
-          <th>Company</th>
-          <th class="msc-th-num">Users</th>
-          <th class="msc-th-num">Monthly MSA</th>
-          <th class="msc-th-center">Year Signed</th>
-          <th class="msc-th-center">TC Increase</th>
-          <th class="msc-th-center">S+ Increase</th>
-          <th class="msc-th-center">Industry</th>
-        </tr></thead>
+        <thead><tr>${MSC_COLS.map(c =>
+          `<th class="${c.align === 'right' ? 'msc-th-num' : c.align === 'center' ? 'msc-th-center' : ''}">${c.label}</th>`
+        ).join('')}</tr></thead>
         <tbody id="msc-tbody">${rows}</tbody>
       </table>
     </div>`;
 
+  // Search filter
   document.getElementById('msc-search').addEventListener('input', e => {
     const q = e.target.value.toLowerCase();
     document.querySelectorAll('#msc-tbody tr').forEach(tr => {
       tr.style.display = tr.cells[0]?.textContent.toLowerCase().includes(q) ? '' : 'none';
     });
+  });
+
+  // Inline cell editing
+  document.getElementById('msc-tbody').addEventListener('click', e => {
+    const td = e.target.closest('.msc-cell');
+    if (!td || td.querySelector('input')) return; // already editing
+
+    const rowNum = +td.dataset.rownum;
+    const field  = td.dataset.field;
+    const type   = td.dataset.type;
+    const row    = _mscData.find(r => r.rowNum === rowNum);
+    if (!row) return;
+
+    const currentVal = _mscEdits[rowNum]?.[field] !== undefined ? _mscEdits[rowNum][field] : row[field];
+
+    // Determine editable raw value
+    let editVal = '';
+    if (currentVal != null) {
+      if (type === 'rate')     editVal = (currentVal * 100).toFixed(1);
+      else if (type === 'currency' || type === 'number') editVal = String(currentVal);
+      else editVal = String(currentVal);
+    }
+
+    td.innerHTML = `<input class="msc-edit-input" type="${type === 'text' ? 'text' : 'number'}" value="${escHtml(editVal)}" step="${type === 'rate' ? '0.1' : type === 'currency' ? '1' : '1'}" />`;
+    const input = td.querySelector('input');
+    input.focus();
+    input.select();
+
+    const commit = () => {
+      const raw = input.value.trim();
+      let newVal = null;
+      if (raw !== '') {
+        if (type === 'rate')     newVal = parseFloat(raw) / 100;
+        else if (type === 'currency' || type === 'number') newVal = parseFloat(raw) || null;
+        else newVal = raw;
+      }
+
+      // Only store if actually changed from original
+      const origVal = row[field];
+      const changed = newVal !== origVal;
+      if (changed) {
+        if (!_mscEdits[rowNum]) _mscEdits[rowNum] = {};
+        _mscEdits[rowNum][field] = newVal;
+      } else if (_mscEdits[rowNum]) {
+        delete _mscEdits[rowNum][field];
+        if (!Object.keys(_mscEdits[rowNum]).length) delete _mscEdits[rowNum];
+      }
+
+      // Re-render just this cell
+      const col    = MSC_COLS.find(c => c.key === field);
+      const edited = _mscEdits[rowNum]?.[field] !== undefined;
+      td.className = `msc-cell${col.align === 'right' ? ' msc-td-num' : col.align === 'center' ? ' msc-td-center' : ''}${edited ? ' msc-edited' : ''}`;
+      if (col.type === 'rate') {
+        td.innerHTML = `<span class="msc-rate ${mscRateClass(newVal)}">${mscFmtDisplay(newVal, 'rate')}</span>`;
+      } else {
+        td.innerHTML = mscFmtDisplay(newVal, col.type);
+      }
+
+      // Update save button state
+      const count    = Object.keys(_mscEdits).length;
+      const countEl  = document.getElementById('msc-edit-count');
+      const saveBtn  = document.getElementById('msc-save-btn');
+      if (countEl) { countEl.textContent = `${count} unsaved change${count !== 1 ? 's' : ''}`; countEl.style.display = count ? '' : 'none'; }
+      if (saveBtn)   saveBtn.disabled = count === 0;
+    };
+
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter')  { e.preventDefault(); input.blur(); }
+      if (e.key === 'Escape') { td.innerHTML = mscCellHtml(row, MSC_COLS.find(c => c.key === field)).replace(/^<td[^>]*>/, '').replace(/<\/td>$/, ''); }
+    });
+  });
+
+  // Save to Excel
+  document.getElementById('msc-save-btn').addEventListener('click', async () => {
+    const saveBtn = document.getElementById('msc-save-btn');
+    const settings = await window.api.getMscSettings();
+    if (!settings.filePath) {
+      alert('No file path configured. Go to Settings → General.');
+      return;
+    }
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving…';
+
+    const changes = [];
+    for (const [rowNum, fields] of Object.entries(_mscEdits)) {
+      for (const [field, value] of Object.entries(fields)) {
+        changes.push({ rowNum: +rowNum, field, value });
+      }
+    }
+
+    const res = await window.api.saveMscData({ filePath: settings.filePath, changes });
+    if (res.error) {
+      alert(`Save failed: ${res.error}`);
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 7l4 4 6-6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg> Save to Excel`;
+    } else {
+      // Apply edits to in-memory data
+      for (const { rowNum, field, value } of changes) {
+        const row = _mscData.find(r => r.rowNum === rowNum);
+        if (row) row[field] = value;
+      }
+      _mscEdits = {};
+      const countEl = document.getElementById('msc-edit-count');
+      if (countEl) countEl.style.display = 'none';
+      saveBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 7l4 4 6-6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg> Save to Excel`;
+      saveBtn.disabled = true;
+      // Flash success
+      const statusEl = document.getElementById('msc-status');
+      if (statusEl) { statusEl.className = 'tool-status success'; statusEl.style.display = ''; statusEl.textContent = `✓ ${res.count} change${res.count !== 1 ? 's' : ''} saved to Excel.`; }
+      setTimeout(() => { if (statusEl) statusEl.style.display = 'none'; }, 3000);
+    }
   });
 }
 
