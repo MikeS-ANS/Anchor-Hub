@@ -1,83 +1,86 @@
-# Pax8 Hub
+# Anchor Hub
 
-A Windows desktop app for MSPs to run Pax8 integrations with a clean GUI. Built with Electron.
-
-## What it does (v1.0)
-
-- **Subscription Audit** — Pulls active subscriptions from Pax8 and compares quantities against Autotask contracts. Flags mismatches and optionally creates Autotask tickets automatically.
-- **Settings** — View and remove saved credentials from Windows Credential Manager.
-
-## Future integrations (planned)
-
-- Invoice Sync
-- License Renewal Alerts
-- Company Mapping Validator
+Internal MSP tooling for Anchor Network Solutions. A Windows desktop app built with Electron that integrates with Pax8, Autotask, Kaseya, and Blackpoint Cyber to streamline billing, subscription auditing, and project management.
 
 ---
 
-## Prerequisites
+## Tools
 
-- **Node.js** v18+ — https://nodejs.org
-- **Windows 10/11** (keytar requires Windows Credential Manager)
-- **Pax8 API credentials** (Client ID + Client Secret) from the Pax8 platform
-- **Autotask API credentials** (Username + API Secret) from your Autotask account
+| Tool | Description |
+|---|---|
+| **M365 Subscription Comparison** | Compares Pax8 active subscriptions against Autotask contracts. Flags quantity mismatches and can auto-create tickets. |
+| **Invoice Monitor** | Monitors Pax8 invoices and surfaces billing anomalies. |
+| **Margin Analyzer** | Analyzes product margins across Pax8 subscriptions. |
+| **Company Mapping** | Maps Pax8 companies to their Autotask counterparts. |
+| **Pax8 Invoice Processor** | Processes and formats Pax8 invoices for review. |
+| **Kaseya Invoice Processor** | Parses Kaseya billing exports and reconciles against contract values. |
+| **Project Time Summary** | Pulls active Professional Services projects from Autotask, shows hours vs. estimates, flags at-risk projects, and emails a formatted HTML report. |
+| **Contract Changes** | Tracks and surfaces contract modifications in Autotask. |
+| **Contract Renewals** | Lists upcoming contract renewals with configurable look-ahead window. |
+| **Blackpoint Processor** | Processes Blackpoint Cyber billing data. |
 
 ---
 
-## Setup & Run (development)
+## Requirements
+
+- **Windows 10/11**
+- **Node.js v18+** (development only) — https://nodejs.org
+- API credentials for the services you use (stored in Windows Credential Manager)
+
+---
+
+## Installation (end users)
+
+Download the latest `Anchor-Hub-Setup-x.x.x.exe` from [Releases](https://github.com/MikeS-ANS/Anchor-Hub/releases) and run the installer. No Node.js required.
+
+The app checks for updates automatically on launch and prompts you to install when a new version is available.
+
+---
+
+## Development setup
 
 ```bash
-# 1. Install dependencies
+# Install dependencies
 npm install
 
-# 2. Start the app
+# Run in development mode
+npm run dev
+
+# Run normally
 npm start
 ```
 
-> Note: `keytar` requires native compilation. If you hit build errors, run:
-> ```bash
-> npm install --build-from-source keytar
-> ```
-
 ---
 
-## Build (Windows installer)
+## Building a release
 
 ```bash
+# Build installer only (no upload)
 npm run build
+
+# Build and publish to GitHub Releases
+npm run publish
 ```
 
-This produces a Windows NSIS installer in the `dist/` folder. Share the `.exe` with your team — no Node.js required on their machines.
+`npm run publish` produces a Windows NSIS installer and `latest.yml`, uploads both to the GitHub Release for the current version in `package.json`, and enables the auto-updater for all installed instances.
+
+> Note: close Anchor Hub before running `npm run publish` — the build cannot overwrite native binaries while the app is running.
 
 ---
 
 ## Credential storage
 
-All credentials are stored in **Windows Credential Manager** under the service name `Pax8Hub`. You can view or remove them via:
+All API credentials are stored in **Windows Credential Manager** under the service name `AnchorHub`. Manage them from:
 
-- **Settings view** inside the app
-- Windows → Control Panel → Credential Manager → Windows Credentials → `Pax8Hub`
-
----
-
-## Adding a new integration
-
-1. Create a function `renderMyIntegration(container)` in `public/app.js`
-2. Register it in the `views` object: `'my-integration': renderMyIntegration`
-3. Add a nav item to `public/index.html` with `data-view="my-integration"`
-4. Add any required IPC handlers to `src/main.js`
+- **Settings → General** inside the app
+- Windows → Control Panel → Credential Manager → Windows Credentials
 
 ---
 
-## Autotask zone
+## Sidebar customization
 
-Your Autotask zone number corresponds to which data center your account is on. Check your Autotask login URL:
-- `https://webservices1.autotask.net` → Zone 1
-- `https://webservices2.autotask.net` → Zone 2
-- etc.
+Tool visibility and layout are configured per-user in **Settings → Customize**. Tools default to hidden on a fresh install. Drag to reorder, create named groups (e.g. "Accounting", "Projects"), and toggle visibility per tool. Settings are saved locally and not synced.
 
 ---
 
-## Built for
-
-Anchor Network Solutions — internal tooling
+Built for Anchor Network Solutions — internal use only.
