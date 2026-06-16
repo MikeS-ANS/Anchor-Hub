@@ -4427,17 +4427,20 @@ ipcMain.handle('run-project-time-summary', async () => {
     const projectIds = projects.map(p => p.id);
     const CHUNK = 50;
 
-    // 5. Batch-lookup company names and project lead resources
-    const companyIds  = [...new Set(projects.map(p => p.companyID).filter(Boolean))];
-    const resourceIds = [...new Set(projects.map(p => p.projectLeadResourceID).filter(Boolean))];
-    const [companies, resources] = await Promise.all([
+    // 5. Batch-lookup company names, project lead resources, and contract names
+    const companyIds   = [...new Set(projects.map(p => p.companyID).filter(Boolean))];
+    const resourceIds  = [...new Set(projects.map(p => p.projectLeadResourceID).filter(Boolean))];
+    const contractIds  = [...new Set(projects.map(p => p.contractID).filter(Boolean))];
+    const [companies, resources, contracts] = await Promise.all([
       atBatchLookup('Companies', companyIds),
       atBatchLookup('Resources', resourceIds),
+      contractIds.length ? atBatchLookup('Contracts', contractIds) : Promise.resolve([]),
     ]);
-    const companyMap  = Object.fromEntries(companies.map(c => [c.id, c.companyName || c.name || '']));
-    const resourceMap = Object.fromEntries(
+    const companyMap   = Object.fromEntries(companies.map(c => [c.id, c.companyName || c.name || '']));
+    const resourceMap  = Object.fromEntries(
       resources.map(r => [r.id, [r.lastName, r.firstName].filter(Boolean).join(', ')])
     );
+    const contractMap  = Object.fromEntries(contracts.map(c => [c.id, c.contractName || c.name || '']));
 
     // 6. Get Tasks — build taskId→projectId map AND sum estimatedHours per project
     //    (report uses AggSum({*Task.Estimated Hours}), so task-level is authoritative)
@@ -4510,6 +4513,7 @@ ipcMain.handle('run-project-time-summary', async () => {
         id:               p.id,
         projectName:      p.projectName || p.name || '',
         projectNumber:    p.projectNumber || '',
+        contractName:     contractMap[p.contractID] || '',
         accountName:      companyMap[p.companyID] || '',
         projectLead:      resourceMap[p.projectLeadResourceID] || '',
         estimatedHours:   round2(estHoursMap[p.id] || p.estimatedHours || 0),
@@ -4633,11 +4637,12 @@ function buildProjectReportHtml(projects) {
     const cls    = over ? 'row-over' : atRisk ? 'row-risk' : '';
     return `
       <tr class="${cls}" data-account="${ptsEsc(p.accountName)}" data-project="${ptsEsc(p.projectName)}"
-          data-num="${ptsEsc(p.projectNumber)}" data-lead="${ptsEsc(p.projectLead)}"
-          data-est="${p.estimatedHours}" data-worked="${p.workedHours}"
+          data-contract="${ptsEsc(p.contractName)}" data-num="${ptsEsc(p.projectNumber)}"
+          data-lead="${ptsEsc(p.projectLead)}" data-est="${p.estimatedHours}" data-worked="${p.workedHours}"
           data-bill="${p.billableHours}" data-nonbill="${p.nonBillableHours}" data-last7="${p.last7Hours}">
         <td>${ptsEsc(p.accountName)}</td>
         <td>${ptsEsc(p.projectName)}</td>
+        <td>${ptsEsc(p.contractName)}</td>
         <td class="num">${ptsEsc(p.projectNumber)}</td>
         <td class="num">${ptsEsc(p.projectLead)}</td>
         <td class="r">${fmt(p.estimatedHours)}</td>
@@ -4686,6 +4691,7 @@ function buildProjectReportHtml(projects) {
       <tr>
         <th data-col="account">Account Name<span class="sort-arrow"></span></th>
         <th data-col="project">Project Name<span class="sort-arrow"></span></th>
+        <th data-col="contract">Contract Name<span class="sort-arrow"></span></th>
         <th data-col="num">Project #<span class="sort-arrow"></span></th>
         <th data-col="lead">Project Lead<span class="sort-arrow"></span></th>
         <th data-col="est" class="r">Est. Hours<span class="sort-arrow"></span></th>
@@ -4706,7 +4712,7 @@ function buildProjectReportHtml(projects) {
 <script>
 (function(){
   var tbl=document.getElementById('pts-tbl'), col=null, dir=1;
-  var dataAttr={account:'account',project:'project',num:'num',lead:'lead',
+  var dataAttr={account:'account',project:'project',contract:'contract',num:'num',lead:'lead',
                 est:'est',worked:'worked',bill:'bill',nonbill:'nonbill',last7:'last7',notes:'notes'};
   tbl.querySelectorAll('th[data-col]').forEach(function(th){
     th.addEventListener('click',function(){

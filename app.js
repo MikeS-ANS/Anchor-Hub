@@ -3455,9 +3455,10 @@ function renderProjectTimeSummary() {
 }
 
 const PTS_COLS = [
-  { key: 'accountName',      label: 'Account Name',  align: 'left',  num: false },
-  { key: 'projectName',      label: 'Project Name',  align: 'left',  num: false },
-  { key: 'projectNumber',    label: 'Project #',     align: 'left',  num: false },
+  { key: 'accountName',      label: 'Account Name',   align: 'left',  num: false },
+  { key: 'projectName',      label: 'Project Name',   align: 'left',  num: false },
+  { key: 'contractName',     label: 'Contract Name',  align: 'left',  num: false },
+  { key: 'projectNumber',    label: 'Project #',      align: 'left',  num: false },
   { key: 'projectLead',      label: 'Project Lead',  align: 'left',  num: false },
   { key: 'estimatedHours',   label: 'Est. Hours',    align: 'right', num: true  },
   { key: 'workedHours',      label: 'Worked Hours',  align: 'right', num: true  },
@@ -3558,6 +3559,7 @@ function ptsRenderTable(projects) {
         </td>
         <td style="padding:6px 10px;font-size:12px;color:var(--text)">${escHtml(p.accountName)}</td>
         <td style="padding:6px 10px;font-size:12px;color:var(--text)">${escHtml(p.projectName)}</td>
+        <td style="padding:6px 10px;font-size:12px;color:var(--text-muted)">${escHtml(p.contractName || '—')}</td>
         <td style="padding:6px 10px;font-size:11px;font-family:var(--font-mono);color:var(--text-muted);white-space:nowrap">${escHtml(p.projectNumber)}</td>
         <td style="padding:6px 10px;font-size:12px;white-space:nowrap;color:var(--text)">${escHtml(p.projectLead)}</td>
         <td style="padding:6px 10px;text-align:right;font-family:var(--font-mono);font-size:12px;color:var(--text)">${fmt(p.estimatedHours)}</td>
