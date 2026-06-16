@@ -4337,6 +4337,9 @@ function loadProjectReportSettings() {
     excludeStatuses:       'ANS Hold\nCanceled\nCancelled\nClient Hold\nComplete\nInactive\nProposal\nQueued',
     departmentFilter:      'Professional Services',
     projectTypeFilter:     'Client',
+    departmentId:          '',
+    projectTypeId:         '',
+    statusIds:             '',
   };
   try {
     const saved = JSON.parse(fs.readFileSync(PROJECT_REPORT_SETTINGS_FILE, 'utf8'));
@@ -4362,7 +4365,7 @@ ipcMain.handle('run-project-time-summary', async () => {
     let clientTypeId     = null;
     try {
       const fieldsRes = await atFetch('/Projects/entityInformation/fields');
-      const fields    = fieldsRes.fields || [];
+      const fields    = fieldsRes.fieldInformation || fieldsRes.fields || [];
 
       const statusField = fields.find(f => f.name === 'status');
       if (statusField?.picklistValues && excludeStatusLabels.length) {
@@ -4380,9 +4383,20 @@ ipcMain.handle('run-project-time-summary', async () => {
       }
     } catch {}
 
-    // 2. Find department ID for client-side filtering
+    // Fall back to configured numeric ID overrides (for read-only API accounts that
+    // can't access entityInformation/fields)
+    if (!excludeStatusIds.length && rptSettings.statusIds) {
+      excludeStatusIds = rptSettings.statusIds.split(',').map(s => Number(s.trim())).filter(Boolean);
+    }
+    if (clientTypeId === null && rptSettings.projectTypeId) {
+      clientTypeId = Number(rptSettings.projectTypeId) || null;
+    }
+
+    // 2. Find department ID — prefer configured numeric ID, then resolve by name
     let psDeptId = null;
-    if (deptFilterName) {
+    if (rptSettings.departmentId) {
+      psDeptId = Number(rptSettings.departmentId) || null;
+    } else if (deptFilterName) {
       try {
         const depts  = await atQuery('/Departments');
         const psDept = depts.find(d => (d.name || '').toLowerCase().includes(deptFilterName.toLowerCase()));
@@ -4529,6 +4543,40 @@ ipcMain.handle('get-project-report-settings', () => loadProjectReportSettings())
 ipcMain.handle('save-project-report-settings', (_, s) => {
   saveProjectReportSettingsFn(s);
   return { success: true };
+});
+
+// Resolves department/project-type/status IDs from Autotask and returns them so
+// the user can save them as overrides (needed for read-only API accounts).
+ipcMain.handle('resolve-pts-ids', async (_, { deptName, typeLabel, statusLabels }) => {
+  const result = { departmentId: '', projectTypeId: '', statusIds: '' };
+  try {
+    const fieldsRes = await atFetch('/Projects/entityInformation/fields');
+    const fields    = fieldsRes.fieldInformation || fieldsRes.fields || [];
+    if (typeLabel) {
+      const typeField = fields.find(f => f.name === 'projectType' || f.name === 'type');
+      if (typeField?.picklistValues) {
+        const cv = typeField.picklistValues.find(v => (v.label || '').trim().toLowerCase() === typeLabel.toLowerCase());
+        if (cv) result.projectTypeId = String(cv.value);
+      }
+    }
+    if (statusLabels?.length) {
+      const statusField = fields.find(f => f.name === 'status');
+      if (statusField?.picklistValues) {
+        const ids = statusField.picklistValues
+          .filter(v => statusLabels.map(s => s.toLowerCase()).includes((v.label || '').trim().toLowerCase()))
+          .map(v => v.value);
+        result.statusIds = ids.join(',');
+      }
+    }
+  } catch {}
+  try {
+    if (deptName) {
+      const depts = await atQuery('/Departments');
+      const d = depts.find(dept => (dept.name || '').toLowerCase().includes(deptName.toLowerCase()));
+      if (d) result.departmentId = String(d.id);
+    }
+  } catch {}
+  return result;
 });
 
 ipcMain.handle('export-project-report', async (_, { projects }) => {

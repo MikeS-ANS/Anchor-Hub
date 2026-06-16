@@ -91,6 +91,7 @@ contextBridge.exposeInMainWorld('api', {
   saveProjectNote:           (d) => ipcRenderer.invoke('save-project-note', d),
   getProjectReportSettings:  ()  => ipcRenderer.invoke('get-project-report-settings'),
   saveProjectReportSettings: (s) => ipcRenderer.invoke('save-project-report-settings', s),
+  resolvePtsIds:             (o) => ipcRenderer.invoke('resolve-pts-ids', o),
   exportProjectReport:       (d) => ipcRenderer.invoke('export-project-report', d),
   emailProjectReport:        (d) => ipcRenderer.invoke('email-project-report', d),
 

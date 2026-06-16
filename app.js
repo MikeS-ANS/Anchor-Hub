@@ -3254,6 +3254,25 @@ function renderProjectTimeSummary() {
           <label class="field-label">Project Type Filter <span class="field-hint" style="font-weight:400">(leave blank = all types)</span></label>
           <input class="field-input" id="pts-type-filter" type="text" placeholder="Client" />
         </div>
+        <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:12px">
+          <p class="field-hint" style="margin-bottom:8px"><strong>Read-only API account?</strong> If filters don't apply, click "Resolve IDs" to look up numeric IDs once and save them as overrides. These bypass the admin-only Departments endpoint.</p>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+            <button class="btn btn-ghost" id="pts-resolve-ids-btn" style="font-size:12px">Resolve IDs</button>
+            <span class="save-status" id="pts-resolve-status"></span>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Department ID <span class="field-hint" style="font-weight:400">(overrides name lookup)</span></label>
+            <input class="field-input" id="pts-dept-id" type="text" placeholder="e.g. 29" style="font-family:var(--font-mono);font-size:12px" />
+          </div>
+          <div class="field-group" style="margin-top:8px">
+            <label class="field-label">Project Type ID <span class="field-hint" style="font-weight:400">(overrides type label lookup)</span></label>
+            <input class="field-input" id="pts-type-id" type="text" placeholder="e.g. 5" style="font-family:var(--font-mono);font-size:12px" />
+          </div>
+          <div class="field-group" style="margin-top:8px">
+            <label class="field-label">Status IDs to Exclude <span class="field-hint" style="font-weight:400">(comma-separated, overrides labels)</span></label>
+            <input class="field-input" id="pts-status-ids" type="text" placeholder="e.g. 5,8,12,14" style="font-family:var(--font-mono);font-size:12px" />
+          </div>
+        </div>
         <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
           <button class="btn btn-ghost" id="pts-save-filters-btn" style="font-size:12px">Save Filters</button>
           <span class="save-status" id="pts-filters-status"></span>
@@ -3274,6 +3293,9 @@ function renderProjectTimeSummary() {
       document.getElementById('pts-exclude-statuses').value  = s.excludeStatuses       || '';
       document.getElementById('pts-dept-filter').value       = s.departmentFilter      || '';
       document.getElementById('pts-type-filter').value       = s.projectTypeFilter     || '';
+      document.getElementById('pts-dept-id').value           = s.departmentId          || '';
+      document.getElementById('pts-type-id').value           = s.projectTypeId         || '';
+      document.getElementById('pts-status-ids').value        = s.statusIds             || '';
     } catch {}
   })();
 
@@ -3356,6 +3378,9 @@ function renderProjectTimeSummary() {
     excludeStatuses:       document.getElementById('pts-exclude-statuses').value.trim(),
     departmentFilter:      document.getElementById('pts-dept-filter').value.trim(),
     projectTypeFilter:     document.getElementById('pts-type-filter').value.trim(),
+    departmentId:          document.getElementById('pts-dept-id').value.trim(),
+    projectTypeId:         document.getElementById('pts-type-id').value.trim(),
+    statusIds:             document.getElementById('pts-status-ids').value.trim(),
   });
 
   // Save email settings
@@ -3385,6 +3410,33 @@ function renderProjectTimeSummary() {
       excludeStatus.className = 'save-status error';
     }
     setTimeout(() => { const el = document.getElementById('pts-exclude-status'); if (el) { el.textContent = ''; el.className = 'save-status'; } }, 5000);
+  });
+
+  // Resolve IDs button — looks up numeric Autotask IDs and fills the override fields
+  document.getElementById('pts-resolve-ids-btn').addEventListener('click', async () => {
+    const btn    = document.getElementById('pts-resolve-ids-btn');
+    const status = document.getElementById('pts-resolve-status');
+    btn.disabled = true;
+    status.textContent = 'Resolving…';
+    status.className = 'save-status';
+    try {
+      const deptName     = document.getElementById('pts-dept-filter').value.trim();
+      const typeLabel    = document.getElementById('pts-type-filter').value.trim();
+      const statusLabels = document.getElementById('pts-exclude-statuses').value
+        .split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+      const ids = await window.api.resolvePtsIds({ deptName, typeLabel, statusLabels });
+      if (ids.departmentId)  document.getElementById('pts-dept-id').value    = ids.departmentId;
+      if (ids.projectTypeId) document.getElementById('pts-type-id').value    = ids.projectTypeId;
+      if (ids.statusIds)     document.getElementById('pts-status-ids').value = ids.statusIds;
+      const found = [ids.departmentId && 'Dept', ids.projectTypeId && 'Type', ids.statusIds && 'Statuses'].filter(Boolean);
+      status.textContent = found.length ? `✓ Found: ${found.join(', ')} — click Save Filters` : 'No IDs resolved (check API permissions)';
+      status.className = found.length ? 'save-status success' : 'save-status error';
+    } catch (e) {
+      status.textContent = `Error: ${e.message}`;
+      status.className = 'save-status error';
+    }
+    btn.disabled = false;
+    setTimeout(() => { const el = document.getElementById('pts-resolve-status'); if (el) { el.textContent = ''; el.className = 'save-status'; } }, 6000);
   });
 
   // Save project filters
