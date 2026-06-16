@@ -4330,10 +4330,13 @@ function saveProjectNotesFn(notes) {
 }
 function loadProjectReportSettings() {
   const defaults = {
-    emailTo:              '',
-    emailSubject:         'Project Time Summary Report',
-    emailBody:            'Hi,\n\nPlease find this week\'s Project Time Summary Report attached.\n\nThank you,\nAnchor Network Solutions',
+    emailTo:               '',
+    emailSubject:          'Project Time Summary Report',
+    emailBody:             'Hi,\n\nPlease find this week\'s Project Time Summary Report attached.\n\nThank you,\nAnchor Network Solutions',
     excludeProjectNumbers: '',
+    excludeStatuses:       'ANS Hold\nCanceled\nCancelled\nClient Hold\nComplete\nInactive\nProposal\nQueued',
+    departmentFilter:      'Professional Services',
+    projectTypeFilter:     'Client',
   };
   try {
     const saved = JSON.parse(fs.readFileSync(PROJECT_REPORT_SETTINGS_FILE, 'utf8'));
@@ -4346,6 +4349,14 @@ function saveProjectReportSettingsFn(s) {
 
 ipcMain.handle('run-project-time-summary', async () => {
   try {
+    const rptSettings = loadProjectReportSettings();
+
+    // Build exclusion list from settings (one label per line, case-insensitive exact match)
+    const excludeStatusLabels = (rptSettings.excludeStatuses || '')
+      .split(/[\n,]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+    const deptFilterName  = (rptSettings.departmentFilter  || '').trim();
+    const typeFilterLabel = (rptSettings.projectTypeFilter || '').trim().toLowerCase();
+
     // 1. Get project field metadata — status picklist + projectType picklist
     let excludeStatusIds = [];
     let clientTypeId     = null;
@@ -4353,30 +4364,31 @@ ipcMain.handle('run-project-time-summary', async () => {
       const fieldsRes = await atFetch('/Projects/entityInformation/fields');
       const fields    = fieldsRes.fields || [];
 
-      // Exact status labels to exclude (from the report filter definition)
-      const EXCLUDE_STATUSES = /^(ans.?hold|canceled|cancelled|client.?hold|complete|inactive|proposal|queued)$/i;
       const statusField = fields.find(f => f.name === 'status');
-      if (statusField?.picklistValues) {
+      if (statusField?.picklistValues && excludeStatusLabels.length) {
         excludeStatusIds = statusField.picklistValues
-          .filter(v => EXCLUDE_STATUSES.test((v.label || '').trim()))
+          .filter(v => excludeStatusLabels.includes((v.label || '').trim().toLowerCase()))
           .map(v => Number(v.value));
       }
 
-      // Project Type = 'Client'
-      const typeField = fields.find(f => f.name === 'projectType' || f.name === 'type');
-      if (typeField?.picklistValues) {
-        const cv = typeField.picklistValues.find(v => /^client$/i.test((v.label || '').trim()));
-        if (cv) clientTypeId = Number(cv.value);
+      if (typeFilterLabel) {
+        const typeField = fields.find(f => f.name === 'projectType' || f.name === 'type');
+        if (typeField?.picklistValues) {
+          const cv = typeField.picklistValues.find(v => (v.label || '').trim().toLowerCase() === typeFilterLabel);
+          if (cv) clientTypeId = Number(cv.value);
+        }
       }
     } catch {}
 
-    // 2. Find PS department ID for client-side filtering
+    // 2. Find department ID for client-side filtering
     let psDeptId = null;
-    try {
-      const depts  = await atQuery('/Departments');
-      const psDept = depts.find(d => /professional\s*services/i.test(d.name || ''));
-      psDeptId = psDept?.id ?? null;
-    } catch {}
+    if (deptFilterName) {
+      try {
+        const depts  = await atQuery('/Departments');
+        const psDept = depts.find(d => (d.name || '').toLowerCase().includes(deptFilterName.toLowerCase()));
+        psDeptId = psDept?.id ?? null;
+      } catch {}
+    }
 
     // 3. Query projects — only API-filterable fields (status, projectType)
     const projectFilters = [];
@@ -4391,7 +4403,7 @@ ipcMain.handle('run-project-time-summary', async () => {
       const psDeptIdNum = Number(psDeptId);
       const filtered = projects.filter(p => {
         const d = p.departmentID ?? p.department ?? p.departmentId;
-        return d !== undefined ? Number(d) === psDeptIdNum : true;
+        return Number(d) === psDeptIdNum;
       });
       if (filtered.length > 0) projects = filtered;
     }

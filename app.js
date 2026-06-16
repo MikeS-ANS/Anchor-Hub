@@ -3234,6 +3234,32 @@ function renderProjectTimeSummary() {
         </div>
       </div>
 
+      <div class="settings-section" style="flex:1;min-width:260px;max-width:400px">
+        <h2 class="section-title">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M3 7h8M5 11h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+          Project Filters
+        </h2>
+        <p class="field-hint" style="margin-bottom:10px">Controls which projects are fetched from Autotask. Match these exactly to your Autotask status/department/type labels.</p>
+        <div class="field-group">
+          <label class="field-label">Exclude Statuses <span class="field-hint" style="font-weight:400">(one per line, exact label)</span></label>
+          <textarea class="field-input" id="pts-exclude-statuses" rows="6"
+            style="resize:vertical;font-family:var(--font-mono);font-size:12px"
+            placeholder="Complete&#10;Canceled&#10;Inactive"></textarea>
+        </div>
+        <div class="field-group" style="margin-top:10px">
+          <label class="field-label">Department Filter <span class="field-hint" style="font-weight:400">(leave blank = all departments)</span></label>
+          <input class="field-input" id="pts-dept-filter" type="text" placeholder="Professional Services" />
+        </div>
+        <div class="field-group" style="margin-top:10px">
+          <label class="field-label">Project Type Filter <span class="field-hint" style="font-weight:400">(leave blank = all types)</span></label>
+          <input class="field-input" id="pts-type-filter" type="text" placeholder="Client" />
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
+          <button class="btn btn-ghost" id="pts-save-filters-btn" style="font-size:12px">Save Filters</button>
+          <span class="save-status" id="pts-filters-status"></span>
+        </div>
+      </div>
+
     </div>
   `;
 
@@ -3241,10 +3267,13 @@ function renderProjectTimeSummary() {
   (async () => {
     try {
       const s = await window.api.getProjectReportSettings();
-      document.getElementById('pts-email-to').value      = s.emailTo               || '';
-      document.getElementById('pts-email-subject').value = s.emailSubject          || '';
-      document.getElementById('pts-email-body').value    = s.emailBody             || '';
-      document.getElementById('pts-exclude-nums').value  = s.excludeProjectNumbers || '';
+      document.getElementById('pts-email-to').value          = s.emailTo               || '';
+      document.getElementById('pts-email-subject').value     = s.emailSubject          || '';
+      document.getElementById('pts-email-body').value        = s.emailBody             || '';
+      document.getElementById('pts-exclude-nums').value      = s.excludeProjectNumbers || '';
+      document.getElementById('pts-exclude-statuses').value  = s.excludeStatuses       || '';
+      document.getElementById('pts-dept-filter').value       = s.departmentFilter      || '';
+      document.getElementById('pts-type-filter').value       = s.projectTypeFilter     || '';
     } catch {}
   })();
 
@@ -3319,16 +3348,21 @@ function renderProjectTimeSummary() {
     setTimeout(() => { const el = document.getElementById('pts-action-status'); if (el) { el.textContent = ''; el.className = 'save-status'; } }, 7000);
   });
 
+  const ptsSaveAllSettings = () => ({
+    emailTo:               document.getElementById('pts-email-to').value.trim(),
+    emailSubject:          document.getElementById('pts-email-subject').value.trim(),
+    emailBody:             document.getElementById('pts-email-body').value,
+    excludeProjectNumbers: document.getElementById('pts-exclude-nums').value.trim(),
+    excludeStatuses:       document.getElementById('pts-exclude-statuses').value.trim(),
+    departmentFilter:      document.getElementById('pts-dept-filter').value.trim(),
+    projectTypeFilter:     document.getElementById('pts-type-filter').value.trim(),
+  });
+
   // Save email settings
   document.getElementById('pts-save-settings-btn').addEventListener('click', async () => {
     const settingsStatus = document.getElementById('pts-settings-status');
     try {
-      await window.api.saveProjectReportSettings({
-        emailTo:               document.getElementById('pts-email-to').value.trim(),
-        emailSubject:          document.getElementById('pts-email-subject').value.trim(),
-        emailBody:             document.getElementById('pts-email-body').value,
-        excludeProjectNumbers: document.getElementById('pts-exclude-nums').value.trim(),
-      });
+      await window.api.saveProjectReportSettings(ptsSaveAllSettings());
       settingsStatus.textContent = '✓ Saved';
       settingsStatus.className = 'save-status success';
     } catch (e) {
@@ -3342,12 +3376,7 @@ function renderProjectTimeSummary() {
   document.getElementById('pts-save-exclude-btn').addEventListener('click', async () => {
     const excludeStatus = document.getElementById('pts-exclude-status');
     try {
-      await window.api.saveProjectReportSettings({
-        emailTo:               document.getElementById('pts-email-to').value.trim(),
-        emailSubject:          document.getElementById('pts-email-subject').value.trim(),
-        emailBody:             document.getElementById('pts-email-body').value,
-        excludeProjectNumbers: document.getElementById('pts-exclude-nums').value.trim(),
-      });
+      await window.api.saveProjectReportSettings(ptsSaveAllSettings());
       excludeStatus.textContent = '✓ Saved — re-fetching…';
       excludeStatus.className = 'save-status success';
       document.getElementById('pts-run-btn').click();
@@ -3356,6 +3385,20 @@ function renderProjectTimeSummary() {
       excludeStatus.className = 'save-status error';
     }
     setTimeout(() => { const el = document.getElementById('pts-exclude-status'); if (el) { el.textContent = ''; el.className = 'save-status'; } }, 5000);
+  });
+
+  // Save project filters
+  document.getElementById('pts-save-filters-btn').addEventListener('click', async () => {
+    const filtersStatus = document.getElementById('pts-filters-status');
+    try {
+      await window.api.saveProjectReportSettings(ptsSaveAllSettings());
+      filtersStatus.textContent = '✓ Saved — re-fetch to apply';
+      filtersStatus.className = 'save-status success';
+    } catch (e) {
+      filtersStatus.textContent = `Error: ${e.message}`;
+      filtersStatus.className = 'save-status error';
+    }
+    setTimeout(() => { const el = document.getElementById('pts-filters-status'); if (el) { el.textContent = ''; el.className = 'save-status'; } }, 3000);
   });
 }
 
