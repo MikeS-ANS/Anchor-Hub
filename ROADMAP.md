@@ -22,13 +22,15 @@
 | Project Time Summary | v1.3 |
 | MSC Agreements | v1.3 |
 | Sidebar Customization | v1.3 |
+| Microsoft SSO / Entra ID login | v1.4 |
+| Contract Name column (Project Time Summary) | v1.4 |
+| Microsoft profile photo in user chip | v1.4 |
 
 ---
 
 ## 🔄 In Progress
 
 - [ ] Brian's tools — port from Flask (~5 tools)
-- [ ] Contract Name column in Project Time Summary
 
 ---
 
@@ -40,8 +42,8 @@ Do these in order. The Azure backend work unlocks everything below it.
 
 ### Sprint 1 — Foundation (do these together)
 
-- [ ] **Microsoft SSO / Entra ID**
-  Everything else depends on identity. Register the app in Azure, implement MSAL in Electron, define roles (`hub.admin`, `hub.finance`, `hub.readonly`, etc.). Token cached in keychain between sessions — users see a Microsoft login once.
+- [x] **Microsoft SSO / Entra ID** *(shipped v1.4.0)*
+  MSAL PublicClientApplication with file-based token cache. Roles defined in Entra ID (`hub.admin`, `hub.standard`, `hub.readonly`). Admin consent granted tenant-wide. Profile photo pulled from Microsoft Graph.
 
 - [ ] **Modular file restructure**
   Split `main.js` and `app.js` into per-tool files (`main/ipc/toolName.js`, `renderer/views/toolName.js`). Do this alongside SSO so the new auth layer is built into a clean structure from day one. Prevents merge conflicts as contributor count grows.
@@ -98,7 +100,12 @@ Drop ideas here. Nothing too small or too big.
 
 - [ ] New employee onboarding checklist tool
 - [ ] In-app bug / feedback reporter
-- [ ] _(your idea here)_
+
+- [ ] **Tool Inventory & License Count Tracker**
+  Replace the manual quarterly tool inventory spreadsheet with an automated pull from every connected platform. The tool would have two modes:
+  - **Ad-hoc client lookup** — select any client and instantly see current license/seat counts across all integrated systems (Kaseya RMM, Pax8, BitDefender, CyberQP Elevate, Splashtop Pro, SaaS, LifeCycle Insights, Liongard, and the MSC sheet). Useful for spot-checks, renewals, or onboarding reviews without touching any source system directly.
+  - **Full quarterly snapshot** — pulls counts for every client across every system and writes a new dated tab into the shared SharePoint Excel file, matching the existing column layout exactly. Can be triggered manually by whoever runs the quarterly review or scheduled to run automatically so the file is always up to date before anyone asks for it.
+  The long-term goal is eliminating the manual "log into eight systems and type the numbers in" process entirely.
 
 ---
 
