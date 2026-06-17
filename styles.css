@@ -465,8 +465,8 @@ code.ph {
 ::-webkit-scrollbar-thumb:hover { background: #ffffff30; }
 
 /* ─── Sidebar logo ──────────────────────────────────────────────────────────── */
-.sidebar-logo { padding: 12px 14px 14px; margin-bottom: 4px; }
-.sidebar-logo img { width: 152px; height: auto; display: block; mix-blend-mode: screen; opacity: 0.92; }
+.sidebar-logo { padding: 0 10px; display: flex; align-items: center; }
+.sidebar-logo img { height: 26px; width: auto; display: block; mix-blend-mode: screen; opacity: 0.92; }
 
 /* ─── Titlebar last-run ─────────────────────────────────────────────────────── */
 .titlebar-lastrun {

@@ -106,6 +106,11 @@ contextBridge.exposeInMainWorld('api', {
   getToolVisibility:  ()    => ipcRenderer.invoke('get-tool-visibility'),
   saveToolVisibility: (vis) => ipcRenderer.invoke('save-tool-visibility', vis),
 
+  // Auth / SSO
+  authGetUser: () => ipcRenderer.invoke('auth-get-user'),
+  authLogin:   () => ipcRenderer.invoke('auth-login'),
+  authLogout:  () => ipcRenderer.invoke('auth-logout'),
+
   // Auto-updater
   restartAndInstall:  ()    => ipcRenderer.send('restart-and-install'),
   checkForUpdates:    ()    => ipcRenderer.invoke('check-for-updates'),

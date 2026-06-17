@@ -1,7 +1,136 @@
+window.onerror = (msg, src, line, col, err) => console.error('[app.js uncaught]', msg, `${src}:${line}:${col}`, err);
+window.onunhandledrejection = (e) => console.error('[app.js unhandled rejection]', e.reason);
+
 // Window controls
 document.getElementById('btn-min').addEventListener('click', () => window.api.minimize());
 document.getElementById('btn-max').addEventListener('click', () => window.api.maximize());
 document.getElementById('btn-close').addEventListener('click', () => window.api.close());
+
+// ─── Auth / SSO ───────────────────────────────────────────────────────────────
+let _currentUser = null;
+
+function renderLogin(errorMsg) {
+  document.getElementById('sidebar').style.display = 'none';
+  document.getElementById('update-banner').style.display = 'none';
+  document.getElementById('content').innerHTML = `
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+                height:100%;gap:20px;background:var(--bg)">
+      <img src="./Anchor_Logo_High.png" style="height:80px;width:auto;object-fit:contain" />
+      <div style="text-align:center">
+        <div style="font-size:22px;font-weight:700;color:var(--text);letter-spacing:-.3px">Anchor Hub</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:4px">Anchor Network Solutions</div>
+      </div>
+      ${errorMsg ? `<div style="color:var(--error);font-size:12px;max-width:280px;text-align:center">${escHtml(errorMsg)}</div>` : ''}
+      <button id="sso-login-btn" style="
+        background:#0078d4;color:#fff;border:none;border-radius:6px;
+        padding:11px 24px;font-size:13px;font-weight:600;cursor:pointer;
+        display:flex;align-items:center;gap:10px;transition:background .15s">
+        <svg width="16" height="16" viewBox="0 0 21 21" fill="none">
+          <rect width="10" height="10" fill="#f25022"/>
+          <rect x="11" width="10" height="10" fill="#7fba00"/>
+          <rect y="11" width="10" height="10" fill="#00a4ef"/>
+          <rect x="11" y="11" width="10" height="10" fill="#ffb900"/>
+        </svg>
+        Sign in with Microsoft
+      </button>
+      <div id="sso-status" style="font-size:11px;color:var(--text-muted);min-height:16px"></div>
+    </div>`;
+
+  const btn = document.getElementById('sso-login-btn');
+  btn.onmouseenter = () => btn.style.background = '#106ebe';
+  btn.onmouseleave = () => btn.style.background = '#0078d4';
+  btn.onclick = async () => {
+    btn.disabled = true;
+    btn.style.opacity = '0.65';
+    document.getElementById('sso-status').textContent = 'Opening browser for sign-in…';
+    const result = await window.api.authLogin();
+    if (result?.error) {
+      renderLogin(result.error);
+    } else if (result?.name) {
+      _currentUser = result;
+      initApp();
+    } else {
+      renderLogin('Sign-in did not complete. Please try again.');
+    }
+  };
+}
+
+function renderUserChip(user) {
+  const el = document.getElementById('titlebar-user');
+  if (!el) return;
+  const initials = user.name.split(' ').map(p => p[0]).join('').slice(0, 2).toUpperCase();
+  const avatarSmall = user.photo
+    ? `<img src="${user.photo}" style="width:22px;height:22px;border-radius:50%;object-fit:cover;flex-shrink:0" />`
+    : `<div style="width:22px;height:22px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;flex-shrink:0">${escHtml(initials)}</div>`;
+  const avatarLarge = user.photo
+    ? `<img src="${user.photo}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;flex-shrink:0" />`
+    : `<div style="width:36px;height:36px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;flex-shrink:0">${escHtml(initials)}</div>`;
+  el.innerHTML = `
+    <div id="user-chip" style="display:flex;align-items:center;gap:7px;cursor:pointer;
+         padding:3px 8px 3px 3px;border-radius:20px;transition:background .15s"
+         onmouseenter="this.style.background='var(--hover)'"
+         onmouseleave="this.style.background='transparent'">
+      ${avatarSmall}
+      <span style="font-size:11px;color:var(--text-muted);max-width:120px;
+            overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(user.name)}</span>
+    </div>
+    <div id="user-menu" style="display:none;position:absolute;top:36px;right:8px;
+         background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;
+         padding:6px;min-width:200px;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,.4)">
+      <div style="padding:10px;border-bottom:1px solid var(--border);margin-bottom:4px;display:flex;align-items:center;gap:10px">
+        ${avatarLarge}
+        <div style="min-width:0">
+          <div style="font-size:12px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(user.name)}</div>
+          <div style="font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(user.email)}</div>
+          ${user.isAdmin ? '<div style="font-size:10px;color:var(--accent);margin-top:2px">Admin</div>' : ''}
+        </div>
+      </div>
+      <div id="user-signout-btn" style="padding:6px 10px;font-size:12px;color:var(--text);
+           cursor:pointer;border-radius:5px;transition:background .15s"
+           onmouseenter="this.style.background='var(--hover)'"
+           onmouseleave="this.style.background='transparent'">Sign out</div>
+    </div>`;
+  el.style.position = 'relative';
+
+  document.getElementById('user-chip').onclick = (e) => {
+    e.stopPropagation();
+    const menu = document.getElementById('user-menu');
+    menu.style.display = menu.style.display === 'none' ? '' : 'none';
+  };
+  document.addEventListener('click', () => {
+    const menu = document.getElementById('user-menu');
+    if (menu) menu.style.display = 'none';
+  }, { capture: true });
+  document.getElementById('user-signout-btn').onclick = async () => {
+    await window.api.authLogout();
+    _currentUser = null;
+    renderLogin();
+  };
+}
+
+async function initApp() {
+  document.getElementById('sidebar').style.display = '';
+  renderUserChip(_currentUser);
+  window.api.getSidebarConfig().then(cfg => { renderSidebar(cfg); navigate('home'); });
+}
+
+// ─── Auth gate — check for existing session, show login if none ───────────────
+(async () => {
+  try {
+    const user = (typeof window.api?.authGetUser === 'function')
+      ? await window.api.authGetUser()
+      : null;
+    if (user?.name) {
+      _currentUser = user;
+      initApp();
+    } else {
+      renderLogin();
+    }
+  } catch (err) {
+    console.error('[Auth gate]', err);
+    renderLogin('Could not reach authentication service. ' + (err?.message || String(err)));
+  }
+})();
 
 const content = document.getElementById('content');
 // ─── Invoice step tracker ─────────────────────────────────────────────────────
@@ -210,8 +339,6 @@ function renderSidebar(config) {
   }
 }
 
-// Load sidebar config and render on startup
-window.api.getSidebarConfig().then(cfg => renderSidebar(cfg));
 
 // ─── Home / Dashboard ─────────────────────────────────────────────────────────
 const HOME_CARDS = [
@@ -4072,10 +4199,10 @@ if (window.api.onUpdateDownloaded) {
           <circle cx="7" cy="7" r="6" stroke="currentColor" stroke-width="1.3"/>
           <path d="M7 4v3.5l2 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
         </svg>
-        Anchor Hub ${v} is ready — restart to update
+        Anchor Hub ${v} is ready to install — this will restart the app, not your computer
       </span>
       <div class="update-banner-actions">
-        <button class="btn btn-sm update-btn-restart" onclick="window.api.restartAndInstall()">Restart Now</button>
+        <button class="btn btn-sm update-btn-restart" onclick="window.api.restartAndInstall()">Restart App Now</button>
         <button class="btn btn-sm update-btn-later" onclick="document.getElementById('update-banner').style.display='none'">Later</button>
       </div>`;
     banner.style.display = '';
@@ -5544,5 +5671,4 @@ function renderHelp() {
   }).catch(() => {});
 }
 
-// ─── Boot ─────────────────────────────────────────────────────────────────────
-navigate('home');
+// navigate('home') is called from initApp() after successful authentication
