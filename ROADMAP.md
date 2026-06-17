@@ -75,13 +75,25 @@ Specific items:
 
 ---
 
+### Sprint 2.5 — Microsoft Graph: Email & Teams
+
+These build directly on the SSO foundation already in place. No Azure backend required — just additional Graph scopes added to the MSAL config.
+
+- [ ] **Direct email sending (`Mail.Send` scope)** — Replace all `mailto:` links (currently opens Outlook) with Graph's `sendMail` endpoint. Email sends directly from the signed-in user's Exchange mailbox — Outlook doesn't need to be open. First candidate: Project Time Summary export. Longer term: any tool that produces a report can email it in one click. Optional: support sending from a shared mailbox (e.g. `hub@anchornetworksolutions.com`) with `Mail.Send.Shared`.
+
+- [ ] **Teams channel posting (`ChannelMessage.Send` scope)** — Post messages into any Teams channel the signed-in user has access to. Sends as that user. Use cases: tool completion summaries, count mismatch alerts, admin announcements pushed directly to the team channel.
+
+- [ ] **Teams incoming webhooks (no scope — just a URL)** — Simpler one-way option for automated alerts. Configure a webhook URL in Teams, paste it into Hub settings, and tools can post "Anchor Hub" bot messages to a channel. Good for scheduled tool results and notifications where posting as a named user isn't needed. Can be done before the full `ChannelMessage.Send` work.
+
+---
+
 ### Sprint 3 — Home Screen & Notifications
 
 These depend on the Azure backend being in place (run history lives in the DB, announcements come from the backend).
 
 - [ ] **Tool run schedule & status badges** — Each tool gets a configurable run frequency (daily / weekly / monthly). Last-run timestamp stored in Azure DB. Home card badge turns green (on schedule), yellow (due soon), red (overdue).
 - [ ] **Notifications center** — Bell icon with badge count. Pulls overdue tool alerts, admin announcements, and new release notes. Admins post announcements from a simple admin panel.
-- [ ] **In-app idea submission** — Button that submits to the Azure backend → routed to a Teams channel or Planner board so ideas are tracked properly.
+- [ ] **In-app idea submission** — Button that submits to the Azure backend → posts directly to a designated Teams channel via Graph (`ChannelMessage.Send`) so ideas are visible and trackable without leaving the hub.
 
 ---
 
@@ -100,6 +112,8 @@ Drop ideas here. Nothing too small or too big.
 
 - [ ] New employee onboarding checklist tool
 - [ ] In-app bug / feedback reporter
+
+- [ ] **SharePoint Contract Lookup** — Given a client name, search their SharePoint folder for a contract document, pull key fields (term dates, rates, services), and surface them inside Anchor Hub. No one needs to open SharePoint or hunt through folders. Requires `Sites.Read.All` or `Files.Read.All` Graph scope. Access is scoped to what the signed-in user can already see in SharePoint — no new permissions beyond what they have today.
 
 - [ ] **Tool Inventory & License Count Tracker**
   Replace the manual quarterly tool inventory spreadsheet with an automated pull from every connected platform. The tool would have two modes:
