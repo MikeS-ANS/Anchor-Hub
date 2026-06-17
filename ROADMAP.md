@@ -1,6 +1,8 @@
 # Anchor Hub — Roadmap
 
 > Living document. Add tool ideas here so nothing gets lost. Update status as things move.
+>
+> **Vision:** Enterprise-grade internal platform. No "simplest option" shortcuts — build it the way a SaaS company would. Azure is available and should be used properly.
 
 ---
 
@@ -32,38 +34,70 @@
 
 ## 🏗 Platform Priorities
 
-Do these in order. Don't skip ahead.
+Do these in order. The Azure backend work unlocks everything below it.
 
-### P1 — Before next release
-- [ ] **EV Code Signing Certificate** — Fixes Windows SmartScreen and AV flagging permanently. Get from DigiCert or Sectigo (~$200-400/yr). Plug into electron-builder config. Every release after this will be clean.
-- [ ] **Sentry Error Monitoring** — Free tier. Electron SDK. Gives visibility into crashes and API failures across all employee machines without waiting for someone to report it.
+---
 
-### P2 — After Brian's tools land
-- [ ] **Modular file restructure** — Split main.js and app.js into per-tool files. Each tool gets its own file under `main/ipc/` and `renderer/views/`. Prevents merge conflicts as the contributor count grows.
-- [ ] **Intune / MDM deployment** — Package the installer for Intune push so IT can deploy to new employees without a manual install step.
+### Sprint 1 — Foundation (do these together)
 
-### P3 — After restructure
-- [ ] **Microsoft SSO / Entra ID** — MSAL + Azure app registration. Define roles (admin, finance, read-only). Gate tool visibility by role. Solves API key revocation and access control in one shot.
-- [ ] **Audit trail / action log** — Log who did what and when for any action that writes data (contract updates, Excel write-backs, etc.).
+- [ ] **Microsoft SSO / Entra ID**
+  Everything else depends on identity. Register the app in Azure, implement MSAL in Electron, define roles (`hub.admin`, `hub.finance`, `hub.readonly`, etc.). Token cached in keychain between sessions — users see a Microsoft login once.
+
+- [ ] **Modular file restructure**
+  Split `main.js` and `app.js` into per-tool files (`main/ipc/toolName.js`, `renderer/views/toolName.js`). Do this alongside SSO so the new auth layer is built into a clean structure from day one. Prevents merge conflicts as contributor count grows.
+
+- [ ] **Intune / MDM deployment**
+  Package as Win32 app and push via Intune. Solves Windows SmartScreen for all managed employee machines immediately — no cert required for internal distribution.
+
+---
+
+### Sprint 2 — Azure Backend
+
+Replace all local-only storage with a proper centralized backend. The Electron app becomes a thick client that authenticates via MSAL and talks to Azure for anything that needs to be shared or audited.
+
+| Current (prototype) | Replace with |
+|---|---|
+| `keytar` per-machine secrets | **Azure Key Vault** — central, audited, revocable |
+| Local JSON settings files | **Azure App Configuration** — push config to all users instantly |
+| Local run history | **Azure SQL or Cosmos DB** — queryable, reportable |
+| No monitoring | **Application Insights** — native to Azure tenant |
+| No notifications | **Azure Function + DB** — admin posts, all users see it |
+| Email idea submissions | **Microsoft Graph → Teams channel or Planner** |
+
+Specific items:
+- [ ] **Azure Key Vault** — migrate API keys out of keytar. When someone leaves, revoke from one place.
+- [ ] **Azure App Configuration** — centralize tool settings. Admin changes a value, all machines pick it up.
+- [ ] **Azure SQL / Cosmos DB** — run history, notifications, announcements, idea submissions, audit trail.
+- [ ] **Application Insights** — replaces Sentry. Already in the Azure ecosystem.
+- [ ] **Azure Functions** — serverless API layer between the Electron app and the Azure data services.
+
+---
+
+### Sprint 3 — Home Screen & Notifications
+
+These depend on the Azure backend being in place (run history lives in the DB, announcements come from the backend).
+
+- [ ] **Tool run schedule & status badges** — Each tool gets a configurable run frequency (daily / weekly / monthly). Last-run timestamp stored in Azure DB. Home card badge turns green (on schedule), yellow (due soon), red (overdue).
+- [ ] **Notifications center** — Bell icon with badge count. Pulls overdue tool alerts, admin announcements, and new release notes. Admins post announcements from a simple admin panel.
+- [ ] **In-app idea submission** — Button that submits to the Azure backend → routed to a Teams channel or Planner board so ideas are tracked properly.
+
+---
+
+### Sprint 4 — Access Control & Polish
+
+- [ ] **Role-based tool access** — Gate tool visibility by Entra ID role. Manage access from Azure portal without touching the app. (Depends on SSO)
+- [ ] **Audit trail** — Log every significant action (who ran what, what data was changed, when) to Azure DB.
+- [ ] **Azure Trusted Signing** — ~$10/month via Azure. Gives the installer a Microsoft-backed signature and builds SmartScreen reputation over time. Covers distribution outside of Intune (shared links, new machines being set up, etc.).
+- [ ] **Central API key revocation** — Admin UI to revoke or rotate any API key across all users from one place. (Depends on Key Vault)
 
 ---
 
 ## 💡 Ideas & Backlog
 
-Drop ideas here. Nothing too small or too big — get it out of your head and into the list.
+Drop ideas here. Nothing too small or too big.
 
-### Home Screen & Notifications
-- [ ] **Tool run schedule & status badges** — Each tool gets a configurable run frequency (daily / weekly / monthly). Last-run timestamp is stored locally. Home card badge turns green (on schedule), yellow (due soon), red (overdue). Currently card colors are static — this gives them real meaning.
-- [ ] **Notifications center** — Bell icon in the top bar with a badge count. Pulls together: overdue tool alerts, new version release notes (with changelog), any announcements pushed by admins. Clicking takes you to a notifications panel.
-- [ ] **In-app idea submission** — Button on the home screen or help page that lets employees submit tool ideas directly. Submissions could go to a shared email, a Slack channel, or a logged file. Keeps ideas from getting lost in chat.
-
-### Access & Security
-- [ ] Role-based tool access per user (depends on SSO)
-- [ ] Central API key revocation — when someone leaves, one place to cut access
-
-### Tools
 - [ ] New employee onboarding checklist tool
-- [ ] In-app bug / feedback reporter so employees can report issues without messaging you directly
+- [ ] In-app bug / feedback reporter
 - [ ] _(your idea here)_
 
 ---
