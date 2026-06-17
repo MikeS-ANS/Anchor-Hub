@@ -52,10 +52,18 @@ Do these in order. Don't skip ahead.
 
 Drop ideas here. Nothing too small or too big — get it out of your head and into the list.
 
+### Home Screen & Notifications
+- [ ] **Tool run schedule & status badges** — Each tool gets a configurable run frequency (daily / weekly / monthly). Last-run timestamp is stored locally. Home card badge turns green (on schedule), yellow (due soon), red (overdue). Currently card colors are static — this gives them real meaning.
+- [ ] **Notifications center** — Bell icon in the top bar with a badge count. Pulls together: overdue tool alerts, new version release notes (with changelog), any announcements pushed by admins. Clicking takes you to a notifications panel.
+- [ ] **In-app idea submission** — Button on the home screen or help page that lets employees submit tool ideas directly. Submissions could go to a shared email, a Slack channel, or a logged file. Keeps ideas from getting lost in chat.
+
+### Access & Security
 - [ ] Role-based tool access per user (depends on SSO)
-- [ ] In-app bug / feedback reporter so employees don't have to message you
 - [ ] Central API key revocation — when someone leaves, one place to cut access
+
+### Tools
 - [ ] New employee onboarding checklist tool
+- [ ] In-app bug / feedback reporter so employees can report issues without messaging you directly
 - [ ] _(your idea here)_
 
 ---
