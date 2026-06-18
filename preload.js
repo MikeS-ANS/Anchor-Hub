@@ -111,6 +111,43 @@ contextBridge.exposeInMainWorld('api', {
   authLogin:   () => ipcRenderer.invoke('auth-login'),
   authLogout:  () => ipcRenderer.invoke('auth-logout'),
 
+  // Azure Key Vault
+  kvGetSecret: (name) => ipcRenderer.invoke('kv-get-secret', name),
+
+  // Duo Management — parent account
+  duoListAdmins:    ()     => ipcRenderer.invoke('duo-list-admins'),
+  duoFindAdmin:     (email) => ipcRenderer.invoke('duo-find-admin', email),
+  duoCreateAdmin:   (opts) => ipcRenderer.invoke('duo-create-admin', opts),
+  duoDeleteAdmin:   (id)   => ipcRenderer.invoke('duo-delete-admin', id),
+  duoFindUsers:     (username) => ipcRenderer.invoke('duo-find-users', username),
+  duoCreatePhone:   (opts) => ipcRenderer.invoke('duo-create-phone', opts),
+  duoFindPhones:    (number) => ipcRenderer.invoke('duo-find-phones', number),
+  duoAssociatePhone: (opts) => ipcRenderer.invoke('duo-associate-phone', opts),
+  duoDeletePhone:   (id)   => ipcRenderer.invoke('duo-delete-phone', id),
+  duoSendActivation: (id)  => ipcRenderer.invoke('duo-send-activation', id),
+
+  // Duo Management — sub-accounts
+  duoListSubAccounts:    ()     => ipcRenderer.invoke('duo-list-sub-accounts'),
+  duoSubFindUsers:       (opts) => ipcRenderer.invoke('duo-sub-find-users', opts),
+  duoSubCreatePhone:     (opts) => ipcRenderer.invoke('duo-sub-create-phone', opts),
+  duoSubAssociatePhone:  (opts) => ipcRenderer.invoke('duo-sub-associate-phone', opts),
+  duoSubSendActivation:  (opts) => ipcRenderer.invoke('duo-sub-send-activation', opts),
+  duoSubFindPhones:      (opts) => ipcRenderer.invoke('duo-sub-find-phones', opts),
+  duoSubDeletePhone:     (opts) => ipcRenderer.invoke('duo-sub-delete-phone', opts),
+
+  // Duo Management — account + application management
+  duoCreateAccount:           (opts) => ipcRenderer.invoke('duo-create-account', opts),
+  duoCreateParentApplication: (opts) => ipcRenderer.invoke('duo-create-parent-application', opts),
+  duoCreateSubApplication:    (opts) => ipcRenderer.invoke('duo-create-sub-application', opts),
+  duoListParentApplications:  ()     => ipcRenderer.invoke('duo-list-parent-applications'),
+  duoDeleteParentApplication: (opts) => ipcRenderer.invoke('duo-delete-parent-application', opts),
+  duoSubCreateUser:           (opts) => ipcRenderer.invoke('duo-sub-create-user', opts),
+
+  // Datto RMM
+  dattoListSites:       ()     => ipcRenderer.invoke('datto-list-sites'),
+  dattoListSiteServers: (opts) => ipcRenderer.invoke('datto-list-site-servers', opts),
+  dattoRunDuoQuickjob:  (opts) => ipcRenderer.invoke('datto-run-duo-quickjob', opts),
+
   // Auto-updater
   restartAndInstall:  ()    => ipcRenderer.send('restart-and-install'),
   checkForUpdates:    ()    => ipcRenderer.invoke('check-for-updates'),

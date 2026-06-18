@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const keytar = require('keytar');
 const fetch = require('node-fetch');
 const { PublicClientApplication } = require('@azure/msal-node');
@@ -100,6 +101,412 @@ ipcMain.handle('auth-logout', async () => {
     try { fs.unlinkSync(MSAL_CACHE_FILE); } catch {}
     return { success: true };
   } catch (e) { return { success: false, error: e.message }; }
+});
+
+// ─── Azure Key Vault ──────────────────────────────────────────────────────────
+const KV_VAULT_URL = 'https://anchor-hub-vault.vault.azure.net';
+const KV_SCOPES    = ['https://vault.azure.net/user_impersonation'];
+const _kvCache     = {};
+
+async function kvGetSecret(secretName) {
+  if (_kvCache[secretName]) return _kvCache[secretName];
+  const accounts = await msalApp.getAllAccounts();
+  if (!accounts.length) throw new Error('Not authenticated — sign in before accessing Key Vault');
+  const res = await msalApp.acquireTokenSilent({ account: accounts[0], scopes: KV_SCOPES });
+  const resp = await fetch(
+    `${KV_VAULT_URL}/secrets/${encodeURIComponent(secretName)}?api-version=7.4`,
+    { headers: { Authorization: `Bearer ${res.accessToken}` } }
+  );
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({}));
+    throw new Error(body?.error?.message || `Key Vault returned ${resp.status} for secret "${secretName}"`);
+  }
+  const data = await resp.json();
+  _kvCache[secretName] = data.value;
+  return data.value;
+}
+
+ipcMain.handle('kv-get-secret', async (_, secretName) => {
+  try { return { value: await kvGetSecret(secretName) }; }
+  catch (e) { return { error: e.message }; }
+});
+
+// ─── Duo Management API ───────────────────────────────────────────────────────
+
+// RFC 3986 percent-encoding: stricter than encodeURIComponent — also encodes ! ' ( ) *
+function duoEncode(str) {
+  return encodeURIComponent(String(str)).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+}
+
+function duoSign(ikey, skey, method, host, path, params) {
+  const date = new Date().toUTCString();
+  const canonParams = Object.keys(params).sort()
+    .map(k => `${duoEncode(k)}=${duoEncode(params[k])}`)
+    .join('&');
+  const canon = [date, method.toUpperCase(), host.toLowerCase(), path, canonParams].join('\n');
+  const sig = crypto.createHmac('sha1', skey).update(canon).digest('hex');
+  const auth = Buffer.from(`${ikey}:${sig}`).toString('base64');
+  return { date, auth };
+}
+
+async function duoRequest(ikey, skey, host, method, path, params = {}) {
+  const { date, auth } = duoSign(ikey, skey, method, host, path, params);
+  let url = `https://${host}${path}`;
+  const headers = { Authorization: `Basic ${auth}`, Date: date };
+  const opts = { method, headers };
+
+  if (method === 'GET' || method === 'DELETE') {
+    const qs = Object.keys(params).sort()
+      .map(k => `${duoEncode(k)}=${duoEncode(params[k])}`).join('&');
+    if (qs) url += `?${qs}`;
+  } else if (method === 'POST' || method === 'PUT') {
+    headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    opts.body = Object.keys(params).sort()
+      .map(k => `${duoEncode(k)}=${duoEncode(params[k])}`).join('&');
+  }
+
+  const res = await fetch(url, opts);
+  const rawText = await res.text();
+  let data;
+  try { data = JSON.parse(rawText); } catch { throw new Error(`Duo API ${res.status}: ${rawText.slice(0, 200)}`); }
+  if (data.stat !== 'OK') throw new Error(`${data.message || 'Duo API error'} (HTTP ${res.status}, code ${data.code ?? '?'})`);
+  return data.response;
+}
+
+async function getDuoAdminCreds() {
+  const [ikey, skey, host] = await Promise.all([
+    kvGetSecret('duo-admin-ikey'),
+    kvGetSecret('duo-admin-skey'),
+    kvGetSecret('duo-admin-host'),
+  ]);
+  return { ikey, skey, host };
+}
+
+ipcMain.handle('duo-list-admins', async () => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    const admins = await duoRequest(ikey, skey, host, 'GET', '/admin/v1/admins');
+    return { admins: Array.isArray(admins) ? admins : [] };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-find-admin', async (_, email) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    const all = await duoRequest(ikey, skey, host, 'GET', '/admin/v1/admins');
+    const found = (Array.isArray(all) ? all : []).filter(a =>
+      (a.email || '').toLowerCase() === email.toLowerCase()
+    );
+    return { admins: found };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-create-admin', async (_, { email, name, phone, roleId, sendEmail }) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    const params = { email, name };
+    if (phone) params.phone = phone;
+    if (roleId) params.role_id = roleId;
+    params.send_email = sendEmail ? '1' : '0';
+    const admin = await duoRequest(ikey, skey, host, 'POST', '/admin/v1/admins', params);
+    return { admin };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-delete-admin', async (_, adminId) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    await duoRequest(ikey, skey, host, 'DELETE', `/admin/v1/admins/${adminId}`);
+    return { success: true };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-find-users', async (_, username) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    const result = await duoRequest(ikey, skey, host, 'GET', '/admin/v1/users', { username });
+    const users = Array.isArray(result) ? result : (result ? [result] : []);
+    return { users };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-create-phone', async (_, { number, name }) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    const params = { number, type: 'mobile', platform: 'generic smartphone' };
+    if (name) params.name = name;
+    const phone = await duoRequest(ikey, skey, host, 'POST', '/admin/v1/phones', params);
+    return { phone };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-find-phones', async (_, number) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    const result = await duoRequest(ikey, skey, host, 'GET', '/admin/v1/phones', { number });
+    return { phones: Array.isArray(result) ? result : [] };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-associate-phone', async (_, { userId, phoneId }) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    await duoRequest(ikey, skey, host, 'POST', `/admin/v1/users/${userId}/phones`, { phone_id: phoneId });
+    return { success: true };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-delete-phone', async (_, phoneId) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    await duoRequest(ikey, skey, host, 'DELETE', `/admin/v1/phones/${phoneId}`);
+    return { success: true };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-send-activation', async (_, phoneId) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    const result = await duoRequest(ikey, skey, host, 'POST',
+      `/admin/v1/phones/${phoneId}/send_sms_activation`, { install: '1' });
+    return { result };
+  } catch (e) { return { error: e.message }; }
+});
+
+// ─── Duo sub-account helpers ──────────────────────────────────────────────────
+// Accounts API credentials are used for both the account listing AND all Admin
+// API calls scoped to child accounts. Per Duo docs, child-account Admin API
+// requests must be signed with — and sent to — the child's own api_hostname.
+
+ipcMain.handle('duo-list-sub-accounts', async () => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    const result = await duoRequest(ikey, skey, host, 'POST', '/accounts/v1/account/list');
+    const accounts = Array.isArray(result) ? result : (result ? [result] : []);
+    return { accounts };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-sub-find-users', async (_, { accountId, username }) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    const result = await duoRequest(ikey, skey, host, 'GET', '/admin/v1/users',
+      { username, account_id: accountId });
+    const users = Array.isArray(result) ? result : (result ? [result] : []);
+    return { users };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-sub-create-phone', async (_, { accountId, number, name }) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    const params = { number, type: 'mobile', platform: 'generic smartphone', account_id: accountId };
+    if (name) params.name = name;
+    const phone = await duoRequest(ikey, skey, host, 'POST', '/admin/v1/phones', params);
+    return { phone };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-sub-associate-phone', async (_, { accountId, userId, phoneId }) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    await duoRequest(ikey, skey, host, 'POST', `/admin/v1/users/${userId}/phones`,
+      { phone_id: phoneId, account_id: accountId });
+    return { success: true };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-sub-send-activation', async (_, { accountId, phoneId }) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    const result = await duoRequest(ikey, skey, host, 'POST',
+      `/admin/v1/phones/${phoneId}/send_sms_activation`,
+      { install: '1', account_id: accountId });
+    return { result };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-sub-find-phones', async (_, { accountId, number }) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    const result = await duoRequest(ikey, skey, host, 'GET', '/admin/v1/phones',
+      { number, account_id: accountId });
+    return { phones: Array.isArray(result) ? result : [] };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-sub-delete-phone', async (_, { accountId, phoneId }) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    await duoRequest(ikey, skey, host, 'DELETE', `/admin/v1/phones/${phoneId}`,
+      { account_id: accountId });
+    return { success: true };
+  } catch (e) { return { error: e.message }; }
+});
+
+// ─── Duo — account + application management ───────────────────────────────────
+ipcMain.handle('duo-create-account', async (_, { name, phone, addr1, addr2, city, state, zip, country }) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    const params = { name };
+    if (phone)   params.phone   = phone;
+    if (addr1)   params.addr1   = addr1;
+    if (addr2)   params.addr2   = addr2;
+    if (city)    params.city    = city;
+    if (state)   params.state   = state;
+    if (zip)     params.zip     = zip;
+    if (country) params.country = country;
+    const account = await duoRequest(ikey, skey, host, 'POST', '/accounts/v1/account/create', params);
+    return { account };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-create-parent-application', async (_, { name }) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    const app = await duoRequest(ikey, skey, host, 'POST', '/admin/v1/integrations', { name, type: 'rdp' });
+    app.api_hostname = app.api_hostname || host;
+    return { app };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-create-sub-application', async (_, { accountId, name }) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    const app = await duoRequest(ikey, skey, host, 'POST', '/admin/v1/integrations',
+      { name, type: 'rdp', account_id: accountId });
+    app.api_hostname = app.api_hostname || host;
+    return { app };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-list-parent-applications', async () => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    const apps = await duoRequest(ikey, skey, host, 'GET', '/admin/v1/integrations');
+    const rdpApps = (Array.isArray(apps) ? apps : []).filter(a => a.type === 'rdp');
+    return { apps: rdpApps };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-delete-parent-application', async (_, { integrationKey }) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    await duoRequest(ikey, skey, host, 'DELETE', `/admin/v1/integrations/${integrationKey}`);
+    return { success: true };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-sub-create-user', async (_, { accountId, username, realname }) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    const params = { username, account_id: accountId };
+    if (realname) params.realname = realname;
+    const user = await duoRequest(ikey, skey, host, 'POST', '/admin/v1/users', params);
+    return { user };
+  } catch (e) { return { error: e.message }; }
+});
+
+// ─── Datto RMM ────────────────────────────────────────────────────────────────
+const _dattoTokens = {};
+
+async function getDattoToken(type) {
+  const now = Date.now();
+  if (_dattoTokens[type] && _dattoTokens[type].exp > now + 60_000) {
+    return _dattoTokens[type].token;
+  }
+  const baseUrl = (await kvGetSecret('datto-rmm-url')).replace(/\/+$/, '');
+  const user    = await kvGetSecret(`datto-rmm-user-${type}`);
+  const secret  = await kvGetSecret(`datto-rmm-secret-${type}`);
+
+  // Datto OAuth: Basic auth = fixed public-client:public, API keys go in body as username/password
+  const clientCreds = Buffer.from('public-client:public').toString('base64');
+  const r = await fetch(`${baseUrl}/auth/oauth/token`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Accept': 'application/json',
+      'Authorization': `Basic ${clientCreds}`,
+    },
+    body: `grant_type=password&username=${encodeURIComponent(user)}&password=${encodeURIComponent(secret)}`,
+  });
+  const txt = await r.text();
+  let result;
+  try { result = { status: r.status, data: JSON.parse(txt) }; }
+  catch { result = { status: r.status, error: `HTTP ${r.status}: ${txt.slice(0, 300)}` }; }
+
+  if (!result.data?.access_token) {
+    const detail = result.error || `${result.data?.error_description || result.data?.error || JSON.stringify(result.data)}`;
+    throw new Error(`Datto auth failed — verify datto-rmm-user-${type} / datto-rmm-secret-${type} in Key Vault. Detail: ${detail}`);
+  }
+  const data = result.data;
+  _dattoTokens[type] = { token: data.access_token, exp: now + ((data.expires_in || 86400) * 1000) };
+  return data.access_token;
+}
+
+async function dattoRequest(type, method, urlPath, body = null) {
+  const baseUrl = (await kvGetSecret('datto-rmm-url')).replace(/\/+$/, '');
+  const token = await getDattoToken(type);
+  const opts = { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(`${baseUrl}${urlPath}`, opts);
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Datto ${res.status}: ${err}`);
+  }
+  return res.json();
+}
+
+ipcMain.handle('datto-list-sites', async () => {
+  try {
+    const data = await dattoRequest('ro', 'GET', '/api/v2/account/sites');
+    const sites = (data.sites || []).map(s => ({ uid: s.uid, name: s.name }));
+    sites.sort((a, b) => a.name.localeCompare(b.name));
+    return { sites };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('datto-list-site-servers', async (_, { siteUid }) => {
+  try {
+    const data = await dattoRequest('ro', 'GET', `/api/v2/site/${siteUid}/devices`);
+    const devices = (data.devices || [])
+      .filter(d => {
+        const cat = (d.deviceType && d.deviceType.category) || '';
+        const os  = (d.operatingSystem || '').toLowerCase();
+        return cat.toLowerCase() === 'server' || os.includes('server');
+      })
+      .map(d => ({ uid: d.uid, hostname: d.hostname, os: d.operatingSystem }));
+    devices.sort((a, b) => (a.hostname || '').localeCompare(b.hostname || ''));
+    return { devices };
+  } catch (e) { return { error: e.message }; }
+});
+
+// Cache component UID in memory for the session
+let _duoComponentUid = null;
+
+ipcMain.handle('datto-run-duo-quickjob', async (_, { deviceUid, ikey, skey, apiHostname }) => {
+  try {
+    if (!_duoComponentUid) {
+      const data = await dattoRequest('full', 'GET', '/api/v2/account/components');
+      const components = data.components || [];
+      const duo = components.find(c => c.name && c.name.includes('ANS - DUO Install'));
+      if (!duo) throw new Error('Component "ANS - DUO Install" not found in Datto RMM. Check the component name.');
+      _duoComponentUid = duo.uid;
+    }
+    const job = await dattoRequest('full', 'PUT', `/api/v2/device/${deviceUid}/quickjob`, {
+      jobName: 'ANS - DUO Install',
+      jobComponent: {
+        componentUid: _duoComponentUid,
+        variables: [
+          { name: 'IKEY', value: ikey },
+          { name: 'SKEY', value: skey },
+          { name: 'HOST', value: apiHostname },
+        ],
+      },
+    });
+    const jobUid = job?.job?.uid || job?.job?.id || null;
+    return { jobUid };
+  } catch (e) { return { error: e.message }; }
 });
 
 // ─── Auto-updater ─────────────────────────────────────────────────────────────
@@ -3512,6 +3919,7 @@ const ALL_TOOL_KEYS = [
   'contract-renewals',
   'blackpoint-processor',
   'msc-agreements',
+  'duo-management',
 ];
 
 function getDefaultSidebarConfig() {

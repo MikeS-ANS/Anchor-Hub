@@ -113,6 +113,9 @@ Drop ideas here. Nothing too small or too big.
 - [ ] New employee onboarding checklist tool
 - [ ] In-app bug / feedback reporter
 
+- [ ] **Duo Billing Tool (separate app or role-gated section)**
+  Admins who run billing should not need write access to Duo. Separate this from the Duo Management tool entirely — either a standalone tool or a role-gated read-only section. Would pull sub-account edition/telephony data from Duo and map it to Pax8 or billing records for monthly reconciliation. Requires `duo-accounts-ikey/skey` (Accounts API read) but zero write permissions on the Admin API key.
+
 - [ ] **SharePoint Contract Lookup** — Given a client name, search their SharePoint folder for a contract document, pull key fields (term dates, rates, services), and surface them inside Anchor Hub. No one needs to open SharePoint or hunt through folders. Requires `Sites.Read.All` or `Files.Read.All` Graph scope. Access is scoped to what the signed-in user can already see in SharePoint — no new permissions beyond what they have today.
 
 - [ ] **Tool Inventory & License Count Tracker**

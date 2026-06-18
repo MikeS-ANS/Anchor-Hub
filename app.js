@@ -237,6 +237,7 @@ function navigate(view) {
   else if (view === 'contract-renewals')   renderContractRenewals();
   else if (view === 'blackpoint-processor') renderBlackpointProcessor();
   else if (view === 'msc-agreements')      renderMscAgreements();
+  else if (view === 'duo-management')      renderDuoManagement();
   else if (view === 'settings') renderSettings();
   else if (view === 'help')     renderHelp();
 }
@@ -265,6 +266,8 @@ const TOOL_DEFS = [
     icon: `<rect x="1" y="2" width="14" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M4 6h4M4 9h6M4 12h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M10 8l2 2 3-3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>` },
   { key: 'msc-agreements',      label: 'MSC Agreements',
     icon: `<rect x="2" y="1" width="12" height="14" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M5 4h6M5 7h6M5 10h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="11" cy="11" r="3" fill="var(--bg,#0d0f14)" stroke="currentColor" stroke-width="1.2"/><path d="M11 9.8v1.2l.8.8" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>` },
+  { key: 'duo-management',     label: 'Duo Management',
+    icon: `<circle cx="8" cy="6" r="3" stroke="currentColor" stroke-width="1.4"/><path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="13" cy="5" r="2" fill="var(--bg,#0d0f14)" stroke="currentColor" stroke-width="1.2"/><path d="M12.3 5l.7.7 1.2-1.2" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>` },
   { key: 'contract-changes',    label: 'Autotask Contract Changes',
     icon: `<rect x="2" y="2" width="9" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M5 5.5h5M5 8.5h3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="12.5" cy="12.5" r="2.8" fill="var(--bg,#0d0f14)" stroke="currentColor" stroke-width="1.3"/><path d="M12.5 11.3v1.2l.9.9" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>` },
   { key: 'contract-renewals',   label: 'Autotask Contract Renewals',
@@ -407,6 +410,12 @@ const HOME_CARDS = [
     label: 'MSC Agreements',
     desc:  'View Managed Service Client agreement rates from your shared OneDrive file. TC Increase and S+ Increase rates are surfaced directly in the Contract Renewals tool.',
     icon:  `<svg width="24" height="24" viewBox="0 0 16 16" fill="none"><rect x="2" y="1" width="12" height="14" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M5 4h6M5 7h6M5 10h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.2" fill="var(--surface,#141720)" stroke="currentColor" stroke-width="1.2"/><path d="M12 10.8v1.2l.9.9" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  },
+  {
+    key:   'duo-management',
+    label: 'Duo Management',
+    desc:  'Manage Duo MFA for employee onboarding and offboarding. Create admin accounts, enroll phones on the anchor user across all administrative units, and send Duo Mobile activation SMS.',
+    icon:  `<svg width="24" height="24" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="6" r="3" stroke="currentColor" stroke-width="1.4"/><path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="13" cy="5" r="2" fill="var(--surface,#141720)" stroke="currentColor" stroke-width="1.2"/><path d="M12.3 5l.7.7 1.2-1.2" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   },
 ];
 
@@ -5669,6 +5678,1793 @@ function renderHelp() {
     const el = document.getElementById('help-version');
     if (el) el.textContent = v;
   }).catch(() => {});
+}
+
+// ─── Duo Management ───────────────────────────────────────────────────────────
+function renderDuoManagement() {
+  const content = document.getElementById('content');
+
+  const hasAccess = _currentUser?.roles?.includes('hub.it') ||
+                    _currentUser?.roles?.includes('hub.admin');
+
+  if (!hasAccess) {
+    content.innerHTML = `
+      <div class="tool-header"><h2>Duo Management</h2></div>
+      <div style="display:flex;align-items:center;justify-content:center;height:200px;
+                  color:var(--text-muted);font-size:14px;flex-direction:column;gap:8px;">
+        <div style="font-size:20px;">🔒</div>
+        <div>You need the <strong style="color:var(--text-primary);">hub.it</strong> role to access this tool.</div>
+      </div>`;
+    return;
+  }
+
+  let activeTab   = 'new-hire';
+  let isRunning   = false;
+  let prefillTerm = null; // { email, phone } — set by "Start Termination" from Audit
+
+  const TABS = [
+    { key: 'new-hire',    label: 'New Hire' },
+    { key: 'termination', label: 'Termination' },
+    { key: 'audit',       label: 'Audit' },
+    { key: 'new-sub',     label: 'New Sub Account' },
+    { key: 'term-sub',    label: 'Term Sub Account' },
+  ];
+
+  function render() {
+    content.innerHTML = `
+      <div class="tool-header">
+        <h2>Duo Management</h2>
+        <p class="tool-subtitle">Manage Duo MFA for employee onboarding and offboarding</p>
+      </div>
+
+      <div style="display:flex;gap:6px;margin-bottom:20px;flex-wrap:wrap;">
+        ${TABS.map(t => `
+          <button data-duo-tab="${t.key}" style="
+            padding:8px 18px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;
+            border:2px solid ${activeTab===t.key ? 'var(--accent)' : 'var(--border)'};
+            background:${activeTab===t.key ? 'rgba(99,102,241,.12)' : 'transparent'};
+            color:${activeTab===t.key ? 'var(--accent)' : 'var(--text-muted)'};
+            transition:all .15s;">
+            ${t.label}
+          </button>`).join('')}
+      </div>
+
+      <div id="duo-tab-content"></div>`;
+
+    content.querySelectorAll('[data-duo-tab]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        activeTab = btn.dataset.duoTab;
+        render();
+      });
+    });
+
+    const tc = document.getElementById('duo-tab-content');
+    if      (activeTab === 'new-hire')    renderNewHireTab(tc);
+    else if (activeTab === 'termination') renderTermTab(tc);
+    else if (activeTab === 'audit')       renderAuditTab(tc);
+    else if (activeTab === 'new-sub')     renderNewSubTab(tc);
+    else if (activeTab === 'term-sub')    renderTermSubTab(tc);
+  }
+
+  // ── Shared helpers ──────────────────────────────────────────────────────────
+  function makeLogEl(id) {
+    return `<div id="${id}" style="font-family:monospace;font-size:12px;min-height:280px;
+      max-height:420px;overflow-y:auto;background:var(--bg-secondary);border-radius:6px;
+      padding:12px;color:var(--text-muted);">Ready — fill in the form and click Run.</div>`;
+  }
+
+  function appendLog(logEl, msg, type) {
+    const colors = { error: '#f87171', success: '#4ade80', warn: '#fbbf24' };
+    const line = document.createElement('div');
+    line.style.cssText = `color:${colors[type] || 'var(--text-primary)'};margin-bottom:3px;`;
+    line.textContent = msg;
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function inputStyle() {
+    return `width:100%;box-sizing:border-box;padding:8px 10px;background:var(--bg-secondary);
+            border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:13px;`;
+  }
+
+  function labelStyle() {
+    return `font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;`;
+  }
+
+  // ── New Hire Tab ────────────────────────────────────────────────────────────
+  function renderNewHireTab(tc) {
+    tc.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        <div class="glass-card" style="padding:20px;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:16px;">Employee Details</div>
+
+          <div style="margin-bottom:12px;">
+            <label style="${labelStyle()}">Full Name</label>
+            <input id="duo-nh-name" type="text" placeholder="Jane Smith" style="${inputStyle()}">
+          </div>
+          <div style="margin-bottom:12px;">
+            <label style="${labelStyle()}">Work Email</label>
+            <input id="duo-nh-email" type="email" placeholder="jane.smith@example.com" style="${inputStyle()}">
+          </div>
+          <div style="margin-bottom:16px;">
+            <label style="${labelStyle()}">Mobile Phone Number</label>
+            <input id="duo-nh-phone" type="tel" placeholder="+13055551234" style="${inputStyle()}">
+          </div>
+
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;
+                        font-size:13px;margin-bottom:10px;">
+            <input id="duo-nh-admin-chk" type="checkbox">
+            Create as Duo Admin (parent account)
+          </label>
+          <div id="duo-admin-opts" style="display:none;margin-left:22px;padding:12px;
+               background:var(--bg-secondary);border-radius:6px;margin-bottom:14px;">
+            <label style="${labelStyle()}">Admin Role</label>
+            <select id="duo-nh-role" style="${inputStyle()}padding:7px 10px;background:#1a1d2e;color:#e8e8e8;">
+              <option value="help_desk"           style="background:#1a1d2e;color:#e8e8e8;">Help Desk</option>
+              <option value="read_only"           style="background:#1a1d2e;color:#e8e8e8;">Read-only</option>
+              <option value="user_manager"        style="background:#1a1d2e;color:#e8e8e8;">User Manager</option>
+              <option value="security_analyst"    style="background:#1a1d2e;color:#e8e8e8;">Security Analyst</option>
+              <option value="application_manager" style="background:#1a1d2e;color:#e8e8e8;">Application Manager</option>
+              <option value="service_manager"     style="background:#1a1d2e;color:#e8e8e8;">Administrator</option>
+              <option value="owner"               style="background:#1a1d2e;color:#e8e8e8;">Owner</option>
+            </select>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;
+                          font-size:13px;margin-top:10px;">
+              <input id="duo-nh-send-email" type="checkbox" checked>
+              Send activation email to new admin
+            </label>
+          </div>
+
+          <button id="duo-nh-run" style="width:100%;padding:9px;background:var(--accent);
+            border:none;border-radius:6px;color:#fff;font-size:13px;font-weight:600;cursor:pointer;">
+            Run New Hire Setup
+          </button>
+        </div>
+
+        <div class="glass-card" style="padding:20px;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:12px;">Progress</div>
+          ${makeLogEl('duo-nh-log')}
+        </div>
+      </div>`;
+
+    document.getElementById('duo-nh-admin-chk').addEventListener('change', e => {
+      document.getElementById('duo-admin-opts').style.display = e.target.checked ? '' : 'none';
+    });
+
+    document.getElementById('duo-nh-run').addEventListener('click', async () => {
+      if (isRunning) return;
+      const name      = document.getElementById('duo-nh-name').value.trim();
+      const email     = document.getElementById('duo-nh-email').value.trim();
+      const phone     = document.getElementById('duo-nh-phone').value.trim();
+      const mkAdmin   = document.getElementById('duo-nh-admin-chk').checked;
+      const roleId    = document.getElementById('duo-nh-role')?.value || 'help_desk';
+      const sendEmail = document.getElementById('duo-nh-send-email')?.checked ?? true;
+
+      if (!name || !phone) { alert('Full name and phone number are required.'); return; }
+
+      const logEl = document.getElementById('duo-nh-log');
+      logEl.innerHTML = '';
+      const log = (msg, type) => appendLog(logEl, msg, type);
+      isRunning = true;
+      document.getElementById('duo-nh-run').disabled = true;
+
+      try {
+        // Step 1 (optional) — create admin in parent account
+        if (mkAdmin) {
+          if (!email) { log('⚠ Email required to create admin — skipping admin creation.', 'warn'); }
+          else {
+            log('→ Creating Duo admin account…');
+            const r = await window.api.duoCreateAdmin({ email, name, phone, roleId, sendEmail });
+            if (r.error) log(`✗ Create admin: ${r.error}`, 'error');
+            else {
+              log(`✓ Admin created: ${r.admin.name} (${r.admin.role || roleId})`, 'success');
+              if (sendEmail) log(`  Activation email queued for ${email}`);
+            }
+          }
+        }
+
+        // Step 2 — find anchor user(s)
+        log('→ Looking up anchor user…');
+        const usersR = await window.api.duoFindUsers('anchor');
+        if (usersR.error) { log(`✗ Anchor user lookup: ${usersR.error}`, 'error'); return; }
+        if (!usersR.users.length) {
+          log('✗ No user with username "anchor" found in Duo.', 'error'); return;
+        }
+        log(`✓ Found ${usersR.users.length} anchor user(s)`);
+
+        // Step 3 — create phone
+        log(`→ Creating phone ${phone}…`);
+        const phoneR = await window.api.duoCreatePhone({ number: phone, name });
+        if (phoneR.error) { log(`✗ Create phone: ${phoneR.error}`, 'error'); return; }
+        const phoneId = phoneR.phone.phone_id;
+        log(`✓ Phone created (${phone})`);
+
+        // Step 4 — associate with each anchor user
+        for (const user of usersR.users) {
+          log(`→ Associating with anchor user (${user.user_id})…`);
+          const assocR = await window.api.duoAssociatePhone({ userId: user.user_id, phoneId });
+          if (assocR.error) log(`✗ Associate: ${assocR.error}`, 'error');
+          else log(`✓ Phone associated`, 'success');
+        }
+
+        // Step 5 — send SMS activation (parent)
+        log('→ Sending Duo Mobile activation SMS…');
+        const actR = await window.api.duoSendActivation(phoneId);
+        if (actR.error) log(`✗ Activation SMS: ${actR.error}`, 'error');
+        else log('✓ Activation SMS sent (install link included)', 'success');
+
+        // Step 6 — repeat for each sub-account
+        log('──────────────────────────────────');
+        log('→ Loading sub-accounts…');
+        const subListR = await window.api.duoListSubAccounts();
+        if (subListR.error) {
+          log(`✗ Sub-account list: ${subListR.error}`, 'error');
+        } else {
+          log(`  ${subListR.accounts.length} sub-accounts found`);
+          for (const acct of subListR.accounts) {
+            log(`→ [${acct.name}]`);
+            const suR = await window.api.duoSubFindUsers({ accountId: acct.account_id, username: 'anchor' });
+            if (suR.error) { log(`  ✗ Anchor lookup: ${suR.error}`, 'error'); continue; }
+            if (!suR.users.length) { log(`  — No anchor user found, skipping`); continue; }
+            const subUser = suR.users[0];
+
+            const spR = await window.api.duoSubCreatePhone({ accountId: acct.account_id, number: phone, name });
+            if (spR.error) { log(`  ✗ Create phone: ${spR.error}`, 'error'); continue; }
+            const subPhoneId = spR.phone.phone_id;
+
+            const saR = await window.api.duoSubAssociatePhone({ accountId: acct.account_id, userId: subUser.user_id, phoneId: subPhoneId });
+            if (saR.error) { log(`  ✗ Associate: ${saR.error}`, 'error'); continue; }
+
+            const ssR = await window.api.duoSubSendActivation({ accountId: acct.account_id, phoneId: subPhoneId });
+            if (ssR.error) { log(`  ✗ Activation SMS: ${ssR.error}`, 'error'); continue; }
+
+            log(`  ✓ Done`, 'success');
+          }
+        }
+
+        log('──────────────────────────────────');
+        log('New hire setup complete.', 'success');
+      } finally {
+        isRunning = false;
+        const btn = document.getElementById('duo-nh-run');
+        if (btn) btn.disabled = false;
+      }
+    });
+  }
+
+  // ── Termination Tab ─────────────────────────────────────────────────────────
+  function renderTermTab(tc) {
+    tc.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        <div class="glass-card" style="padding:20px;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:16px;">Employee to Remove</div>
+
+          <div style="margin-bottom:12px;">
+            <label style="${labelStyle()}">Work Email <span style="color:var(--text-muted);font-weight:400;">(for admin account deletion)</span></label>
+            <input id="duo-term-email" type="email" placeholder="jane.smith@example.com" style="${inputStyle()}">
+          </div>
+          <div style="margin-bottom:20px;">
+            <label style="${labelStyle()}">Mobile Phone Number <span style="color:var(--text-muted);font-weight:400;">(to remove from Duo)</span></label>
+            <input id="duo-term-phone" type="tel" placeholder="+13055551234" style="${inputStyle()}">
+          </div>
+
+          <div style="margin-bottom:16px;padding:10px 12px;background:#7f1d1d22;
+               border:1px solid #f8717144;border-radius:6px;font-size:12px;color:#f87171;">
+            This permanently deletes the admin account and phone from Duo. This cannot be undone.
+          </div>
+
+          <button id="duo-term-run" style="width:100%;padding:9px;background:#dc2626;
+            border:none;border-radius:6px;color:#fff;font-size:13px;font-weight:600;cursor:pointer;">
+            Run Termination
+          </button>
+        </div>
+
+        <div class="glass-card" style="padding:20px;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:12px;">Progress</div>
+          ${makeLogEl('duo-term-log')}
+        </div>
+      </div>`;
+
+    // Pre-fill if launched from Audit "Start Termination"
+    if (prefillTerm) {
+      document.getElementById('duo-term-email').value = prefillTerm.email || '';
+      document.getElementById('duo-term-phone').value = prefillTerm.phone || '';
+      prefillTerm = null;
+    }
+
+    document.getElementById('duo-term-run').addEventListener('click', async () => {
+      if (isRunning) return;
+      const email = document.getElementById('duo-term-email').value.trim();
+      const phone = document.getElementById('duo-term-phone').value.trim();
+
+      if (!email && !phone) { alert('Enter at least an email or phone number.'); return; }
+      if (!confirm(`Remove Duo access for ${email || phone}?\n\nThis cannot be undone.`)) return;
+
+      const logEl = document.getElementById('duo-term-log');
+      logEl.innerHTML = '';
+      const log = (msg, type) => appendLog(logEl, msg, type);
+      isRunning = true;
+      document.getElementById('duo-term-run').disabled = true;
+
+      try {
+        // Admin removal
+        if (email) {
+          log(`→ Looking up admin: ${email}…`);
+          const findR = await window.api.duoFindAdmin(email);
+          if (findR.error) {
+            log(`✗ Admin lookup: ${findR.error}`, 'error');
+          } else if (!findR.admins.length) {
+            log(`  No admin found with email ${email} (may already be removed)`);
+          } else {
+            for (const admin of findR.admins) {
+              log(`  Found: ${admin.name} (${admin.role || admin.role_id})`);
+              const delR = await window.api.duoDeleteAdmin(admin.admin_id);
+              if (delR.error) log(`✗ Delete admin: ${delR.error}`, 'error');
+              else log(`✓ Admin account deleted`, 'success');
+            }
+          }
+        }
+
+        // Phone removal — parent account
+        if (phone) {
+          log(`→ Looking up phone: ${phone}…`);
+          const phoneR = await window.api.duoFindPhones(phone);
+          if (phoneR.error) {
+            log(`✗ Phone lookup: ${phoneR.error}`, 'error');
+          } else if (!phoneR.phones.length) {
+            log(`  No phone found with number ${phone} (may already be removed)`);
+          } else {
+            for (const p of phoneR.phones) {
+              log(`  Found: ${p.phone_id} (${p.number})`);
+              const delR = await window.api.duoDeletePhone(p.phone_id);
+              if (delR.error) log(`✗ Delete phone: ${delR.error}`, 'error');
+              else log(`✓ Phone removed from parent account`, 'success');
+            }
+          }
+
+          // Phone removal — sub-accounts
+          log('──────────────────────────────────');
+          log('→ Removing phone from sub-accounts…');
+          const subListR = await window.api.duoListSubAccounts();
+          if (subListR.error) {
+            log(`✗ Sub-account list: ${subListR.error}`, 'error');
+          } else {
+            for (const acct of subListR.accounts) {
+              const sfR = await window.api.duoSubFindPhones({ accountId: acct.account_id, number: phone });
+              if (sfR.error) { log(`  ✗ [${acct.name}] ${sfR.error}`, 'error'); continue; }
+              if (!sfR.phones.length) { log(`  — [${acct.name}] Not found`); continue; }
+              for (const p of sfR.phones) {
+                const sdR = await window.api.duoSubDeletePhone({ accountId: acct.account_id, phoneId: p.phone_id });
+                if (sdR.error) log(`  ✗ [${acct.name}] ${sdR.error}`, 'error');
+                else log(`  ✓ [${acct.name}] Removed`, 'success');
+              }
+            }
+          }
+        }
+
+        log('──────────────────────────────────');
+        log('Termination complete.', 'success');
+      } finally {
+        isRunning = false;
+        const btn = document.getElementById('duo-term-run');
+        if (btn) btn.disabled = false;
+      }
+    });
+  }
+
+  // ── Audit Tab ────────────────────────────────────────────────────────────────
+  // Persists across tab switches — cleared only on explicit reload
+  const _auditCache = { admins: null, parentPhones: null, driftArgs: null };
+
+  function renderAuditTab(tc) {
+    tc.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:16px;">
+
+        <div class="glass-card" style="padding:20px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+            <div style="font-size:13px;font-weight:600;">Duo Administrators</div>
+            <button id="duo-load-admins" style="padding:6px 14px;background:var(--accent);
+              border:none;border-radius:6px;color:#fff;font-size:12px;cursor:pointer;">Load</button>
+          </div>
+          <div id="duo-admins-out">
+            <div style="font-size:12px;color:var(--text-muted);">Click Load to fetch current admins.</div>
+          </div>
+        </div>
+
+        <div class="glass-card" style="padding:20px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+            <div style="font-size:13px;font-weight:600;">Parent Account — Anchor Phones</div>
+            <button id="duo-load-phones" style="padding:6px 14px;background:var(--accent);
+              border:none;border-radius:6px;color:#fff;font-size:12px;cursor:pointer;">Load</button>
+          </div>
+          <div id="duo-phones-out">
+            <div style="font-size:12px;color:var(--text-muted);">Click Load to fetch phones on the anchor user.</div>
+          </div>
+        </div>
+
+        <div class="glass-card" style="padding:20px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+            <div>
+              <div style="font-size:13px;font-weight:600;">Sub-Account Phone Drift Report</div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Parent anchor phones are the source of truth. Shows missing, unactivated, and orphaned phones only.</div>
+            </div>
+            <button id="duo-load-sub-phones" style="padding:6px 14px;background:var(--accent);
+              border:none;border-radius:6px;color:#fff;font-size:12px;cursor:pointer;">Run Audit</button>
+          </div>
+          <div id="duo-sub-phones-out">
+            <div style="font-size:12px;color:var(--text-muted);">Click Run Audit to compare all sub-accounts against the parent anchor phone list.</div>
+          </div>
+        </div>
+
+      </div>`;
+
+    const TH = `text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);color:var(--text-muted);font-weight:500;font-size:12px;`;
+    const TD = `padding:6px 8px;border-bottom:1px solid var(--border)22;font-size:12px;`;
+    const BTN = `padding:3px 8px;background:none;border:1px solid var(--border);border-radius:4px;color:var(--text-muted);font-size:11px;cursor:pointer;`;
+
+    document.addEventListener('click', function _dismissDuoMenus(e) {
+      if (!e.target.closest('.duo-am') && !e.target.closest('.duo-amb')) {
+        document.querySelectorAll('.duo-am').forEach(m => m.style.display = 'none');
+      }
+    });
+
+    // ── Render helpers (called on load AND on cache restore) ──────────────────
+
+    function renderAdmins(admins) {
+      const el = document.getElementById('duo-admins-out');
+      const sorted = [...admins].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      el.innerHTML = `
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;">
+            <thead><tr>
+              <th style="${TH}">Name</th><th style="${TH}">Email</th>
+              <th style="${TH}">Role</th><th style="${TH}">Status</th><th style="${TH}"></th>
+            </tr></thead>
+            <tbody>
+              ${sorted.map((a, i) => `<tr>
+                <td style="${TD}">${a.name || '—'}</td>
+                <td style="${TD}color:var(--text-muted);">${a.email || '—'}</td>
+                <td style="${TD}">${a.role || a.role_id || '—'}</td>
+                <td style="${TD}color:${a.status === 'Active' ? '#4ade80' : '#fbbf24'};">${a.status || '—'}</td>
+                <td style="${TD}position:relative;white-space:nowrap;">
+                  <button class="duo-amb" data-i="${i}"
+                    style="background:none;border:1px solid var(--border);border-radius:4px;
+                           color:var(--text-muted);cursor:pointer;padding:1px 7px;font-size:14px;">⋯</button>
+                  <div class="duo-am" id="duo-am-${i}"
+                    style="display:none;position:absolute;right:0;top:100%;z-index:300;
+                           background:var(--bg-primary);border:1px solid var(--border);
+                           border-radius:6px;min-width:170px;box-shadow:0 4px 14px rgba(0,0,0,.5);">
+                    <button class="duo-am-term" data-email="${a.email || ''}"
+                      style="display:block;width:100%;text-align:left;padding:9px 14px;
+                             background:none;border:none;color:var(--text-primary);font-size:12px;cursor:pointer;">
+                      Start Termination
+                    </button>
+                    <button class="duo-am-del" data-id="${a.admin_id}" data-name="${(a.name||'').replace(/"/g,'')}"
+                      style="display:block;width:100%;text-align:left;padding:9px 14px;
+                             background:none;border:none;color:#f87171;font-size:12px;cursor:pointer;">
+                      Delete Admin
+                    </button>
+                  </div>
+                </td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:8px;">${sorted.length} admin(s)</div>`;
+      document.getElementById('duo-load-admins').textContent = 'Reload';
+
+      el.querySelectorAll('.duo-amb').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.stopPropagation();
+          const menu = document.getElementById(`duo-am-${btn.dataset.i}`);
+          document.querySelectorAll('.duo-am').forEach(m => { if (m !== menu) m.style.display = 'none'; });
+          menu.style.display = menu.style.display === 'none' ? '' : 'none';
+        });
+      });
+      el.querySelectorAll('.duo-am-term').forEach(btn => {
+        btn.addEventListener('click', () => {
+          prefillTerm = { email: btn.dataset.email, phone: '' };
+          activeTab = 'termination'; render();
+        });
+      });
+      el.querySelectorAll('.duo-am-del').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm(`Delete admin "${btn.dataset.name}"? This cannot be undone.`)) return;
+          const r2 = await window.api.duoDeleteAdmin(btn.dataset.id);
+          if (r2.error) alert(`Delete failed: ${r2.error}`);
+          else { _auditCache.admins = null; document.getElementById('duo-load-admins').click(); }
+        });
+      });
+    }
+
+    function renderParentPhones(phones) {
+      const el = document.getElementById('duo-phones-out');
+      if (!phones.length) {
+        el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">No phones enrolled on anchor user.</div>';
+        return;
+      }
+      el.innerHTML = `
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;">
+            <thead><tr>
+              <th style="${TH}">Name</th><th style="${TH}">Number</th>
+              <th style="${TH}">Platform</th><th style="${TH}">Activated</th>
+              <th style="${TH}">Phone ID</th><th style="${TH}"></th>
+            </tr></thead>
+            <tbody>
+              ${phones.map(p => `<tr>
+                <td style="${TD}">${p.name || '—'}</td>
+                <td style="${TD}">${p.number || '—'}</td>
+                <td style="${TD}color:var(--text-muted);">${p.platform || '—'}</td>
+                <td style="${TD}color:${p.activated ? '#4ade80' : '#fbbf24'};">${p.activated ? 'Yes' : 'No'}</td>
+                <td style="${TD}color:var(--text-muted);font-family:monospace;font-size:11px;">${p.phone_id}</td>
+                <td style="${TD}">
+                  <button class="duo-resend" data-id="${p.phone_id}" style="${BTN}">Resend SMS</button>
+                </td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:8px;">${phones.length} phone(s) enrolled</div>`;
+      document.getElementById('duo-load-phones').textContent = 'Reload';
+
+      el.querySelectorAll('.duo-resend').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          btn.disabled = true; btn.textContent = 'Sending…';
+          const r2 = await window.api.duoSendActivation(btn.dataset.id);
+          if (r2.error) { btn.textContent = 'Failed'; btn.style.color = '#f87171'; }
+          else           { btn.textContent = 'Sent ✓'; btn.style.color = '#4ade80'; }
+        });
+      });
+    }
+
+    function renderDrift(parentPhones, results, subAccounts) {
+      const el = document.getElementById('duo-sub-phones-out');
+      const btn = document.getElementById('duo-load-sub-phones');
+      const normalize = n => (n || '').replace(/\D/g, '');
+      const parentByNum = {};
+      parentPhones.forEach(p => { parentByNum[normalize(p.number)] = p; });
+
+      const ISSUE = {
+        missing:     { label: 'Missing',       color: '#f87171', bg: '#f8717118' },
+        unactivated: { label: 'Not Activated',  color: '#fbbf24', bg: '#fbbf2418' },
+        orphan:      { label: 'Not in Parent',  color: '#a78bfa', bg: '#a78bfa18' },
+      };
+
+      const dirty = results.filter(r => r.issues.length);
+      const clean = results.length - dirty.length;
+
+      if (!dirty.length) {
+        el.innerHTML = `<div style="font-size:12px;color:#4ade80;">All ${results.length} sub-accounts are in sync with the parent. No issues found.</div>`;
+        btn.disabled = false; btn.textContent = 'Re-run Audit'; return;
+      }
+
+      // Flatten all issue rows once; also build per-account phone map for Show All
+      const allRows = [];
+      dirty.forEach(({ acct, issues }) => {
+        issues.forEach(issue => allRows.push({ acctName: acct.name, acctId: acct.account_id, ...issue }));
+      });
+      // Map accountId → { acct, subPhones } for Show All mode
+      const acctDataMap = {};
+      results.forEach(r => { acctDataMap[r.acct.account_id] = r; });
+
+      const counts = { missing: 0, unactivated: 0, orphan: 0 };
+      allRows.forEach(r => { if (counts[r.type] !== undefined) counts[r.type]++; });
+
+      // Sorted account list for dropdown
+      const sortedAccts = [...results].sort((a, b) => a.acct.name.localeCompare(b.acct.name));
+
+      // State
+      let sortCol = 'account';
+      let sortDir = 'asc';
+      const activeFilters = new Set(['missing', 'unactivated', 'orphan']);
+      let searchQ = '';
+      let selectedAcctId = '';   // '' = all accounts
+      let showAllPhones = false;
+
+      const ACCT_STATUS = {
+        active:      { label: 'Active',         color: '#4ade80', bg: '#4ade8018' },
+        unactivated: { label: 'Not Activated',  color: '#fbbf24', bg: '#fbbf2418' },
+        missing:     { label: 'Missing',        color: '#f87171', bg: '#f8717118' },
+        orphan:      { label: 'Not in Parent',  color: '#a78bfa', bg: '#a78bfa18' },
+      };
+
+      // ── Scaffold ──────────────────────────────────────────────────────────────
+      el.innerHTML = `
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+          ${['missing','unactivated','orphan'].map(t => `
+            <button class="drift-chip" data-type="${t}"
+              style="padding:4px 10px;border-radius:20px;border:1px solid ${ISSUE[t].color}55;
+                     background:${ISSUE[t].bg};color:${ISSUE[t].color};font-size:11px;cursor:pointer;
+                     font-weight:500;transition:opacity .15s;">
+              ${ISSUE[t].label}
+              <span class="chip-count" style="margin-left:4px;opacity:.75;">${counts[t]}</span>
+            </button>`).join('')}
+          <div style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <select id="drift-acct-sel"
+              style="color-scheme:dark;padding:4px 8px;font-size:12px;background:#1e1e2e;
+                     border:1px solid #334155;border-radius:6px;color:#e2e8f0;
+                     cursor:pointer;outline:none;">
+              <option style="background:#1e1e2e;color:#e2e8f0;" value="">All Accounts</option>
+              ${sortedAccts.map(r => `<option style="background:#1e1e2e;color:#e2e8f0;" value="${r.acct.account_id}">${r.acct.name}</option>`).join('')}
+            </select>
+            <button id="drift-show-all" style="padding:4px 12px;border-radius:6px;
+              border:1px solid var(--border);background:var(--bg-secondary);
+              color:var(--text-muted);font-size:11px;cursor:pointer;display:none;">Show All Phones</button>
+            <input id="drift-search" placeholder="Search…"
+              style="padding:4px 10px;font-size:12px;background:var(--bg-secondary);
+                     border:1px solid var(--border);border-radius:6px;color:var(--text-primary);
+                     outline:none;width:160px;">
+            <button id="drift-fix-all" style="padding:4px 12px;border-radius:6px;border:1px solid #4ade8066;
+              background:#4ade8012;color:#4ade80;font-size:11px;cursor:pointer;font-weight:500;
+              display:none;">Fix All Missing</button>
+          </div>
+        </div>
+        <div id="drift-status" style="font-size:11px;color:var(--text-muted);margin-bottom:8px;"></div>
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;">
+            <thead id="drift-thead"><tr></tr></thead>
+            <tbody id="drift-tbody"></tbody>
+          </table>
+        </div>`;
+
+      btn.disabled = false; btn.textContent = 'Re-run Audit';
+
+      // ── Sort indicator helper ─────────────────────────────────────────────────
+      function updateSortHeaders() {
+        el.querySelectorAll('.drift-th').forEach(th => {
+          const ind = th.querySelector('.sort-ind');
+          if (!ind) return;
+          if (th.dataset.col === sortCol) {
+            ind.textContent = sortDir === 'asc' ? '▲' : '▼'; ind.style.opacity = '1';
+          } else {
+            ind.textContent = '▲▼'; ind.style.opacity = '.25';
+          }
+        });
+      }
+
+      function attachSortHeaders() {
+        el.querySelectorAll('.drift-th').forEach(th => {
+          th.addEventListener('click', () => {
+            if (sortCol === th.dataset.col) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+            else { sortCol = th.dataset.col; sortDir = 'asc'; }
+            redraw();
+          });
+        });
+      }
+
+      // ── Enroll helper ─────────────────────────────────────────────────────────
+      async function enrollPhone(b) {
+        b.disabled = true; b.textContent = 'Enrolling…';
+        const uR = await window.api.duoSubFindUsers({ accountId: b.dataset.accountId, username: 'anchor' });
+        if (uR.error || !uR.users.length) { b.disabled = false; b.textContent = 'No anchor user'; b.style.color = '#f87171'; return; }
+        const userId = uR.users[0].user_id;
+        const cpR = await window.api.duoSubCreatePhone({ accountId: b.dataset.accountId, number: b.dataset.number, name: b.dataset.empName });
+        if (cpR.error) { b.disabled = false; b.textContent = 'Create failed'; b.style.color = '#f87171'; return; }
+        const phoneId = cpR.phone.phone_id;
+        const asR = await window.api.duoSubAssociatePhone({ accountId: b.dataset.accountId, userId, phoneId });
+        if (asR.error) { b.disabled = false; b.textContent = 'Assoc. failed'; b.style.color = '#f87171'; return; }
+        const smR = await window.api.duoSubSendActivation({ accountId: b.dataset.accountId, phoneId });
+        if (smR.error) { b.textContent = 'Enrolled — SMS failed'; b.style.color = '#fbbf24'; b.title = smR.error; }
+        else            { b.textContent = 'Enrolled ✓'; b.style.color = '#4ade80'; }
+        _auditCache.driftArgs = null;
+      }
+
+      // ── Redraw ────────────────────────────────────────────────────────────────
+      function redraw() {
+        const q = searchQ.toLowerCase();
+        const isAcctMode = !!selectedAcctId;
+        const thead = document.getElementById('drift-thead').querySelector('tr');
+        const tbody = document.getElementById('drift-tbody');
+
+        if (isAcctMode && showAllPhones) {
+          // ── Show All Phones for one account ───────────────────────────────────
+          const acctData = acctDataMap[selectedAcctId];
+          const subPhones = acctData ? (acctData.subPhones || []) : [];
+          const subByNum = {};
+          subPhones.forEach(p => { subByNum[normalize(p.number)] = p; });
+
+          // Build full rows: parent phones first, then orphans
+          let fullRows = [];
+          parentPhones.forEach(pp => {
+            const num = normalize(pp.number);
+            const sp = subByNum[num];
+            if (sp) {
+              fullRows.push({ status: sp.activated ? 'active' : 'unactivated',
+                name: pp.name, number: pp.number, platform: sp.platform || '—',
+                phoneId: sp.phone_id, acctId: selectedAcctId, acctName: acctData.acct.name });
+            } else {
+              fullRows.push({ status: 'missing', name: pp.name, number: pp.number, platform: '—',
+                phoneId: null, acctId: selectedAcctId, acctName: acctData.acct.name });
+            }
+          });
+          subPhones.forEach(sp => {
+            if (!parentByNum[normalize(sp.number)]) {
+              fullRows.push({ status: 'orphan', name: sp.name || '—', number: sp.number,
+                platform: sp.platform || '—', phoneId: sp.phone_id,
+                acctId: selectedAcctId, acctName: acctData.acct.name });
+            }
+          });
+
+          if (q) fullRows = fullRows.filter(r =>
+            (r.name||'').toLowerCase().includes(q) || (r.number||'').toLowerCase().includes(q));
+
+          const colMap = { employee: 'name', number: 'number', platform: 'platform', status: 'status' };
+          if (!colMap[sortCol]) sortCol = 'employee';
+          fullRows.sort((a, b) => {
+            const va = (a[colMap[sortCol]] || '').toLowerCase();
+            const vb = (b[colMap[sortCol]] || '').toLowerCase();
+            return sortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+          });
+
+          thead.innerHTML = ['employee','number','platform','status'].map(col => `
+            <th class="drift-th" data-col="${col}" style="${TH}cursor:pointer;user-select:none;white-space:nowrap;">
+              ${col.charAt(0).toUpperCase()+col.slice(1)}
+              <span class="sort-ind" style="font-size:10px;margin-left:3px;"></span>
+            </th>`).join('') + `<th style="${TH}"></th>`;
+          attachSortHeaders(); updateSortHeaders();
+
+          const activeCnt = fullRows.filter(r => r.status === 'active').length;
+          const issueCnt  = fullRows.length - activeCnt;
+          document.getElementById('drift-status').textContent =
+            `${acctData.acct.name} · ${fullRows.length} phones · ${activeCnt} active · ${issueCnt} with issues`;
+          document.getElementById('drift-fix-all').style.display =
+            fullRows.filter(r => r.status === 'missing').length ? '' : 'none';
+
+          tbody.innerHTML = fullRows.length ? fullRows.map(r => {
+            const s = ACCT_STATUS[r.status];
+            return `<tr>
+              <td style="${TD}">${r.name}</td>
+              <td style="${TD}">${r.number}</td>
+              <td style="${TD}color:var(--text-muted);">${r.platform}</td>
+              <td style="${TD}"><span style="padding:2px 8px;border-radius:10px;background:${s.bg};
+                color:${s.color};font-size:11px;font-weight:500;">${s.label}</span></td>
+              <td style="${TD}white-space:nowrap;">
+                ${r.status === 'unactivated' ? `<button class="da" data-action="resend" style="${BTN}"
+                  data-account-id="${r.acctId}" data-phone-id="${r.phoneId}">Resend SMS</button>` : ''}
+                ${r.status === 'missing' ? `<button class="da" data-action="enroll" style="${BTN}color:#4ade80;border-color:#4ade8066;"
+                  data-account-id="${r.acctId}"
+                  data-number="${(r.number||'').replace(/"/g,'')}"
+                  data-emp-name="${(r.name||'').replace(/"/g,'')}">Enroll</button>` : ''}
+                ${r.status === 'orphan' ? `<button class="da" data-action="remove" style="${BTN}color:#f87171;border-color:#f8717166;"
+                  data-account-id="${r.acctId}" data-phone-id="${r.phoneId}"
+                  data-number="${(r.number||'').replace(/"/g,'')}"
+                  data-acct-name="${r.acctName.replace(/"/g,'')}">Remove</button>` : ''}
+              </td>
+            </tr>`;
+          }).join('') :
+          `<tr><td colspan="5" style="${TD}color:var(--text-muted);text-align:center;padding:16px;">No phones match.</td></tr>`;
+
+        } else {
+          // ── Issues / drift view ───────────────────────────────────────────────
+          const colMap = { account: 'acctName', employee: 'name', number: 'number', issue: 'type' };
+          if (!colMap[sortCol]) sortCol = 'account';
+
+          let visible = allRows.filter(r =>
+            activeFilters.has(r.type) &&
+            (!selectedAcctId || r.acctId === selectedAcctId) &&
+            (!q || r.acctName.toLowerCase().includes(q) || (r.name||'').toLowerCase().includes(q))
+          );
+          visible.sort((a, b) => {
+            const va = (a[colMap[sortCol]] || '').toLowerCase();
+            const vb = (b[colMap[sortCol]] || '').toLowerCase();
+            return sortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+          });
+
+          thead.innerHTML = ['account','employee','number','issue'].map(col => `
+            <th class="drift-th" data-col="${col}" style="${TH}cursor:pointer;user-select:none;white-space:nowrap;">
+              ${col.charAt(0).toUpperCase()+col.slice(1)}
+              <span class="sort-ind" style="font-size:10px;margin-left:3px;"></span>
+            </th>`).join('') + `<th style="${TH}"></th>`;
+          attachSortHeaders(); updateSortHeaders();
+
+          document.getElementById('drift-fix-all').style.display =
+            visible.filter(r => r.type === 'missing').length ? '' : 'none';
+          document.getElementById('drift-status').textContent =
+            `${visible.length} of ${allRows.length} issue${allRows.length !== 1 ? 's' : ''} shown  ·  ${clean} account${clean !== 1 ? 's' : ''} clean`;
+
+          tbody.innerHTML = visible.length ? visible.map(r => `
+            <tr>
+              <td style="${TD}color:var(--text-muted);">${r.acctName}</td>
+              <td style="${TD}">${r.name || '—'}</td>
+              <td style="${TD}">${r.number || '—'}</td>
+              <td style="${TD}color:${ISSUE[r.type].color};font-weight:500;">${ISSUE[r.type].label}</td>
+              <td style="${TD}white-space:nowrap;">
+                ${r.type === 'unactivated' ? `<button class="da" data-action="resend" style="${BTN}"
+                  data-account-id="${r.acctId}" data-phone-id="${r.phoneId}">Resend SMS</button>` : ''}
+                ${r.type === 'missing' ? `<button class="da" data-action="enroll" style="${BTN}color:#4ade80;border-color:#4ade8066;"
+                  data-account-id="${r.acctId}"
+                  data-number="${(r.number||'').replace(/"/g,'')}"
+                  data-emp-name="${(r.name||'').replace(/"/g,'')}">Enroll</button>` : ''}
+                ${r.type === 'orphan' ? `<button class="da" data-action="remove" style="${BTN}color:#f87171;border-color:#f8717166;"
+                  data-account-id="${r.acctId}" data-phone-id="${r.phoneId}"
+                  data-number="${(r.number||'').replace(/"/g,'')}"
+                  data-acct-name="${r.acctName.replace(/"/g,'')}">Remove</button>` : ''}
+              </td>
+            </tr>`).join('') :
+            `<tr><td colspan="5" style="${TD}color:var(--text-muted);text-align:center;padding:16px;">No issues match the current filter.</td></tr>`;
+        }
+      }
+
+      redraw();
+
+      // ── Account selector ──────────────────────────────────────────────────────
+      document.getElementById('drift-acct-sel').addEventListener('change', e => {
+        selectedAcctId = e.target.value;
+        showAllPhones = false;
+        sortCol = selectedAcctId ? 'employee' : 'account';
+        const showAllBtn = document.getElementById('drift-show-all');
+        showAllBtn.style.display = selectedAcctId ? '' : 'none';
+        showAllBtn.textContent = 'Show All Phones';
+        document.getElementById('drift-search').placeholder = selectedAcctId ? 'Search employee or number…' : 'Search…';
+        redraw();
+      });
+
+      document.getElementById('drift-show-all').addEventListener('click', () => {
+        showAllPhones = !showAllPhones;
+        sortCol = showAllPhones ? 'employee' : 'account';
+        document.getElementById('drift-show-all').textContent = showAllPhones ? 'Issues Only' : 'Show All Phones';
+        redraw();
+      });
+
+      // ── Chip toggles ──────────────────────────────────────────────────────────
+      el.querySelectorAll('.drift-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+          const t = chip.dataset.type;
+          if (activeFilters.has(t)) {
+            if (activeFilters.size === 1) return;
+            activeFilters.delete(t); chip.style.opacity = '.35';
+          } else {
+            activeFilters.add(t); chip.style.opacity = '1';
+          }
+          redraw();
+        });
+      });
+
+      // ── Search ────────────────────────────────────────────────────────────────
+      document.getElementById('drift-search').addEventListener('input', e => {
+        searchQ = e.target.value; redraw();
+      });
+
+      // ── Action buttons (event delegation) ────────────────────────────────────
+      document.getElementById('drift-tbody').addEventListener('click', async e => {
+        const b = e.target.closest('.da');
+        if (!b || b.disabled) return;
+        if (b.dataset.action === 'resend') {
+          b.disabled = true; b.textContent = 'Sending…';
+          const r2 = await window.api.duoSubSendActivation({ accountId: b.dataset.accountId, phoneId: b.dataset.phoneId });
+          if (r2.error) { b.disabled = false; b.textContent = 'Failed'; b.style.color = '#f87171'; }
+          else           { b.textContent = 'Sent ✓'; b.style.color = '#4ade80'; }
+        }
+        if (b.dataset.action === 'enroll') await enrollPhone(b);
+        if (b.dataset.action === 'remove') {
+          if (!confirm(`Remove ${b.dataset.number} from ${b.dataset.acctName}?`)) return;
+          b.disabled = true; b.textContent = 'Removing…';
+          const r2 = await window.api.duoSubDeletePhone({ accountId: b.dataset.accountId, phoneId: b.dataset.phoneId });
+          if (r2.error) { b.disabled = false; b.textContent = 'Failed'; b.style.color = '#f87171'; }
+          else           { b.textContent = 'Removed ✓'; b.style.color = '#4ade80'; _auditCache.driftArgs = null; }
+        }
+      });
+
+      // ── Fix All Missing ───────────────────────────────────────────────────────
+      document.getElementById('drift-fix-all').addEventListener('click', async () => {
+        const fixBtn = document.getElementById('drift-fix-all');
+        if (!confirm('Enroll all visible missing phones? This will create phones and send activation SMS.')) return;
+        fixBtn.disabled = true; fixBtn.textContent = 'Working…';
+        const missing = [...document.querySelectorAll('#drift-tbody .da[data-action="enroll"]')].filter(b => !b.disabled);
+        for (const b of missing) await enrollPhone(b);
+        fixBtn.disabled = false; fixBtn.textContent = 'Fix All Missing';
+      });
+    }
+
+    // ── Restore cached data on tab switch ─────────────────────────────────────
+    if (_auditCache.admins)      renderAdmins(_auditCache.admins);
+    if (_auditCache.parentPhones) renderParentPhones(_auditCache.parentPhones);
+    if (_auditCache.driftArgs)   renderDrift(..._auditCache.driftArgs);
+
+    // ── Load button handlers ───────────────────────────────────────────────────
+    document.getElementById('duo-load-admins').addEventListener('click', async () => {
+      const el = document.getElementById('duo-admins-out');
+      el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">Loading…</div>';
+      const r = await window.api.duoListAdmins();
+      if (r.error) { el.innerHTML = `<div style="font-size:12px;color:#f87171;">Error: ${r.error}</div>`; return; }
+      _auditCache.admins = r.admins;
+      renderAdmins(r.admins);
+    });
+
+    document.getElementById('duo-load-phones').addEventListener('click', async () => {
+      const el = document.getElementById('duo-phones-out');
+      el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">Loading…</div>';
+      const usersR = await window.api.duoFindUsers('anchor');
+      if (usersR.error) { el.innerHTML = `<div style="font-size:12px;color:#f87171;">Error: ${usersR.error}</div>`; return; }
+      if (!usersR.users.length) { el.innerHTML = '<div style="font-size:12px;color:#f87171;">No "anchor" user found.</div>'; return; }
+      const phones = [...(usersR.users[0].phones || [])].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      _auditCache.parentPhones = phones;
+      renderParentPhones(phones);
+    });
+
+    document.getElementById('duo-load-sub-phones').addEventListener('click', async () => {
+      const el = document.getElementById('duo-sub-phones-out');
+      const btn = document.getElementById('duo-load-sub-phones');
+      btn.disabled = true; btn.textContent = 'Running…';
+      el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">Loading parent anchor phones…</div>';
+
+      const parentR = await window.api.duoFindUsers('anchor');
+      if (parentR.error || !parentR.users.length) {
+        el.innerHTML = `<div style="font-size:12px;color:#f87171;">Could not load parent anchor user: ${parentR.error || 'not found'}</div>`;
+        btn.disabled = false; btn.textContent = 'Run Audit'; return;
+      }
+      const parentPhones = parentR.users[0].phones || [];
+      const normalize = n => (n || '').replace(/\D/g, '');
+      const parentByNum = {};
+      parentPhones.forEach(p => { parentByNum[normalize(p.number)] = p; });
+
+      el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">Loading sub-accounts…</div>';
+      const subListR = await window.api.duoListSubAccounts();
+      if (subListR.error) {
+        el.innerHTML = `<div style="font-size:12px;color:#f87171;">Error: ${subListR.error}</div>`;
+        btn.disabled = false; btn.textContent = 'Run Audit'; return;
+      }
+
+      el.innerHTML = `<div style="font-size:12px;color:var(--text-muted);">Comparing ${subListR.accounts.length} sub-accounts…</div>`;
+
+      const results = await Promise.all(subListR.accounts.map(async acct => {
+        const uR = await window.api.duoSubFindUsers({ accountId: acct.account_id, username: 'anchor' });
+        const subPhones = (uR.error || !uR.users.length) ? [] : (uR.users[0].phones || []);
+        const subByNum = {};
+        subPhones.forEach(p => { subByNum[normalize(p.number)] = p; });
+        const issues = [];
+        parentPhones.forEach(pp => {
+          const num = normalize(pp.number);
+          if (!subByNum[num]) issues.push({ type: 'missing', name: pp.name, number: pp.number, phoneId: null });
+        });
+        subPhones.forEach(sp => {
+          const num = normalize(sp.number);
+          if (parentByNum[num] && !sp.activated) issues.push({ type: 'unactivated', name: sp.name, number: sp.number, phoneId: sp.phone_id });
+        });
+        subPhones.forEach(sp => {
+          const num = normalize(sp.number);
+          if (!parentByNum[num]) issues.push({ type: 'orphan', name: sp.name, number: sp.number, phoneId: sp.phone_id });
+        });
+        return { acct, issues, subPhones };
+      }));
+
+      _auditCache.driftArgs = [parentPhones, results, subListR.accounts];
+      renderDrift(parentPhones, results, subListR.accounts);
+    });
+  }
+
+  // ── New Sub Account Tab ──────────────────────────────────────────────────────
+  function renderNewSubTab(tc) {
+    function escHtml(str) {
+      return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function initState() {
+      return {
+        scenario: null, step: 0,
+        accountType: 'parent', subAccountId: null, subAccountLabel: null,
+        newAccountName: '', newAccountId: null,
+        appName: '', app: null,
+        anchorLog: [],
+        clientUsername: '', clientPhone: '', clientSkipped: false,
+        manualConfirmed: false,
+        retireAppIkey: null,
+        siteUid: null, siteName: null, sites: [],
+        deviceUid: null, deviceName: null, devices: [],
+        jobUid: null, jobLog: [],
+        accountId: null, accountName: null,
+      };
+    }
+
+    let s = initState();
+
+    function scenarioSteps() {
+      if (s.scenario === 1) return ['choose-account','create-app','choose-server','deploy'];
+      if (s.scenario === 2) return ['create-account','create-app','setup-anchor','client-user','choose-server','deploy'];
+      if (s.scenario === 3) return ['create-account','create-app','setup-anchor','manual-notice','remove-parent-app','choose-server','deploy'];
+      return [];
+    }
+
+    function stepLabel(id) {
+      return { 'choose-account':'Choose Account','create-account':'Create Account','create-app':'Create App',
+        'setup-anchor':'Setup Anchor','client-user':'Client User','manual-notice':'Uninstall Notice',
+        'remove-parent-app':'Remove Old App','choose-server':'Select Server','deploy':'Deploy' }[id] || id;
+    }
+
+    function logBox(lines) {
+      return `<div style="background:#0d1117;border:1px solid var(--border);border-radius:6px;padding:12px;
+        font-family:monospace;font-size:12px;line-height:1.6;max-height:220px;overflow-y:auto;
+        color:#e2e8f0;white-space:pre-wrap;">${escHtml(lines.join('\n')) || '—'}</div>`;
+    }
+
+    function render() {
+      if (!s.scenario) { renderScenarioPicker(); } else { renderWizard(); }
+    }
+
+    function renderScenarioPicker() {
+      tc.innerHTML = `
+        <div class="glass-card" style="padding:24px;">
+          <div style="font-size:15px;font-weight:600;margin-bottom:4px;">New Sub Account Wizard</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:20px;">Choose the scenario that fits your situation</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;">
+            ${[
+              { n:1, icon:'&#128421;', title:'Add Duo to Server',     desc:'Deploy Duo to a server using the parent Anchor account or an existing sub-account. No new account needed.' },
+              { n:2, icon:'&#10133;',  title:'New Client Sub Account', desc:'Create a new Duo sub-account for a client, set up anchor phones, optionally add a client user, then deploy.' },
+              { n:3, icon:'&#128260;', title:'Transition to Sub Account', desc:'Move a client from the Anchor parent account to their own sub-account. Includes app creation, anchor setup, and uninstall steps.' },
+            ].map(({ n, icon, title, desc }) => `
+              <div data-scenario="${n}" style="border:1px solid var(--border);border-radius:10px;padding:20px;cursor:pointer;
+                transition:border-color 0.15s,background 0.15s;background:rgba(255,255,255,0.03);"
+                onmouseover="this.style.borderColor='var(--accent)';this.style.background='rgba(99,102,241,0.08)'"
+                onmouseout="this.style.borderColor='var(--border)';this.style.background='rgba(255,255,255,0.03)'">
+                <div style="font-size:22px;margin-bottom:10px;">${icon}</div>
+                <div style="font-size:13px;font-weight:600;color:var(--accent);margin-bottom:8px;">${title}</div>
+                <div style="font-size:12px;color:var(--text-muted);line-height:1.5;">${desc}</div>
+              </div>`).join('')}
+          </div>
+        </div>`;
+      tc.querySelectorAll('[data-scenario]').forEach(card => {
+        card.addEventListener('click', () => {
+          s.scenario = parseInt(card.dataset.scenario);
+          s.step = 0;
+          render();
+        });
+      });
+    }
+
+    function renderWizard() {
+      const steps = scenarioSteps();
+      const stepId = steps[s.step];
+      const total  = steps.length;
+      const scenarioTitles = ['','Add Duo to Server','New Client Sub Account','Transition to Sub Account'];
+
+      tc.innerHTML = `
+        <div class="glass-card" style="padding:24px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+            <div>
+              <div style="font-size:15px;font-weight:600;">${scenarioTitles[s.scenario]}</div>
+              <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Step ${s.step+1} of ${total}: ${stepLabel(stepId)}</div>
+            </div>
+            <button id="wiz-reset" style="padding:5px 12px;background:transparent;border:1px solid var(--border);
+              border-radius:6px;color:var(--text-muted);font-size:12px;cursor:pointer;">Start Over</button>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:0;margin-bottom:24px;flex-wrap:wrap;gap:4px;">
+            ${steps.map((id, i) => `
+              <div style="display:flex;align-items:center;gap:4px;">
+                <div title="${stepLabel(id)}" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+                  font-size:10px;font-weight:600;flex-shrink:0;
+                  ${i < s.step ? 'background:var(--green,#22c55e);color:#fff;' : i === s.step ? 'background:var(--accent);color:#fff;' : 'background:var(--border);color:var(--text-muted);'}">
+                  ${i < s.step ? '✓' : i+1}
+                </div>
+                ${i < steps.length-1 ? `<div style="width:16px;height:2px;background:${i < s.step ? 'var(--green,#22c55e)' : 'var(--border)'};flex-shrink:0;"></div>` : ''}
+              </div>`).join('')}
+          </div>
+
+          <div id="wiz-step-content"></div>
+
+          <div style="display:flex;gap:10px;margin-top:20px;align-items:center;">
+            ${s.step > 0 ? `<button id="wiz-back" style="padding:7px 16px;background:transparent;border:1px solid var(--border);
+              border-radius:6px;color:var(--text-muted);font-size:13px;cursor:pointer;">← Back</button>` : ''}
+            <button id="wiz-next" style="padding:7px 18px;background:var(--accent);border:none;border-radius:6px;
+              color:#fff;font-size:13px;cursor:pointer;font-weight:500;opacity:0.4;" disabled>
+              ${s.step < total-1 ? 'Continue →' : 'Finish'}
+            </button>
+          </div>
+        </div>`;
+
+      document.getElementById('wiz-reset').addEventListener('click', () => { s = initState(); render(); });
+      const backBtn = document.getElementById('wiz-back');
+      if (backBtn) backBtn.addEventListener('click', () => { s.step--; render(); });
+      const nextBtn = document.getElementById('wiz-next');
+
+      renderStep(stepId, document.getElementById('wiz-step-content'), nextBtn);
+    }
+
+    function nextStep() {
+      const steps = scenarioSteps();
+      if (s.step < steps.length - 1) { s.step++; render(); }
+    }
+
+    function enableNext(nextBtn) {
+      nextBtn.disabled = false;
+      nextBtn.style.opacity = '1';
+    }
+
+    function renderStep(stepId, el, nextBtn) {
+      switch (stepId) {
+        case 'choose-account':    renderChooseAccount(el, nextBtn);   break;
+        case 'create-account':    renderCreateAccount(el, nextBtn);   break;
+        case 'create-app':        renderCreateApp(el, nextBtn);       break;
+        case 'setup-anchor':      renderSetupAnchor(el, nextBtn);     break;
+        case 'client-user':       renderClientUser(el, nextBtn);      break;
+        case 'manual-notice':     renderManualNotice(el, nextBtn);    break;
+        case 'remove-parent-app': renderRemoveParentApp(el, nextBtn); break;
+        case 'choose-server':     renderChooseServer(el, nextBtn);    break;
+        case 'deploy':            renderDeploy(el, nextBtn);          break;
+      }
+    }
+
+    // ── choose-account (Scenario 1) ──────────────────────────────────────────
+    async function renderChooseAccount(el, nextBtn) {
+      el.innerHTML = `
+        <div style="margin-bottom:14px;">
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:8px;">Account to deploy into</label>
+          <div style="display:flex;gap:16px;">
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+              <input type="radio" name="acct-type" value="parent" ${s.accountType==='parent'?'checked':''}> Parent (Anchor)
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+              <input type="radio" name="acct-type" value="sub" ${s.accountType==='sub'?'checked':''}> Existing Sub Account
+            </label>
+          </div>
+        </div>
+        <div id="sub-picker" style="${s.accountType==='sub'?'':'display:none;'}margin-bottom:12px;">
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Select Sub Account</label>
+          <select id="sub-account-select" style="color-scheme:dark;width:100%;padding:6px 10px;background:#1e1e2e;
+            color:#e2e8f0;border:1px solid #334155;border-radius:6px;font-size:13px;">
+            <option style="background:#1e1e2e;color:#e2e8f0;" value="">Loading accounts...</option>
+          </select>
+        </div>`;
+
+      el.querySelectorAll('input[name="acct-type"]').forEach(r => {
+        r.addEventListener('change', () => {
+          s.accountType = r.value;
+          el.querySelector('#sub-picker').style.display = r.value === 'sub' ? '' : 'none';
+          if (r.value === 'parent') { s.accountId = null; s.accountName = 'Anchor (Parent)'; enableNext(nextBtn); }
+          else { nextBtn.disabled = true; nextBtn.style.opacity = '0.4'; }
+        });
+      });
+
+      const subSelect = el.querySelector('#sub-account-select');
+      const listR = await window.api.duoListSubAccounts();
+      if (listR.error) {
+        subSelect.innerHTML = `<option style="background:#1e1e2e;color:#e2e8f0;" value="">Error: ${escHtml(listR.error)}</option>`;
+      } else {
+        const accts = (listR.accounts || []).sort((a,b) => a.name.localeCompare(b.name));
+        subSelect.innerHTML = `<option style="background:#1e1e2e;color:#e2e8f0;" value="">— Select account —</option>` +
+          accts.map(a => `<option style="background:#1e1e2e;color:#e2e8f0;" value="${a.account_id}">${escHtml(a.name)}</option>`).join('');
+        if (s.subAccountId) subSelect.value = s.subAccountId;
+      }
+      subSelect.addEventListener('change', () => {
+        s.subAccountId = subSelect.value;
+        const opt = subSelect.options[subSelect.selectedIndex];
+        s.subAccountLabel = opt ? opt.textContent : '';
+        if (s.subAccountId) { nextBtn.disabled = false; nextBtn.style.opacity = '1'; }
+        else { nextBtn.disabled = true; nextBtn.style.opacity = '0.4'; }
+      });
+
+      if (s.accountType === 'parent') enableNext(nextBtn);
+
+      nextBtn.addEventListener('click', () => {
+        if (s.accountType === 'parent') {
+          s.accountId = null; s.accountName = 'Anchor (Parent)';
+        } else {
+          if (!s.subAccountId) return;
+          s.accountId = s.subAccountId; s.accountName = s.subAccountLabel;
+        }
+        if (!s.appName) s.appName = `RDP - ${s.accountName}`;
+        nextStep();
+      });
+    }
+
+    // ── create-account (Scenario 2/3) ────────────────────────────────────────
+    function renderCreateAccount(el, nextBtn) {
+      if (s.newAccountId) {
+        el.innerHTML = `
+          <div style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);border-radius:8px;padding:12px;">
+            <div style="font-size:13px;font-weight:600;color:var(--green,#22c55e);">✓ Account created: ${escHtml(s.newAccountName)}</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Account ID: ${escHtml(s.newAccountId)}</div>
+          </div>`;
+        enableNext(nextBtn);
+        nextBtn.addEventListener('click', nextStep);
+        return;
+      }
+      el.innerHTML = `
+        <div id="acct-api-section">
+          <div style="margin-bottom:12px;">
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Account Name (Company Name) *</label>
+            <input id="acct-name" type="text" value="${escHtml(s.newAccountName)}" placeholder="e.g. Acme Corp"
+              style="width:100%;padding:7px 10px;background:#1e1e2e;color:#e2e8f0;border:1px solid #334155;
+                border-radius:6px;font-size:13px;box-sizing:border-box;outline:none;">
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+            <div>
+              <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">City (optional)</label>
+              <input id="acct-city" type="text" placeholder="City"
+                style="width:100%;padding:7px 10px;background:#1e1e2e;color:#e2e8f0;border:1px solid #334155;
+                  border-radius:6px;font-size:13px;box-sizing:border-box;outline:none;">
+            </div>
+            <div>
+              <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">State (optional)</label>
+              <input id="acct-state" type="text" placeholder="State"
+                style="width:100%;padding:7px 10px;background:#1e1e2e;color:#e2e8f0;border:1px solid #334155;
+                  border-radius:6px;font-size:13px;box-sizing:border-box;outline:none;">
+            </div>
+          </div>
+          <div id="acct-error" style="display:none;color:#f87171;font-size:12px;margin-bottom:8px;font-family:monospace;"></div>
+          <div style="display:flex;gap:10px;align-items:center;">
+            <button id="create-acct-btn" style="padding:8px 18px;background:var(--accent);border:none;
+              border-radius:6px;color:#fff;font-size:13px;cursor:pointer;font-weight:500;">Create Duo Account</button>
+            <button id="acct-manual-toggle" style="padding:7px 12px;background:transparent;border:1px solid var(--border);
+              border-radius:6px;color:var(--text-muted);font-size:12px;cursor:pointer;">Enter ID manually</button>
+          </div>
+        </div>
+        <div id="acct-manual-section" style="display:none;margin-top:14px;">
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">
+            Create the account in the <a href="https://admin.duosecurity.com" target="_blank" style="color:var(--accent);">Duo admin portal</a>,
+            then paste the Account ID here.
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+            <div>
+              <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Account Name *</label>
+              <input id="manual-acct-name" type="text" value="${escHtml(s.newAccountName)}" placeholder="Company name"
+                style="width:100%;padding:7px 10px;background:#1e1e2e;color:#e2e8f0;border:1px solid #334155;
+                  border-radius:6px;font-size:13px;box-sizing:border-box;outline:none;">
+            </div>
+            <div>
+              <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Account ID *</label>
+              <input id="manual-acct-id" type="text" placeholder="e.g. DA1XXXXXXXXXXXXXXXXX"
+                style="width:100%;padding:7px 10px;background:#1e1e2e;color:#e2e8f0;border:1px solid #334155;
+                  border-radius:6px;font-size:13px;box-sizing:border-box;outline:none;">
+            </div>
+          </div>
+          <div id="manual-acct-error" style="display:none;color:#f87171;font-size:12px;margin-bottom:8px;"></div>
+          <button id="manual-acct-btn" style="padding:8px 18px;background:var(--accent);border:none;
+            border-radius:6px;color:#fff;font-size:13px;cursor:pointer;font-weight:500;">Use This Account</button>
+        </div>`;
+
+      el.querySelector('#acct-name').addEventListener('input', e => { s.newAccountName = e.target.value.trim(); });
+
+      el.querySelector('#acct-manual-toggle').addEventListener('click', () => {
+        const api = el.querySelector('#acct-api-section');
+        const manual = el.querySelector('#acct-manual-section');
+        const isManual = manual.style.display !== 'none';
+        manual.style.display = isManual ? 'none' : '';
+        api.style.display = isManual ? '' : 'none';
+        el.querySelector('#acct-manual-toggle').textContent = isManual ? 'Enter ID manually' : 'Try API creation';
+      });
+
+      el.querySelector('#create-acct-btn').addEventListener('click', async () => {
+        const name  = el.querySelector('#acct-name').value.trim();
+        const city  = el.querySelector('#acct-city').value.trim();
+        const state = el.querySelector('#acct-state').value.trim();
+        const errEl = el.querySelector('#acct-error');
+        if (!name) { errEl.style.display=''; errEl.textContent='Account name is required.'; return; }
+        const btn = el.querySelector('#create-acct-btn');
+        btn.disabled = true; btn.textContent = 'Creating...'; errEl.style.display = 'none';
+        const params = { name };
+        if (city)  params.city  = city;
+        if (state) params.state = state;
+        const r = await window.api.duoCreateAccount(params);
+        if (r.error) {
+          errEl.style.display=''; errEl.textContent=r.error;
+          btn.disabled=false; btn.textContent='Create Duo Account'; return;
+        }
+        s.newAccountId = r.account.account_id;
+        s.newAccountName = name;
+        s.accountId = s.newAccountId;
+        s.accountName = name;
+        if (!s.appName) s.appName = `RDP - ${name}`;
+        renderCreateAccount(el, nextBtn);
+      });
+
+      el.querySelector('#manual-acct-btn').addEventListener('click', () => {
+        const name = el.querySelector('#manual-acct-name').value.trim();
+        const id   = el.querySelector('#manual-acct-id').value.trim();
+        const errEl = el.querySelector('#manual-acct-error');
+        if (!name) { errEl.style.display=''; errEl.textContent='Account name is required.'; return; }
+        if (!id)   { errEl.style.display=''; errEl.textContent='Account ID is required.'; return; }
+        s.newAccountId = id;
+        s.newAccountName = name;
+        s.accountId = id;
+        s.accountName = name;
+        if (!s.appName) s.appName = `RDP - ${name}`;
+        renderCreateAccount(el, nextBtn);
+      });
+    }
+
+    // ── create-app ───────────────────────────────────────────────────────────
+    function renderCreateApp(el, nextBtn) {
+      if (s.app) {
+        el.innerHTML = `
+          <div style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);border-radius:8px;padding:14px;">
+            <div style="font-size:13px;font-weight:600;color:var(--green,#22c55e);margin-bottom:8px;">&#10003; Application: ${escHtml(s.app.name)}</div>
+            <div style="font-size:12px;display:grid;gap:4px;font-family:monospace;">
+              <div><span style="color:var(--text-muted);">IKEY: </span>${escHtml(s.app.integration_key)}</div>
+              <div><span style="color:var(--text-muted);">SKEY: </span>${escHtml(s.app.secret_key)}</div>
+              <div><span style="color:var(--text-muted);">HOST: </span>${escHtml(s.app.api_hostname)}</div>
+            </div>
+          </div>`;
+        enableNext(nextBtn);
+        nextBtn.addEventListener('click', nextStep);
+        return;
+      }
+      const acctLabel = s.accountName ? ` in <strong>${escHtml(s.accountName)}</strong>` : ' in the parent Anchor account';
+      el.innerHTML = `
+        <div style="margin-bottom:12px;">
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Application Name *</label>
+          <input id="app-name-input" type="text" value="${escHtml(s.appName)}" placeholder="e.g. RDP - Acme Corp"
+            style="width:100%;padding:7px 10px;background:#1e1e2e;color:#e2e8f0;border:1px solid #334155;
+              border-radius:6px;font-size:13px;box-sizing:border-box;outline:none;">
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Creates a Duo RDP application${acctLabel}.</div>
+        </div>
+        <div id="app-error" style="display:none;color:#f87171;font-size:12px;margin-bottom:8px;font-family:monospace;white-space:pre-wrap;"></div>
+        <button id="create-app-btn" style="padding:8px 18px;background:var(--accent);border:none;
+          border-radius:6px;color:#fff;font-size:13px;cursor:pointer;font-weight:500;">Create Application</button>`;
+
+      el.querySelector('#app-name-input').addEventListener('input', e => { s.appName = e.target.value.trim(); });
+
+      el.querySelector('#create-app-btn').addEventListener('click', async () => {
+        const name = el.querySelector('#app-name-input').value.trim();
+        const errEl = el.querySelector('#app-error');
+        if (!name) { errEl.style.display=''; errEl.textContent='Application name is required.'; return; }
+        const btn = el.querySelector('#create-app-btn');
+        btn.disabled=true; btn.textContent='Creating...'; errEl.style.display='none';
+        const r = s.accountId
+          ? await window.api.duoCreateSubApplication({ accountId: s.accountId, name })
+          : await window.api.duoCreateParentApplication({ name });
+        if (r.error) {
+          errEl.style.display=''; errEl.textContent=r.error;
+          btn.disabled=false; btn.textContent='Create Application';
+          return;
+        }
+        s.app = { name, integration_key: r.app.integration_key, secret_key: r.app.secret_key, api_hostname: r.app.api_hostname };
+        renderCreateApp(el, nextBtn);
+      });
+    }
+
+    // ── setup-anchor ─────────────────────────────────────────────────────────
+    async function renderSetupAnchor(el, nextBtn) {
+      if (s.anchorLog.length && s.anchorLog[s.anchorLog.length-1] === 'Done.') {
+        el.innerHTML = `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Anchor setup complete:</div>${logBox(s.anchorLog)}`;
+        enableNext(nextBtn); nextBtn.addEventListener('click', nextStep); return;
+      }
+      el.innerHTML = `
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">
+          Copying parent anchor phones to the new sub-account…
+        </div>
+        <div id="anchor-log-box" style="background:#0d1117;border:1px solid var(--border);border-radius:6px;
+          padding:12px;font-family:monospace;font-size:12px;line-height:1.6;max-height:220px;overflow-y:auto;
+          color:#e2e8f0;white-space:pre-wrap;"></div>`;
+
+      const logEl = el.querySelector('#anchor-log-box');
+      function addLog(line) {
+        s.anchorLog.push(line);
+        logEl.textContent += (logEl.textContent ? '\n' : '') + line;
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      try {
+        addLog('Fetching parent anchor phones...');
+        const parentR = await window.api.duoFindUsers('anchor');
+        if (parentR.error) throw new Error(parentR.error);
+        if (!parentR.users || !parentR.users.length) throw new Error('No anchor user found in parent account');
+        const parentPhones = (parentR.users[0].phones || []).sort((a,b)=>(a.number||'').localeCompare(b.number||''));
+        addLog(`Found ${parentPhones.length} phone(s) in parent account`);
+
+        addLog('Looking up anchor user in sub-account...');
+        const subUserR = await window.api.duoSubFindUsers({ accountId: s.accountId, username: 'anchor' });
+        let subUserId;
+        if (!subUserR.error && subUserR.users && subUserR.users.length) {
+          subUserId = subUserR.users[0].user_id;
+          addLog('Anchor user already exists');
+        } else {
+          addLog('Creating anchor user...');
+          const createR = await window.api.duoSubCreateUser({ accountId: s.accountId, username: 'anchor', realname: 'Anchor User' });
+          if (createR.error) throw new Error(`Create user failed: ${createR.error}`);
+          subUserId = createR.user.user_id;
+          addLog('Anchor user created');
+        }
+
+        for (const phone of parentPhones) {
+          const num = phone.number;
+          addLog(`Enrolling ${num}...`);
+          const createR = await window.api.duoSubCreatePhone({ accountId: s.accountId, number: num });
+          if (createR.error) { addLog(`  ✗ Create failed: ${createR.error}`); continue; }
+          const phoneId = createR.phone.phone_id;
+          const assocR  = await window.api.duoSubAssociatePhone({ accountId: s.accountId, userId: subUserId, phoneId });
+          if (assocR.error) { addLog(`  ✗ Associate failed: ${assocR.error}`); continue; }
+          const smsR = await window.api.duoSubSendActivation({ accountId: s.accountId, phoneId });
+          addLog(smsR.error ? `  ~ Enrolled (SMS failed: ${smsR.error})` : '  ✓ Enrolled + activation SMS sent');
+        }
+
+        addLog('Done.');
+        enableNext(nextBtn); nextBtn.addEventListener('click', nextStep);
+
+      } catch (e) {
+        addLog(`ERROR: ${e.message}`);
+        el.insertAdjacentHTML('beforeend', `
+          <div style="margin-top:10px;">
+            <button id="anchor-retry" style="padding:7px 14px;background:var(--accent);border:none;
+              border-radius:6px;color:#fff;font-size:12px;cursor:pointer;">Retry</button>
+          </div>`);
+        el.querySelector('#anchor-retry').addEventListener('click', () => { s.anchorLog=[]; renderSetupAnchor(el, nextBtn); });
+      }
+    }
+
+    // ── client-user (Scenario 2) ─────────────────────────────────────────────
+    function renderClientUser(el, nextBtn) {
+      if (s.clientSkipped || s.clientUser) {
+        el.innerHTML = s.clientUser
+          ? `<div style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);border-radius:8px;padding:12px;">
+               <div style="font-size:13px;font-weight:600;color:var(--green,#22c55e);">✓ Client user set up: ${escHtml(s.clientUser)}</div>
+             </div>`
+          : `<div style="font-size:13px;color:var(--text-muted);">Skipped — client end user can be added later in the Duo portal.</div>`;
+        enableNext(nextBtn); nextBtn.addEventListener('click', nextStep); return;
+      }
+      el.innerHTML = `
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;">
+          Optionally add a client end user now. You can also do this later in the Duo admin portal.
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+          <div>
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Username</label>
+            <input id="client-uname" type="text" value="${escHtml(s.clientUsername)}" placeholder="jdoe or jdoe@acme.com"
+              style="width:100%;padding:7px 10px;background:#1e1e2e;color:#e2e8f0;border:1px solid #334155;
+                border-radius:6px;font-size:13px;box-sizing:border-box;outline:none;">
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Phone Number</label>
+            <input id="client-phone" type="text" value="${escHtml(s.clientPhone)}" placeholder="+15551234567"
+              style="width:100%;padding:7px 10px;background:#1e1e2e;color:#e2e8f0;border:1px solid #334155;
+                border-radius:6px;font-size:13px;box-sizing:border-box;outline:none;">
+          </div>
+        </div>
+        <div id="client-error" style="display:none;color:#f87171;font-size:12px;margin-bottom:8px;"></div>
+        <div style="display:flex;gap:10px;">
+          <button id="client-setup-btn" style="padding:7px 16px;background:var(--accent);border:none;
+            border-radius:6px;color:#fff;font-size:13px;cursor:pointer;font-weight:500;">Setup Client User</button>
+          <button id="client-skip-btn" style="padding:7px 14px;background:transparent;border:1px solid var(--border);
+            border-radius:6px;color:var(--text-muted);font-size:13px;cursor:pointer;">Skip for Now</button>
+        </div>`;
+
+      el.querySelector('#client-uname').addEventListener('input',  e => { s.clientUsername = e.target.value; });
+      el.querySelector('#client-phone').addEventListener('input',  e => { s.clientPhone    = e.target.value; });
+      el.querySelector('#client-skip-btn').addEventListener('click', () => { s.clientSkipped=true; nextStep(); });
+
+      el.querySelector('#client-setup-btn').addEventListener('click', async () => {
+        const username = el.querySelector('#client-uname').value.trim();
+        const phone    = el.querySelector('#client-phone').value.trim();
+        const errEl    = el.querySelector('#client-error');
+        if (!username) { errEl.style.display=''; errEl.textContent='Username is required.'; return; }
+        if (!phone)    { errEl.style.display=''; errEl.textContent='Phone number is required.'; return; }
+        const btn = el.querySelector('#client-setup-btn');
+        btn.disabled=true; btn.textContent='Setting up...'; errEl.style.display='none';
+
+        const userR = await window.api.duoSubCreateUser({ accountId: s.accountId, username });
+        if (userR.error) { errEl.style.display=''; errEl.textContent=`Create user: ${userR.error}`; btn.disabled=false; btn.textContent='Setup Client User'; return; }
+
+        const phoneR = await window.api.duoSubCreatePhone({ accountId: s.accountId, number: phone });
+        if (phoneR.error) { errEl.style.display=''; errEl.textContent=`Create phone: ${phoneR.error}`; btn.disabled=false; btn.textContent='Setup Client User'; return; }
+
+        const phoneId = phoneR.phone.phone_id;
+        const assocR  = await window.api.duoSubAssociatePhone({ accountId: s.accountId, userId: userR.user.user_id, phoneId });
+        if (assocR.error) { errEl.style.display=''; errEl.textContent=`Associate: ${assocR.error}`; btn.disabled=false; btn.textContent='Setup Client User'; return; }
+
+        await window.api.duoSubSendActivation({ accountId: s.accountId, phoneId });
+        s.clientUser = username;
+        renderClientUser(el, nextBtn);
+      });
+    }
+
+    // ── manual-notice (Scenario 3) ───────────────────────────────────────────
+    function renderManualNotice(el, nextBtn) {
+      el.innerHTML = `
+        <div style="background:rgba(251,146,60,0.1);border:1px solid rgba(251,146,60,0.4);border-radius:8px;padding:16px;margin-bottom:16px;">
+          <div style="font-size:13px;font-weight:600;color:#fb923c;margin-bottom:10px;">&#9888; Manual Action Required Before Continuing</div>
+          <div style="font-size:12px;color:#e2e8f0;line-height:1.8;">
+            1. RDP into the target server<br>
+            2. Uninstall <strong>Duo Authentication for Windows Logon</strong> (Programs and Features)<br>
+            3. Reboot the server<br>
+            4. Return here and check the box below
+          </div>
+          <div style="margin-top:12px;">
+            <a href="https://anchornetworksolutions.sharepoint.com/sites/Intranet/_layouts/15/DocIdRedir.aspx?ID=ANCHOR-402312107-6558"
+              target="_blank" style="color:var(--accent);font-size:12px;text-decoration:none;">
+              &#128196; KB: Adding DUO to a Server &#8594;
+            </a>
+          </div>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;user-select:none;">
+          <input type="checkbox" id="manual-confirm" ${s.manualConfirmed?'checked':''}>
+          I have uninstalled Duo and rebooted the server
+        </label>`;
+
+      nextBtn.disabled = !s.manualConfirmed; nextBtn.style.opacity = s.manualConfirmed ? '1' : '0.4';
+      el.querySelector('#manual-confirm').addEventListener('change', e => {
+        s.manualConfirmed = e.target.checked;
+        nextBtn.disabled = !s.manualConfirmed; nextBtn.style.opacity = s.manualConfirmed ? '1' : '0.4';
+      });
+      nextBtn.addEventListener('click', () => { if (s.manualConfirmed) nextStep(); });
+    }
+
+    // ── remove-parent-app (Scenario 3) ───────────────────────────────────────
+    async function renderRemoveParentApp(el, nextBtn) {
+      el.innerHTML = `
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">
+          Select the parent account RDP application that was used for this client. Deleting it removes those credentials from the parent account.
+        </div>
+        <div id="rpa-loading" style="font-size:12px;color:var(--text-muted);">Loading parent applications...</div>
+        <div id="rpa-content" style="display:none;">
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">RDP Application to Delete</label>
+          <select id="parent-app-sel" style="color-scheme:dark;width:100%;padding:6px 10px;background:#1e1e2e;
+            color:#e2e8f0;border:1px solid #334155;border-radius:6px;font-size:13px;margin-bottom:12px;">
+            <option style="background:#1e1e2e;color:#e2e8f0;" value="">— Select application —</option>
+          </select>
+          <div id="rpa-error" style="display:none;color:#f87171;font-size:12px;margin-bottom:8px;"></div>
+          <div style="display:flex;gap:10px;">
+            <button id="delete-app-btn" disabled style="padding:7px 16px;background:#dc2626;border:none;
+              border-radius:6px;color:#fff;font-size:13px;cursor:pointer;opacity:0.4;">Delete Application</button>
+            <button id="skip-delete-btn" style="padding:7px 14px;background:transparent;border:1px solid var(--border);
+              border-radius:6px;color:var(--text-muted);font-size:13px;cursor:pointer;">Skip</button>
+          </div>
+        </div>`;
+
+      const appsR = await window.api.duoListParentApplications();
+      el.querySelector('#rpa-loading').style.display = 'none';
+      el.querySelector('#rpa-content').style.display = '';
+
+      const sel = el.querySelector('#parent-app-sel');
+      if (appsR.error) {
+        sel.innerHTML = `<option style="background:#1e1e2e;color:#e2e8f0;" value="">Error: ${escHtml(appsR.error)}</option>`;
+      } else {
+        const apps = (appsR.apps || []).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+        sel.innerHTML = `<option style="background:#1e1e2e;color:#e2e8f0;" value="">— Select application —</option>` +
+          apps.map(a => `<option style="background:#1e1e2e;color:#e2e8f0;" value="${a.integration_key}">${escHtml(a.name)}</option>`).join('');
+        if (s.retireAppIkey) sel.value = s.retireAppIkey;
+      }
+
+      const deleteBtn = el.querySelector('#delete-app-btn');
+      sel.addEventListener('change', () => {
+        s.retireAppIkey = sel.value;
+        deleteBtn.disabled = !sel.value; deleteBtn.style.opacity = sel.value ? '1' : '0.4';
+      });
+
+      el.querySelector('#skip-delete-btn').addEventListener('click', () => nextStep());
+
+      deleteBtn.addEventListener('click', async () => {
+        if (!s.retireAppIkey) return;
+        const errEl = el.querySelector('#rpa-error');
+        deleteBtn.disabled=true; deleteBtn.textContent='Deleting...'; errEl.style.display='none';
+        const r = await window.api.duoDeleteParentApplication({ integrationKey: s.retireAppIkey });
+        if (r.error) {
+          errEl.style.display=''; errEl.textContent=r.error;
+          deleteBtn.disabled=false; deleteBtn.textContent='Delete Application'; return;
+        }
+        el.querySelector('#rpa-content').innerHTML = `
+          <div style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);border-radius:8px;padding:12px;">
+            <div style="font-size:13px;font-weight:600;color:var(--green,#22c55e);">✓ Parent application deleted</div>
+          </div>`;
+        enableNext(nextBtn); nextBtn.addEventListener('click', nextStep);
+      });
+    }
+
+    // ── choose-server ────────────────────────────────────────────────────────
+    async function renderChooseServer(el, nextBtn) {
+      if (s.deviceUid) {
+        el.innerHTML = `
+          <div style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);border-radius:8px;padding:12px;margin-bottom:12px;">
+            <div style="font-size:13px;font-weight:600;color:var(--green,#22c55e);">✓ Server: ${escHtml(s.deviceName)}</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Site: ${escHtml(s.siteName||'')}</div>
+          </div>
+          <button id="change-srv" style="padding:5px 12px;background:transparent;border:1px solid var(--border);
+            border-radius:6px;color:var(--text-muted);font-size:12px;cursor:pointer;">Change Server</button>`;
+        enableNext(nextBtn); nextBtn.addEventListener('click', nextStep);
+        el.querySelector('#change-srv').addEventListener('click', () => { s.deviceUid=null; s.deviceName=null; renderChooseServer(el, nextBtn); });
+        return;
+      }
+
+      el.innerHTML = `
+        <div style="display:flex;gap:10px;align-items:flex-end;margin-bottom:12px;">
+          <div style="flex:1;">
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Client Site (Datto RMM)</label>
+            <select id="site-sel" style="color-scheme:dark;width:100%;padding:6px 10px;background:#1e1e2e;
+              color:#e2e8f0;border:1px solid #334155;border-radius:6px;font-size:13px;">
+              <option style="background:#1e1e2e;color:#e2e8f0;" value="">Loading sites...</option>
+            </select>
+          </div>
+          <button id="load-srv-btn" disabled style="padding:7px 14px;background:var(--accent);border:none;
+            border-radius:6px;color:#fff;font-size:13px;cursor:pointer;opacity:0.4;white-space:nowrap;">Load Servers</button>
+        </div>
+        <div id="server-area"></div>
+        <div id="srv-error" style="display:none;color:#f87171;font-size:12px;margin-top:6px;font-family:monospace;white-space:pre-wrap;"></div>
+        <div id="manual-srv-section" style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);border-radius:6px;transition:border-color .2s,background .2s;">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">— or enter device details manually —</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
+            <div>
+              <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:3px;">Server Name</label>
+              <input id="manual-hostname" type="text" placeholder="SERVERNAME" value="${escHtml(s.deviceName||'')}"
+                style="width:100%;padding:6px 10px;background:#1e1e2e;color:#e2e8f0;border:1px solid #334155;
+                  border-radius:6px;font-size:13px;box-sizing:border-box;outline:none;">
+            </div>
+            <div>
+              <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:3px;">Datto Device UID</label>
+              <input id="manual-uid" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" value="${escHtml(s.deviceUid||'')}"
+                style="width:100%;padding:6px 10px;background:#1e1e2e;color:#e2e8f0;border:1px solid #334155;
+                  border-radius:6px;font-size:13px;box-sizing:border-box;outline:none;">
+            </div>
+          </div>
+          <button id="manual-srv-btn" style="padding:6px 14px;background:transparent;border:1px solid var(--border);
+            border-radius:6px;color:var(--text-muted);font-size:12px;cursor:pointer;">Use Manual Entry</button>
+        </div>`;
+
+      el.querySelector('#manual-srv-btn').addEventListener('click', () => {
+        const hostname = el.querySelector('#manual-hostname').value.trim();
+        const uid      = el.querySelector('#manual-uid').value.trim();
+        if (!hostname || !uid) return;
+        s.deviceName = hostname; s.deviceUid = uid; s.siteName = 'Manual Entry';
+        renderChooseServer(el, nextBtn);
+      });
+
+      const siteSel = el.querySelector('#site-sel');
+      const loadBtn = el.querySelector('#load-srv-btn');
+
+      const sitesR = s.sites.length ? { sites: s.sites } : await window.api.dattoListSites();
+      if (sitesR.error) {
+        siteSel.innerHTML = `<option style="background:#1e1e2e;color:#e2e8f0;" value="">Datto unavailable — use manual entry below</option>`;
+        el.querySelector('#srv-error').style.display=''; el.querySelector('#srv-error').textContent=sitesR.error;
+        // Scroll/highlight the manual section when Datto fails
+        const manualSection = el.querySelector('#manual-srv-section');
+        if (manualSection) {
+          manualSection.style.borderColor = 'var(--accent)';
+          manualSection.style.background = 'rgba(99,102,241,0.06)';
+          setTimeout(() => manualSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 100);
+        }
+      } else {
+        s.sites = sitesR.sites || [];
+        siteSel.innerHTML = `<option style="background:#1e1e2e;color:#e2e8f0;" value="">— Select site —</option>` +
+          s.sites.map(st => `<option style="background:#1e1e2e;color:#e2e8f0;" value="${st.uid}">${escHtml(st.name)}</option>`).join('');
+        if (s.siteUid) { siteSel.value = s.siteUid; loadBtn.disabled=false; loadBtn.style.opacity='1'; }
+      }
+
+      siteSel.addEventListener('change', () => {
+        s.siteUid = siteSel.value;
+        s.siteName = siteSel.options[siteSel.selectedIndex]?.textContent || '';
+        loadBtn.disabled = !s.siteUid; loadBtn.style.opacity = s.siteUid ? '1' : '0.4';
+        el.querySelector('#server-area').innerHTML = '';
+        s.devices = [];
+      });
+
+      async function loadServers() {
+        if (!s.siteUid) return;
+        const area   = el.querySelector('#server-area');
+        const errEl  = el.querySelector('#srv-error');
+        area.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">Loading servers...</div>';
+        errEl.style.display = 'none'; loadBtn.disabled = true;
+        const r = await window.api.dattoListSiteServers({ siteUid: s.siteUid });
+        loadBtn.disabled = false; loadBtn.style.opacity = '1';
+        if (r.error) { area.innerHTML=''; errEl.style.display=''; errEl.textContent=r.error; return; }
+        s.devices = r.devices || [];
+        if (!s.devices.length) { area.innerHTML='<div style="font-size:12px;color:var(--text-muted);">No servers found in this site.</div>'; return; }
+        area.innerHTML = `
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">Click a server to select it:</div>
+          <div style="display:grid;gap:6px;max-height:200px;overflow-y:auto;">
+            ${s.devices.map(d => `
+              <div data-uid="${d.uid}" data-name="${escHtml(d.hostname)}"
+                style="padding:8px 12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;
+                  transition:border-color 0.15s,background 0.15s;display:flex;justify-content:space-between;align-items:center;"
+                onmouseover="this.style.borderColor='var(--accent)';this.style.background='rgba(99,102,241,0.08)'"
+                onmouseout="this.style.borderColor='var(--border)';this.style.background='transparent'">
+                <div>
+                  <div style="font-size:13px;font-weight:500;">${escHtml(d.hostname)}</div>
+                  <div style="font-size:11px;color:var(--text-muted);">${escHtml(d.os||'Windows Server')}</div>
+                </div>
+                <div style="font-size:11px;color:var(--text-muted);">Select &#8594;</div>
+              </div>`).join('')}
+          </div>`;
+        area.querySelectorAll('[data-uid]').forEach(row => {
+          row.addEventListener('click', () => { s.deviceUid=row.dataset.uid; s.deviceName=row.dataset.name; renderChooseServer(el, nextBtn); });
+        });
+      }
+
+      loadBtn.addEventListener('click', loadServers);
+      if (s.siteUid && s.devices.length) loadServers();
+    }
+
+    // ── deploy ───────────────────────────────────────────────────────────────
+    function renderDeploy(el, nextBtn) {
+      if (s.jobLog.some(l => l.includes('&#10003; Job submitted'))) {
+        el.innerHTML = `
+          <div style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);border-radius:8px;padding:14px;margin-bottom:12px;">
+            <div style="font-size:13px;font-weight:600;color:var(--green,#22c55e);">&#10003; Quick Job submitted to Datto RMM</div>
+            ${s.jobUid ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px;font-family:monospace;">Job UID: ${escHtml(s.jobUid)}</div>` : ''}
+            <div style="font-size:12px;color:var(--text-muted);margin-top:6px;">Check Datto RMM for completion status.</div>
+          </div>
+          ${logBox(s.jobLog)}`;
+        enableNext(nextBtn);
+        nextBtn.textContent = 'Finish';
+        nextBtn.addEventListener('click', () => {
+          tc.innerHTML = `
+            <div class="glass-card" style="padding:40px;text-align:center;">
+              <div style="font-size:40px;margin-bottom:14px;">&#9989;</div>
+              <div style="font-size:15px;font-weight:600;margin-bottom:6px;">All Done!</div>
+              <div style="font-size:13px;color:var(--text-muted);margin-bottom:6px;">
+                Duo Quick Job submitted for <strong>${escHtml(s.deviceName||'the server')}</strong>.
+              </div>
+              <div style="font-size:12px;color:var(--text-muted);margin-bottom:20px;">
+                The install will run in the background via Datto RMM.
+              </div>
+              <button id="wiz-new" style="padding:8px 18px;background:var(--accent);border:none;
+                border-radius:6px;color:#fff;font-size:13px;cursor:pointer;font-weight:500;">Start New Wizard</button>
+            </div>`;
+          document.getElementById('wiz-new').addEventListener('click', () => { s = initState(); render(); });
+        });
+        return;
+      }
+
+      el.innerHTML = `
+        <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:16px;font-size:13px;">
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Deployment summary</div>
+          <div style="display:grid;gap:4px;">
+            <div><span style="color:var(--text-muted);">Account: </span>${escHtml(s.accountName||'Anchor (Parent)')}</div>
+            <div><span style="color:var(--text-muted);">Application: </span>${escHtml(s.app?.name||'—')}</div>
+            <div><span style="color:var(--text-muted);">Server: </span>${escHtml(s.deviceName||'—')}</div>
+            <div><span style="color:var(--text-muted);">Site: </span>${escHtml(s.siteName||'—')}</div>
+          </div>
+        </div>
+        <div id="deploy-log-area" style="margin-bottom:12px;"></div>
+        <div id="deploy-error" style="display:none;color:#f87171;font-size:12px;margin-bottom:8px;"></div>
+        <button id="deploy-btn" style="padding:8px 20px;background:var(--accent);border:none;
+          border-radius:6px;color:#fff;font-size:13px;cursor:pointer;font-weight:500;">&#128640; Run Quick Job</button>`;
+
+      el.querySelector('#deploy-btn').addEventListener('click', async () => {
+        const btn    = el.querySelector('#deploy-btn');
+        const errEl  = el.querySelector('#deploy-error');
+        const logArea = el.querySelector('#deploy-log-area');
+        btn.disabled=true; btn.textContent='Submitting...'; errEl.style.display='none';
+
+        function addLog(line) {
+          s.jobLog.push(line);
+          logArea.innerHTML = logBox(s.jobLog);
+        }
+
+        try {
+          if (!s.app) throw new Error('No application configured — go back and create an app first.');
+          if (!s.deviceUid) throw new Error('No server selected — go back and select a server.');
+
+          addLog(`Submitting Quick Job to Datto RMM...`);
+          addLog(`  Server: ${s.deviceName}`);
+          addLog(`  App IKEY: ${s.app.integration_key}`);
+          addLog(`  App HOST: ${s.app.api_hostname}`);
+
+          const r = await window.api.dattoRunDuoQuickjob({
+            deviceUid:   s.deviceUid,
+            ikey:        s.app.integration_key,
+            skey:        s.app.secret_key,
+            apiHostname: s.app.api_hostname,
+          });
+
+          if (r.error) throw new Error(r.error);
+
+          s.jobUid = r.jobUid;
+          addLog(`&#10003; Job submitted successfully`);
+          if (r.jobUid) addLog(`  Job UID: ${r.jobUid}`);
+          renderDeploy(el, nextBtn);
+
+        } catch(e) {
+          addLog(`&#10007; Error: ${e.message}`);
+          errEl.style.display=''; errEl.textContent=e.message;
+          btn.disabled=false; btn.textContent='&#128640; Run Quick Job';
+        }
+      });
+    }
+
+    render();
+  }
+
+  // ── Term Sub Account Tab ─────────────────────────────────────────────────────
+  function renderTermSubTab(tc) {
+    tc.innerHTML = `
+      <div class="glass-card" style="padding:32px;text-align:center;">
+        <div style="font-size:15px;font-weight:600;margin-bottom:8px;">Terminate Sub Account</div>
+        <div style="font-size:13px;color:var(--text-muted);">
+          Sub-account termination is handled manually in the Duo Admin portal.
+        </div>
+      </div>`;
+  }
+
+  render();
 }
 
 // navigate('home') is called from initApp() after successful authentication
