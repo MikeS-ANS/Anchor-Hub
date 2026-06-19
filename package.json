@@ -41,7 +41,8 @@
       "provider": "github",
       "owner": "MikeS-ANS",
       "repo": "Anchor-Hub",
-      "private": false
+      "private": false,
+      "releaseType": "release"
     },
     "files": [
       "main.js",
