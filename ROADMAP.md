@@ -145,15 +145,6 @@ Drop ideas here. Nothing too small or too big.
 
   Long-term goal: replace the manual quarterly tool inventory spreadsheet and turn reactive coverage reviews into a live, always-current dashboard.
 
-- [ ] **Duo — Phone Replacement flow**
-  A client user gets a new phone and needs their Duo device swapped out. Today this is done manually in the Duo Admin portal. The flow would be: find the user in the sub-account, remove the old phone, add the new phone with the same device name, associate it, and send a new activation SMS — all from inside the Hub in one wizard.
-
-- [ ] **Duo — Client User Offboard**
-  Mirror of the New Client User tab. Select a sub-account, find a user by username, remove their phones, and delete the user. Useful when a client employee leaves and the client asks us to clean up their Duo account.
-
-- [ ] **Duo — Resend Activation SMS**
-  A quick utility: select a sub-account, pick a user, pick a phone, send a new activation link. Handles the common case where a user never activated or their activation link expired.
-
 - [ ] **Duo Billing Tool (separate app or role-gated section)**
   Admins who run billing should not need write access to Duo. Separate this from the Duo Management tool entirely — either a standalone tool or a role-gated read-only section. Would pull sub-account edition/telephony data from Duo and map it to Pax8 or billing records for monthly reconciliation. Requires `duo-accounts-ikey/skey` (Accounts API read) but zero write permissions on the Admin API key.
 

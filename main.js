@@ -344,6 +344,15 @@ ipcMain.handle('duo-sub-delete-phone', async (_, { accountId, phoneId }) => {
   } catch (e) { return { error: e.message }; }
 });
 
+ipcMain.handle('duo-sub-delete-user', async (_, { accountId, userId }) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    await duoRequest(ikey, skey, host, 'DELETE', `/admin/v1/users/${userId}`,
+      { account_id: accountId });
+    return { success: true };
+  } catch (e) { return { error: e.message }; }
+});
+
 ipcMain.handle('duo-sub-update-phone', async (_, { accountId, phoneId, name }) => {
   try {
     const { ikey, skey, host } = await getDuoAdminCreds();

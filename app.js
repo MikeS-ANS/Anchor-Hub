@@ -5707,8 +5707,10 @@ function renderDuoManagement() {
     { key: 'termination', label: 'Termination' },
     { key: 'audit',       label: 'Audit' },
     { key: 'new-sub',     label: 'New Sub Account' },
-    { key: 'new-user',    label: 'New Client User' },
-    { key: 'term-sub',    label: 'Term Sub Account' },
+    { key: 'new-user',      label: 'New Client User' },
+    { key: 'phone-replace', label: 'Phone Replace' },
+    { key: 'offboard-user', label: 'Offboard User' },
+    { key: 'term-sub',      label: 'Term Sub Account' },
   ];
 
   function render() {
@@ -5744,8 +5746,10 @@ function renderDuoManagement() {
     else if (activeTab === 'termination') renderTermTab(tc);
     else if (activeTab === 'audit')       renderAuditTab(tc);
     else if (activeTab === 'new-sub')     renderNewSubTab(tc);
-    else if (activeTab === 'new-user')    renderNewUserTab(tc);
-    else if (activeTab === 'term-sub')    renderTermSubTab(tc);
+    else if (activeTab === 'new-user')      renderNewUserTab(tc);
+    else if (activeTab === 'phone-replace') renderPhoneReplaceTab(tc);
+    else if (activeTab === 'offboard-user') renderOffboardUserTab(tc);
+    else if (activeTab === 'term-sub')      renderTermSubTab(tc);
   }
 
   // ── Shared helpers ──────────────────────────────────────────────────────────
@@ -7664,6 +7668,293 @@ function renderDuoManagement() {
   }
 
   // ── Term Sub Account Tab ─────────────────────────────────────────────────────
+  // ── Phone Replace Tab ─────────────────────────────────────────────────────────
+  async function renderPhoneReplaceTab(tc) {
+    const S = 'width:100%;box-sizing:border-box;padding:8px 10px;background:var(--bg-secondary);' +
+              'border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:13px;';
+    const L = 'font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;';
+
+    tc.innerHTML = `
+      <div class="glass-card" style="padding:20px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;">
+          <div>
+            <div style="font-size:13px;font-weight:600;margin-bottom:14px;">Replace Client Phone</div>
+
+            <div style="margin-bottom:10px;">
+              <label style="${L}">Sub-Account *</label>
+              <select id="pr-acct" style="${S}color-scheme:dark;"><option value="">Loading…</option></select>
+            </div>
+
+            <div style="display:flex;gap:8px;margin-bottom:10px;">
+              <div style="flex:1;">
+                <label style="${L}">Username *</label>
+                <input id="pr-username" type="text" placeholder="jsmith" style="${S}">
+              </div>
+              <div style="display:flex;align-items:flex-end;">
+                <button id="pr-find" style="padding:8px 14px;background:var(--bg-secondary);border:1px solid var(--border);
+                  border-radius:6px;color:var(--text-primary);font-size:13px;cursor:pointer;white-space:nowrap;">Find User</button>
+              </div>
+            </div>
+
+            <div id="pr-user-info" style="display:none;background:var(--bg-secondary);border:1px solid var(--border);
+              border-radius:6px;padding:10px;margin-bottom:10px;font-size:12px;"></div>
+
+            <div id="pr-phone-fields" style="display:none;">
+              <div style="margin-bottom:10px;">
+                <label style="${L}">New Phone Number *</label>
+                <input id="pr-new-phone" type="tel" placeholder="+15551234567" style="${S}">
+              </div>
+              <div style="margin-bottom:16px;">
+                <label style="${L}">Device Name <span style="font-size:10px;opacity:.7;">(carried over from old phone)</span></label>
+                <input id="pr-device" type="text" placeholder="John Smith" style="${S}">
+              </div>
+              <div id="pr-error" style="display:none;color:#f87171;font-size:12px;margin-bottom:8px;"></div>
+              <button id="pr-run" style="padding:8px 20px;background:var(--accent);border:none;border-radius:6px;
+                color:#fff;font-size:13px;cursor:pointer;font-weight:500;">Replace Phone</button>
+            </div>
+          </div>
+
+          <div>
+            <div style="font-size:13px;font-weight:600;margin-bottom:14px;">Progress</div>
+            <div id="pr-log" style="font-family:monospace;font-size:11px;line-height:1.7;min-height:80px;"></div>
+          </div>
+        </div>
+      </div>`;
+
+    // Load sub-accounts
+    const acctSel = tc.querySelector('#pr-acct');
+    const r = await window.api.duoListSubAccounts();
+    if (r.error) {
+      acctSel.innerHTML = `<option value="">Error: ${escHtml(r.error)}</option>`;
+    } else {
+      const sorted = (r.accounts || []).sort((a, b) => a.name.localeCompare(b.name));
+      acctSel.innerHTML = `<option style="background:#1e1e2e;color:#e2e8f0;" value="">— Select account —</option>` +
+        sorted.map(a => `<option style="background:#1e1e2e;color:#e2e8f0;" value="${a.account_id}">${escHtml(a.name)}</option>`).join('');
+    }
+
+    let foundUser = null;
+    let oldPhones = [];
+
+    tc.querySelector('#pr-find').addEventListener('click', async () => {
+      const accountId = acctSel.value;
+      const username  = tc.querySelector('#pr-username').value.trim();
+      const infoEl    = tc.querySelector('#pr-user-info');
+      const fieldsEl  = tc.querySelector('#pr-phone-fields');
+      const logEl     = tc.querySelector('#pr-log');
+      logEl.innerHTML = ''; foundUser = null; oldPhones = [];
+      infoEl.style.display = 'none'; fieldsEl.style.display = 'none';
+      if (!accountId) { infoEl.style.display=''; infoEl.style.color='#f87171'; infoEl.textContent='Select a sub-account first.'; return; }
+      if (!username)  { infoEl.style.display=''; infoEl.style.color='#f87171'; infoEl.textContent='Enter a username.'; return; }
+      infoEl.style.display=''; infoEl.style.color='var(--text-muted)'; infoEl.textContent='Looking up user…';
+      const uR = await window.api.duoSubFindUsers({ accountId, username });
+      if (uR.error || !uR.users.length) {
+        infoEl.style.color='#f87171'; infoEl.textContent = uR.error ? `Error: ${uR.error}` : `No user found for "${username}".`; return;
+      }
+      foundUser = uR.users[0];
+      oldPhones = foundUser.phones || [];
+      const phoneList = oldPhones.length
+        ? oldPhones.map(p => `${p.number || '—'} (${p.name || 'no device name'})`).join(', ')
+        : 'No phones enrolled';
+      infoEl.style.color = 'var(--text-primary)';
+      infoEl.innerHTML = `<strong>${escHtml(foundUser.realname || foundUser.username)}</strong>
+        <span style="color:var(--text-muted);margin-left:8px;">${escHtml(foundUser.email || '')}</span><br>
+        <span style="color:var(--text-muted);font-size:11px;">Current phone${oldPhones.length!==1?'s':''}: ${escHtml(phoneList)}</span>`;
+      // Pre-fill device name from first found phone
+      if (oldPhones.length) tc.querySelector('#pr-device').value = oldPhones[0].name || '';
+      fieldsEl.style.display = '';
+    });
+
+    tc.querySelector('#pr-username').addEventListener('keydown', e => {
+      if (e.key === 'Enter') tc.querySelector('#pr-find').click();
+    });
+
+    tc.querySelector('#pr-run').addEventListener('click', async () => {
+      const accountId = acctSel.value;
+      const newPhone  = tc.querySelector('#pr-new-phone').value.trim();
+      const deviceName = tc.querySelector('#pr-device').value.trim();
+      const errEl     = tc.querySelector('#pr-error');
+      const logEl     = tc.querySelector('#pr-log');
+      errEl.style.display = 'none';
+      if (!foundUser) { errEl.style.display=''; errEl.textContent='Find a user first.'; return; }
+      if (!newPhone)  { errEl.style.display=''; errEl.textContent='Enter the new phone number.'; return; }
+      const btn = tc.querySelector('#pr-run');
+      btn.disabled = true; btn.textContent = 'Replacing…';
+      const lines = [];
+      const log = (msg, ok) => {
+        const c = ok===true ? '#4ade80' : ok===false ? '#f87171' : 'var(--text-muted)';
+        const i = ok===true ? '✓' : ok===false ? '✗' : '·';
+        lines.push(`<span style="color:${c}">${i} ${escHtml(msg)}</span>`);
+        logEl.innerHTML = lines.join('<br>');
+      };
+      try {
+        for (const ph of oldPhones) {
+          log(`Removing old phone ${ph.number || ph.phone_id}…`);
+          const dR = await window.api.duoSubDeletePhone({ accountId, phoneId: ph.phone_id });
+          if (dR.error) throw new Error(`Remove old phone failed: ${dR.error}`);
+          log(`Old phone removed`, true);
+        }
+        log(`Adding new phone ${newPhone}…`);
+        const pR = await window.api.duoSubCreatePhone({ accountId, number: newPhone, name: deviceName || undefined });
+        if (pR.error) throw new Error(pR.error);
+        log(`Phone added${deviceName ? ` — device name: "${deviceName}"` : ''}`, true);
+        log(`Associating phone with ${foundUser.username}…`);
+        const aR = await window.api.duoSubAssociatePhone({ accountId, userId: foundUser.user_id, phoneId: pR.phone.phone_id });
+        if (aR.error) throw new Error(aR.error);
+        log(`Phone associated`, true);
+        log(`Sending activation SMS…`);
+        const sR = await window.api.duoSubSendActivation({ accountId, phoneId: pR.phone.phone_id });
+        if (sR.error) { log(`Activation SMS failed: ${sR.error}`, false); }
+        else           { log(`Activation SMS sent`, true); }
+        log(`Done — phone replaced for ${foundUser.username}`, true);
+        btn.textContent = 'Replace Another';
+        btn.disabled = false;
+        btn.addEventListener('click', () => {
+          ['#pr-username','#pr-new-phone','#pr-device'].forEach(sel => { const el2 = tc.querySelector(sel); if (el2) el2.value = ''; });
+          tc.querySelector('#pr-user-info').style.display = 'none';
+          tc.querySelector('#pr-phone-fields').style.display = 'none';
+          logEl.innerHTML = ''; lines.length = 0; foundUser = null; oldPhones = [];
+          btn.textContent = 'Replace Phone';
+        }, { once: true });
+      } catch (e) {
+        log(e.message, false);
+        errEl.style.display=''; errEl.textContent = e.message;
+        btn.disabled = false; btn.textContent = 'Replace Phone';
+      }
+    });
+  }
+
+  // ── Offboard User Tab ─────────────────────────────────────────────────────────
+  async function renderOffboardUserTab(tc) {
+    const S = 'width:100%;box-sizing:border-box;padding:8px 10px;background:var(--bg-secondary);' +
+              'border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:13px;';
+    const L = 'font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;';
+
+    tc.innerHTML = `
+      <div class="glass-card" style="padding:20px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;">
+          <div>
+            <div style="font-size:13px;font-weight:600;margin-bottom:14px;">Offboard Client User from Duo</div>
+
+            <div style="margin-bottom:10px;">
+              <label style="${L}">Sub-Account *</label>
+              <select id="ob-acct" style="${S}color-scheme:dark;"><option value="">Loading…</option></select>
+            </div>
+
+            <div style="display:flex;gap:8px;margin-bottom:10px;">
+              <div style="flex:1;">
+                <label style="${L}">Username *</label>
+                <input id="ob-username" type="text" placeholder="jsmith" style="${S}">
+              </div>
+              <div style="display:flex;align-items:flex-end;">
+                <button id="ob-find" style="padding:8px 14px;background:var(--bg-secondary);border:1px solid var(--border);
+                  border-radius:6px;color:var(--text-primary);font-size:13px;cursor:pointer;white-space:nowrap;">Find User</button>
+              </div>
+            </div>
+
+            <div id="ob-user-info" style="display:none;background:var(--bg-secondary);border:1px solid var(--border);
+              border-radius:6px;padding:10px;margin-bottom:10px;font-size:12px;"></div>
+
+            <div id="ob-confirm-section" style="display:none;">
+              <div style="padding:10px 12px;background:#f8717110;border:1px solid #f8717133;border-radius:6px;
+                margin-bottom:12px;font-size:12px;color:#f87171;">
+                This will remove all phones and permanently delete the user from this sub-account.
+              </div>
+              <div id="ob-error" style="display:none;color:#f87171;font-size:12px;margin-bottom:8px;"></div>
+              <button id="ob-run" style="padding:8px 20px;background:#f87171;border:none;border-radius:6px;
+                color:#fff;font-size:13px;cursor:pointer;font-weight:500;">Offboard User</button>
+            </div>
+          </div>
+
+          <div>
+            <div style="font-size:13px;font-weight:600;margin-bottom:14px;">Progress</div>
+            <div id="ob-log" style="font-family:monospace;font-size:11px;line-height:1.7;min-height:80px;"></div>
+          </div>
+        </div>
+      </div>`;
+
+    // Load sub-accounts
+    const acctSel = tc.querySelector('#ob-acct');
+    const r = await window.api.duoListSubAccounts();
+    if (r.error) {
+      acctSel.innerHTML = `<option value="">Error: ${escHtml(r.error)}</option>`;
+    } else {
+      const sorted = (r.accounts || []).sort((a, b) => a.name.localeCompare(b.name));
+      acctSel.innerHTML = `<option style="background:#1e1e2e;color:#e2e8f0;" value="">— Select account —</option>` +
+        sorted.map(a => `<option style="background:#1e1e2e;color:#e2e8f0;" value="${a.account_id}">${escHtml(a.name)}</option>`).join('');
+    }
+
+    let foundUser = null;
+
+    tc.querySelector('#ob-find').addEventListener('click', async () => {
+      const accountId = acctSel.value;
+      const username  = tc.querySelector('#ob-username').value.trim();
+      const infoEl    = tc.querySelector('#ob-user-info');
+      const confirmEl = tc.querySelector('#ob-confirm-section');
+      const logEl     = tc.querySelector('#ob-log');
+      logEl.innerHTML = ''; foundUser = null;
+      infoEl.style.display = 'none'; confirmEl.style.display = 'none';
+      if (!accountId) { infoEl.style.display=''; infoEl.style.color='#f87171'; infoEl.textContent='Select a sub-account first.'; return; }
+      if (!username)  { infoEl.style.display=''; infoEl.style.color='#f87171'; infoEl.textContent='Enter a username.'; return; }
+      infoEl.style.display=''; infoEl.style.color='var(--text-muted)'; infoEl.textContent='Looking up user…';
+      const uR = await window.api.duoSubFindUsers({ accountId, username });
+      if (uR.error || !uR.users.length) {
+        infoEl.style.color='#f87171'; infoEl.textContent = uR.error ? `Error: ${uR.error}` : `No user found for "${username}".`; return;
+      }
+      foundUser = uR.users[0];
+      const phones = foundUser.phones || [];
+      const phoneList = phones.length
+        ? phones.map(p => `${p.number || '—'} (${p.name || 'no device name'})`).join(', ')
+        : 'No phones enrolled';
+      infoEl.style.color = 'var(--text-primary)';
+      infoEl.innerHTML = `<strong>${escHtml(foundUser.realname || foundUser.username)}</strong>
+        <span style="color:var(--text-muted);margin-left:8px;">${escHtml(foundUser.email || '')}</span><br>
+        <span style="color:var(--text-muted);font-size:11px;">Phone${phones.length!==1?'s':''}: ${escHtml(phoneList)}</span>`;
+      confirmEl.style.display = '';
+    });
+
+    tc.querySelector('#ob-username').addEventListener('keydown', e => {
+      if (e.key === 'Enter') tc.querySelector('#ob-find').click();
+    });
+
+    tc.querySelector('#ob-run').addEventListener('click', async () => {
+      const accountId = acctSel.value;
+      const errEl     = tc.querySelector('#ob-error');
+      const logEl     = tc.querySelector('#ob-log');
+      errEl.style.display = 'none';
+      if (!foundUser) { errEl.style.display=''; errEl.textContent='Find a user first.'; return; }
+      if (!confirm(`Permanently remove ${foundUser.username} from this sub-account?`)) return;
+      const btn = tc.querySelector('#ob-run');
+      btn.disabled = true; btn.textContent = 'Offboarding…';
+      const lines = [];
+      const log = (msg, ok) => {
+        const c = ok===true ? '#4ade80' : ok===false ? '#f87171' : 'var(--text-muted)';
+        const i = ok===true ? '✓' : ok===false ? '✗' : '·';
+        lines.push(`<span style="color:${c}">${i} ${escHtml(msg)}</span>`);
+        logEl.innerHTML = lines.join('<br>');
+      };
+      try {
+        const phones = foundUser.phones || [];
+        for (const ph of phones) {
+          log(`Removing phone ${ph.number || ph.phone_id}…`);
+          const dR = await window.api.duoSubDeletePhone({ accountId, phoneId: ph.phone_id });
+          if (dR.error) throw new Error(`Remove phone failed: ${dR.error}`);
+          log(`Phone removed`, true);
+        }
+        log(`Deleting user ${foundUser.username}…`);
+        const delR = await window.api.duoSubDeleteUser({ accountId, userId: foundUser.user_id });
+        if (delR.error) throw new Error(delR.error);
+        log(`User deleted`, true);
+        log(`Done — ${foundUser.username} has been offboarded`, true);
+        tc.querySelector('#ob-confirm-section').style.display = 'none';
+        btn.disabled = false;
+      } catch (e) {
+        log(e.message, false);
+        errEl.style.display=''; errEl.textContent = e.message;
+        btn.disabled = false; btn.textContent = 'Offboard User';
+      }
+    });
+  }
+
   function renderTermSubTab(tc) {
     tc.innerHTML = `
       <div class="glass-card" style="padding:32px;text-align:center;">
