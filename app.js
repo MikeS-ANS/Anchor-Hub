@@ -1,4 +1,4 @@
-window.onerror = (msg, src, line, col, err) => console.error('[app.js uncaught]', msg, `${src}:${line}:${col}`, err);
+﻿window.onerror = (msg, src, line, col, err) => console.error('[app.js uncaught]', msg, `${src}:${line}:${col}`, err);
 window.onunhandledrejection = (e) => console.error('[app.js unhandled rejection]', e.reason);
 
 // Window controls
@@ -8421,7 +8421,7 @@ async function renderProjectProfitability() {
     '    <span id="prof-settings-status" style="font-size:11px;color:var(--text-muted);margin-left:10px"></span>',
     '  </div>',
     '</div>',
-    '<div style="display:flex;align-items:flex-end;gap:12px;margin-bottom:16px;flex-wrap:wrap">',
+    '<div style="display:flex;align-items:flex-end;gap:12px;margin-bottom:10px;flex-wrap:wrap">',
     '  <div><label class="field-label">Start Date</label>',
     '    <input class="field-input" id="prof-start" type="date" style="width:160px" /></div>',
     '  <div><label class="field-label">End Date</label>',
@@ -8435,14 +8435,22 @@ async function renderProjectProfitability() {
     '    Run Report',
     '  </button>',
     '</div>',
+    '<div style="display:flex;align-items:flex-end;gap:8px;margin-bottom:16px">',
+    '  <div style="display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-surface);font-size:11px;color:var(--text-muted);white-space:nowrap">OR</div>',
+    '  <div><label class="field-label">Look Up by Project #</label>',
+    '    <input class="field-input" id="prof-project-num" type="text" placeholder="e.g. P20250826.0001" style="width:220px" /></div>',
+    '  <button class="btn btn-ghost" id="prof-lookup-btn">',
+    '    <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+    '    Look Up',
+    '  </button>',
+    '</div>',
     '<div id="prof-status" style="display:none;padding:12px;border-radius:8px;background:var(--bg-surface);margin-bottom:12px;font-size:12px;color:var(--text-muted);align-items:center;gap:10px"></div>',
     '<div id="prof-results"></div>',
   ].join('\n');
 
   const now = new Date();
-  const twoYearsAgo = new Date(now);
-  twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
-  document.getElementById('prof-start').value = twoYearsAgo.toISOString().slice(0, 10);
+  const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  document.getElementById('prof-start').value = firstOfMonth.toISOString().slice(0, 10);
   document.getElementById('prof-end').value = now.toISOString().slice(0, 10);
 
   document.getElementById('prof-settings-toggle').onclick = function() {
@@ -8469,26 +8477,39 @@ async function renderProjectProfitability() {
   if (_profData) profRenderResults(_profData, _profSettings);
   document.getElementById('prof-run-btn').onclick = profRunReport;
   document.getElementById('prof-export-btn').onclick = profExport;
+  document.getElementById('prof-lookup-btn').onclick = function() {
+    const num = (document.getElementById('prof-project-num').value || '').trim();
+    if (num) profRunReport(num);
+  };
+  document.getElementById('prof-project-num').onkeydown = function(e) {
+    if (e.key === 'Enter') {
+      const num = this.value.trim();
+      if (num) profRunReport(num);
+    }
+  };
 }
 
-async function profRunReport() {
+async function profRunReport(projectNumber) {
   const runBtn     = document.getElementById('prof-run-btn');
+  const lookupBtn  = document.getElementById('prof-lookup-btn');
   const statusDiv  = document.getElementById('prof-status');
   const resultsDiv = document.getElementById('prof-results');
   const exportBtn  = document.getElementById('prof-export-btn');
-  const startDate     = document.getElementById('prof-start').value || null;
-  const endDate       = document.getElementById('prof-end').value   || null;
-  const includeActive = document.getElementById('prof-include-active').checked;
+  const byNumber   = typeof projectNumber === 'string' && projectNumber.length > 0;
+  const startDate     = byNumber ? null : (document.getElementById('prof-start').value || null);
+  const endDate       = byNumber ? null : (document.getElementById('prof-end').value   || null);
+  const includeActive = byNumber ? true  : document.getElementById('prof-include-active').checked;
 
-  runBtn.disabled = true;
+  if (runBtn)    runBtn.disabled = true;
+  if (lookupBtn) lookupBtn.disabled = true;
   exportBtn.disabled = true;
   statusDiv.style.display = 'flex';
   statusDiv.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px"></span>'
-    + '<span>Fetching projects from Autotask\u2026 This may take a few minutes.</span>';
+    + '<span>' + (byNumber ? 'Looking up project ' + escHtml(projectNumber) + '\u2026' : 'Fetching projects from Autotask\u2026 This may take a few minutes.') + '</span>';
   resultsDiv.innerHTML = '';
 
   try {
-    const result = await window.api.runProjectProfitability({ startDate, endDate, includeActive });
+    const result = await window.api.runProjectProfitability({ startDate, endDate, includeActive, projectNumber: byNumber ? projectNumber : null });
     _profData     = result.projects;
     _profSettings = result.settings;
     statusDiv.style.display = 'none';
@@ -8499,7 +8520,8 @@ async function profRunReport() {
     statusDiv.innerHTML = '<span style="color:var(--error)"><strong>Error:</strong> ' + escHtml(e.message) + '</span>';
     saveToolStat('project-profitability', 'Error: ' + e.message, 'error');
   } finally {
-    runBtn.disabled = false;
+    if (runBtn)    runBtn.disabled = false;
+    if (lookupBtn) lookupBtn.disabled = false;
   }
 }
 
@@ -8511,6 +8533,157 @@ function profFmtDollar(n) {
 function profFmtPct(n) {
   if (n == null) return '\u2014';
   return n.toFixed(1) + '%';
+}
+
+function profTypeBadge(billingType) {
+  const label = billingType === 'Fixed Price'      ? 'FF'  :
+                billingType === 'Time & Materials' ? 'T&M' :
+                billingType === 'Block Hours'      ? 'BH'  :
+                billingType === 'No Contract'      ? '—' : billingType;
+  const style = billingType === 'Fixed Price'      ? 'background:rgba(74,222,128,0.15);color:#4ade80;border:1px solid rgba(74,222,128,0.35)' :
+                billingType === 'Time & Materials' ? 'background:rgba(96,165,250,0.15);color:#60a5fa;border:1px solid rgba(96,165,250,0.35)' :
+                billingType === 'Block Hours'      ? 'background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid rgba(251,191,36,0.35)' :
+                billingType === 'No Contract'      ? 'background:rgba(248,113,113,0.15);color:#f87171;border:1px solid rgba(248,113,113,0.35)' :
+                'background:var(--bg-surface);border:1px solid var(--border);color:var(--text-muted)';
+  return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;' + style + '" title="' + escHtml(billingType) + '">' + label + '</span>';
+}
+
+function profDetailCard(r, settings) {
+  const marginColor = r.grossMarginPct == null ? 'var(--text)' :
+    r.grossMarginPct < settings.marginWarnThreshold      ? '#f87171' :
+    r.grossMarginPct < settings.marginWarnThreshold + 10 ? '#fbbf24' : '#4ade80';
+  const varColor = r.hoursVariancePct == null ? 'var(--text)' :
+    r.hoursVariancePct > 50 ? '#f87171' : r.hoursVariancePct > 20 ? '#fbbf24' : '#4ade80';
+
+  const metric = function(label, value, color) {
+    return '<div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px">'
+      + '<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">' + label + '</div>'
+      + '<div style="font-size:20px;font-weight:700;color:' + (color || 'var(--text)') + '">' + value + '</div>'
+      + '</div>';
+  };
+
+  const flagsHtml = r.flags
+    ? '<div style="margin-top:16px;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.25);border-radius:8px;padding:12px 16px">'
+      + '<div style="font-size:11px;font-weight:600;color:#fbbf24;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Flags</div>'
+      + r.flags.split(';').map(function(f) {
+          return '<div style="font-size:13px;color:var(--text);padding:3px 0">⚠️ ' + escHtml(f.trim()) + '</div>';
+        }).join('')
+      + '</div>'
+    : '';
+
+  return '<div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;padding:20px 24px;margin-bottom:16px">'
+    + '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:4px">'
+    + '<div><div style="font-size:18px;font-weight:700">' + escHtml(r.projectName) + '</div>'
+    + '<div style="font-family:monospace;font-size:11px;color:var(--text-muted);margin-top:2px">' + escHtml(r.projectNumber || '') + '</div></div>'
+    + '<div>' + profTypeBadge(r.billingType) + '</div></div>'
+    + '<div style="display:flex;gap:20px;margin:10px 0 18px;font-size:13px;color:var(--text-muted)">'
+    + '<span>' + escHtml(r.company) + '</span><span>·</span><span>' + escHtml(r.lead) + '</span><span>·</span><span>' + escHtml(String(r.year || '')) + '</span>'
+    + '</div>'
+    + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px">'
+    + metric('Invoiced',      profFmtDollar(r.invoicedAmt    || 0), '#4ade80')
+    + metric('Cost of Del.',  profFmtDollar(r.costOfDelivery || 0))
+    + metric('Gross Margin',  r.grossMarginPct != null ? r.grossMarginPct.toFixed(1) + '%' : '—', marginColor)
+    + '</div>'
+    + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px">'
+    + metric('Est. Hours',    r.estHours    != null ? Number(r.estHours).toFixed(1)    : '—')
+    + metric('Billed Hours',  r.billedHours != null ? Number(r.billedHours).toFixed(1) : '—')
+    + metric('Total Hours',   r.totalHours  != null ? Number(r.totalHours).toFixed(1)  : '—')
+    + '</div>'
+    + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">'
+    + metric('Hours Var %',   r.hoursVariancePct != null ? r.hoursVariancePct.toFixed(1) + '%' : '—', varColor)
+    + metric('Eff. Rate',     r.effectiveRate != null ? profFmtDollar(r.effectiveRate) + '/hr' : '—')
+    + metric('Gross Margin $', r.grossMarginDollar != null ? profFmtDollar(r.grossMarginDollar) : '—')
+    + '</div>'
+    + (r.pendingAmt > 0 ? '<div style="margin-top:10px">' + metric('Pending Unbilled', profFmtDollar(r.pendingAmt), '#fbbf24') + '</div>' : '')
+    + flagsHtml
+    + '</div>';
+}
+
+function profBuildTableHtml(rows, settings) {
+  const colDefs = [
+    ['Project #',    'projectNumber'],
+    ['Project Name', 'projectName'],
+    ['Client',       'company'],
+    ['Lead',         'lead'],
+    ['Type',         'billingType'],
+    ['Year',         'year'],
+    ['Est. Hrs',     'estHours'],
+    ['Billed Hrs',   'billedHours'],
+    ['Total Hrs',    'totalHours'],
+    ['Hrs Var %',    'hoursVariancePct'],
+    ['Invoiced',     'invoicedAmt'],
+    ['Pending',      'pendingAmt'],
+    ['Cost',         'costOfDelivery'],
+    ['Margin %',     'grossMarginPct'],
+    ['Eff. Rate',    'effectiveRate'],
+  ];
+  const headerHtml = colDefs.map(function(c) {
+    return '<th data-col="' + c[1] + '" style="cursor:pointer;white-space:nowrap;position:sticky;top:0;z-index:1">'
+      + c[0] + ' <span class="sort-arrow"></span></th>';
+  }).join('') + '<th style="position:sticky;top:0;z-index:1">Flags</th>';
+
+  const rowsHtml = rows.map(function(r) {
+    const marginBg  = r.grossMarginPct == null ? '' :
+      r.grossMarginPct < settings.marginWarnThreshold      ? 'background:#ffc7ce18' :
+      r.grossMarginPct < settings.marginWarnThreshold + 10 ? 'background:#ffeb9c18' : 'background:#c6efce18';
+    const varColor  = r.hoursVariancePct == null ? '' : r.hoursVariancePct > 50 ? 'color:#f87171' : r.hoursVariancePct > 20 ? 'color:#fbbf24' : '';
+    const pendColor = r.pendingAmt > 0 ? 'color:#fbbf24' : '';
+    const flagColor = r.flags ? 'color:#fbbf24' : 'color:var(--text-muted)';
+    return '<tr>'
+      + '<td style="font-family:monospace;font-size:11px;color:var(--text-muted);white-space:nowrap">' + escHtml(r.projectNumber || '') + '</td>'
+      + '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escHtml(r.projectName) + '">' + escHtml(r.projectName) + '</td>'
+      + '<td style="white-space:nowrap">' + escHtml(r.company) + '</td>'
+      + '<td style="white-space:nowrap">' + escHtml(r.lead) + '</td>'
+      + '<td class="msc-td-center">' + profTypeBadge(r.billingType) + '</td>'
+      + '<td class="msc-td-center">' + escHtml(r.year || '') + '</td>'
+      + '<td class="msc-td-num">' + (r.estHours    != null ? Number(r.estHours).toFixed(1)    : '—') + '</td>'
+      + '<td class="msc-td-num">' + (r.billedHours != null ? Number(r.billedHours).toFixed(1) : '—') + '</td>'
+      + '<td class="msc-td-num" style="color:var(--text-muted)">' + (r.totalHours != null ? Number(r.totalHours).toFixed(1) : '—') + '</td>'
+      + '<td class="msc-td-num" style="' + varColor  + '">' + (r.hoursVariancePct != null ? r.hoursVariancePct.toFixed(1) + '%' : '—') + '</td>'
+      + '<td class="msc-td-num">' + (r.invoicedAmt    != null ? profFmtDollar(r.invoicedAmt)    : '—') + '</td>'
+      + '<td class="msc-td-num" style="' + pendColor + '">' + (r.pendingAmt > 0 ? profFmtDollar(r.pendingAmt) : '—') + '</td>'
+      + '<td class="msc-td-num">' + (r.costOfDelivery != null ? profFmtDollar(r.costOfDelivery) : '—') + '</td>'
+      + '<td class="msc-td-num" style="' + marginBg  + '">' + (r.grossMarginPct != null ? r.grossMarginPct.toFixed(1) + '%' : '—') + '</td>'
+      + '<td class="msc-td-num">' + (r.effectiveRate  != null ? profFmtDollar(r.effectiveRate) + '/hr' : '—') + '</td>'
+      + '<td style="font-size:11px;' + flagColor + ';max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escHtml(r.flags || '') + '">' + escHtml(r.flags || '') + '</td>'
+      + '</tr>';
+  }).join('');
+
+  return '<div class="msc-table-wrap"><table class="msc-table" id="prof-table">'
+    + '<thead><tr>' + headerHtml + '</tr></thead>'
+    + '<tbody>' + rowsHtml + '</tbody></table></div>';
+}
+
+function profRenderBody(rows, settings) {
+  const container = document.getElementById('prof-body');
+  if (!container) return;
+  if (rows.length === 1) {
+    container.innerHTML = profDetailCard(rows[0], settings);
+  } else {
+    container.innerHTML = profBuildTableHtml(rows, settings);
+    const numCols = new Set(['estHours','billedHours','totalHours','hoursVariancePct','invoicedAmt','pendingAmt','costOfDelivery','grossMarginPct','effectiveRate','discountVsRack','year']);
+    let sortCol = null, sortDir = 1;
+    container.querySelectorAll('th[data-col]').forEach(function(th) {
+      th.addEventListener('click', function() {
+        const key = th.dataset.col;
+        if (sortCol === key) { sortDir *= -1; } else { sortCol = key; sortDir = 1; }
+        const filterInput = document.getElementById('prof-filter');
+        const q = filterInput ? filterInput.value.trim().toLowerCase() : '';
+        const base = q ? _profData.filter(function(r) {
+          return (r.projectNumber || '').toLowerCase().includes(q) || (r.projectName || '').toLowerCase().includes(q);
+        }) : _profData.slice();
+        const sorted = base.sort(function(a, b) {
+          const av = a[key] != null ? a[key] : '';
+          const bv = b[key] != null ? b[key] : '';
+          if (numCols.has(key)) { return ((Number(av) || 0) - (Number(bv) || 0)) * sortDir; }
+          return String(av).localeCompare(String(bv)) * sortDir;
+        });
+        profRenderBody(sorted, settings);
+        const newTh = document.querySelector('#prof-table th[data-col="' + key + '"]');
+        if (newTh) newTh.querySelector('.sort-arrow').textContent = sortDir === 1 ? ' ▲' : ' ▼';
+      });
+    });
+  }
 }
 
 function profRenderResults(rows, settings) {
@@ -8546,93 +8719,25 @@ function profRenderResults(rows, settings) {
       + '</div>';
   }).join('');
 
-  const colDefs = [
-    ['Project #',    'projectNumber'],
-    ['Project Name', 'projectName'],
-    ['Client',       'company'],
-    ['Lead',         'lead'],
-    ['Type',         'billingType'],
-    ['Year',         'year'],
-    ['Est. Hrs',     'estHours'],
-    ['Billed Hrs',   'billedHours'],
-    ['Total Hrs',    'totalHours'],
-    ['Hrs Var %',    'hoursVariancePct'],
-    ['Invoiced',     'invoicedAmt'],
-    ['Pending',      'pendingAmt'],
-    ['Cost',         'costOfDelivery'],
-    ['Margin %',     'grossMarginPct'],
-    ['Eff. Rate',    'effectiveRate'],
-    ['vs Rack',      'discountVsRack'],
-  ];
+  el.innerHTML = '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px">' + cardHtml + '</div>'
+    + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">'
+    + '<input class="field-input" id="prof-filter" type="text" placeholder="Filter by project # or name…" style="max-width:300px;font-size:13px">'
+    + '<span id="prof-filter-count" style="font-size:12px;color:var(--text-muted)"></span>'
+    + '</div>'
+    + '<div id="prof-body"></div>';
 
-  const headerHtml = colDefs.map(function(c) {
-    return '<th data-col="' + c[1] + '" style="cursor:pointer;white-space:nowrap">'
-      + c[0] + ' <span class="sort-arrow"></span></th>';
-  }).join('') + '<th>Flags</th>';
+  profRenderBody(rows, settings);
 
-  const rowsHtml = rows.map(function(r, i) {
-    const altBg    = i % 2 === 1 ? 'background:var(--bg-surface)' : '';
-    const marginBg = r.grossMarginPct == null ? '' :
-      r.grossMarginPct < settings.marginWarnThreshold      ? 'background:#ffc7ce30' :
-      r.grossMarginPct < settings.marginWarnThreshold + 10 ? 'background:#ffeb9c30' : 'background:#c6efce30';
-    const typeBg   = r.billingType === 'Fixed Price'      ? 'background:#e2efda30' :
-                     r.billingType === 'Time & Materials' ? 'background:#ddeeff30' :
-                     r.billingType === 'Block Hours'      ? 'background:#fff2cc30' :
-                     r.billingType === 'No Contract'      ? 'background:#ffc7ce30' : '';
-    const varBg    = r.hoursVariancePct == null ? '' :
-      r.hoursVariancePct > 50 ? 'background:#ffc7ce30' :
-      r.hoursVariancePct > 20 ? 'background:#ffeb9c30' : '';
-    const rackBg   = r.discountVsRack == null ? '' :
-      r.discountVsRack >= 0 ? 'background:#c6efce30' : 'background:#ffeb9c30';
-    const pendBg   = r.pendingAmt > 0 ? 'background:#ffeb9c30' : '';
-    const flagColor = r.flags ? 'var(--warn,#fbbf24)' : 'var(--text-muted)';
-    return '<tr style="' + altBg + '">'
-      + '<td style="white-space:nowrap;font-family:monospace;font-size:11px">' + escHtml(r.projectNumber || '') + '</td>'
-      + '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escHtml(r.projectName) + '">' + escHtml(r.projectName) + '</td>'
-      + '<td style="white-space:nowrap">' + escHtml(r.company) + '</td>'
-      + '<td style="white-space:nowrap">' + escHtml(r.lead) + '</td>'
-      + '<td style="white-space:nowrap;' + typeBg + '">' + escHtml(r.billingType) + '</td>'
-      + '<td style="text-align:center">' + escHtml(r.year || '') + '</td>'
-      + '<td style="text-align:right">' + (r.estHours != null ? Number(r.estHours).toFixed(1) : '\u2014') + '</td>'
-      + '<td style="text-align:right">' + (r.billedHours != null ? Number(r.billedHours).toFixed(1) : '\u2014') + '</td>'
-      + '<td style="text-align:right;color:var(--text-muted)">' + (r.totalHours != null ? Number(r.totalHours).toFixed(1) : '\u2014') + '</td>'
-      + '<td style="text-align:right;' + varBg + '">' + (r.hoursVariancePct != null ? r.hoursVariancePct.toFixed(1) + '%' : '\u2014') + '</td>'
-      + '<td style="text-align:right">' + (r.invoicedAmt != null ? profFmtDollar(r.invoicedAmt) : '\u2014') + '</td>'
-      + '<td style="text-align:right;' + pendBg + '">' + (r.pendingAmt > 0 ? profFmtDollar(r.pendingAmt) : '\u2014') + '</td>'
-      + '<td style="text-align:right">' + (r.costOfDelivery != null ? profFmtDollar(r.costOfDelivery) : '\u2014') + '</td>'
-      + '<td style="text-align:right;' + marginBg + '">' + (r.grossMarginPct != null ? r.grossMarginPct.toFixed(1) + '%' : '\u2014') + '</td>'
-      + '<td style="text-align:right">' + (r.effectiveRate != null ? profFmtDollar(r.effectiveRate) + '/hr' : '\u2014') + '</td>'
-      + '<td style="text-align:right;' + rackBg + '">' + (r.discountVsRack != null ? profFmtDollar(r.discountVsRack) : '\u2014') + '</td>'
-      + '<td style="font-size:11px;color:' + flagColor + ';max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escHtml(r.flags || '') + '">' + escHtml(r.flags || '') + '</td>'
-      + '</tr>';
-  }).join('');
-
-  el.innerHTML = '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px">' + cardHtml + '</div>'
-    + '<div style="overflow-x:auto"><table class="data-table" id="prof-table">'
-    + '<thead><tr>' + headerHtml + '</tr></thead>'
-    + '<tbody>' + rowsHtml + '</tbody></table></div>';
-
-  const numCols = new Set(['estHours','billedHours','totalHours','hoursVariancePct','invoicedAmt','pendingAmt','costOfDelivery','grossMarginPct','effectiveRate','discountVsRack','year']);
-  let sortCol = null, sortDir = 1;
-  el.querySelectorAll('th[data-col]').forEach(function(th) {
-    th.addEventListener('click', function() {
-      const key = th.dataset.col;
-      if (sortCol === key) { sortDir *= -1; } else { sortCol = key; sortDir = 1; }
-      // Re-sort the data array and re-render so zebra striping stays correct
-      const sorted = _profData.slice().sort(function(a, b) {
-        const av = a[key] != null ? a[key] : '';
-        const bv = b[key] != null ? b[key] : '';
-        if (numCols.has(key)) { return ((Number(av) || 0) - (Number(bv) || 0)) * sortDir; }
-        return String(av).localeCompare(String(bv)) * sortDir;
-      });
-      profRenderResults(sorted, _profSettings);
-      // Restore sort arrow after re-render
-      const newTh = document.querySelector('#prof-table th[data-col="' + key + '"]');
-      if (newTh) newTh.querySelector('.sort-arrow').textContent = sortDir === 1 ? ' ▲' : ' ▼';
-    });
-  });
+  document.getElementById('prof-filter').oninput = function() {
+    const q = this.value.trim().toLowerCase();
+    const filtered = q ? rows.filter(function(r) {
+      return (r.projectNumber || '').toLowerCase().includes(q) || (r.projectName || '').toLowerCase().includes(q);
+    }) : rows;
+    const countEl = document.getElementById('prof-filter-count');
+    if (countEl) countEl.textContent = q && filtered.length !== rows.length ? filtered.length + ' of ' + rows.length + ' projects' : '';
+    profRenderBody(filtered, settings);
+  };
 }
-
 async function profExport() {
   const btn = document.getElementById('prof-export-btn');
   const origHtml = btn.innerHTML;

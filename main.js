@@ -5574,7 +5574,7 @@ function profIsExcluded(project) {
   return PROF_EXCLUDED_NAME_PATTERNS.some(p => name.includes(p));
 }
 
-ipcMain.handle('run-project-profitability', async (_, { startDate, endDate, includeActive }) => {
+ipcMain.handle('run-project-profitability', async (_, { startDate, endDate, includeActive, projectNumber }) => {
   const STATUS_COMPLETE = 5;
   const STATUS_ACTIVE   = [1,3,4,6,7,8,9,10,11,12,15,16,17,18,19,20,21,22,24,25,26,27];
   const CONTRACT_TYPE_LABELS = {
@@ -5591,18 +5591,22 @@ ipcMain.handle('run-project-profitability', async (_, { startDate, endDate, incl
     23:'Canceled',24:'ANS Hold',25:'Schedule IKO',26:'Schedule CKO',27:'Schedule Close',
   };
 
-  // 1. Fetch projects
-  const statusValues = includeActive ? [STATUS_COMPLETE, ...STATUS_ACTIVE] : [STATUS_COMPLETE];
-  const projects = await atQuery('/Projects', [{ op: 'in', field: 'status', value: statusValues }]);
-  const filtered = projects.filter(p => !profIsExcluded(p));
-
-  const inRange = filtered.filter(p => {
-    const dt = (p.completedDateTime || p.endDateTime || p.startDateTime || '').slice(0, 10);
-    if (!dt) return true;
-    if (startDate && dt < startDate) return false;
-    if (endDate   && dt > endDate)   return false;
-    return true;
-  });
+  // 1. Fetch projects — by project number (direct lookup) or by date range
+  let inRange;
+  if (projectNumber) {
+    inRange = await atQuery('/Projects', [{ op: 'eq', field: 'projectNumber', value: projectNumber }]);
+  } else {
+    const statusValues = includeActive ? [STATUS_COMPLETE, ...STATUS_ACTIVE] : [STATUS_COMPLETE];
+    const projects = await atQuery('/Projects', [{ op: 'in', field: 'status', value: statusValues }]);
+    const filtered = projects.filter(p => !profIsExcluded(p));
+    inRange = filtered.filter(p => {
+      const dt = (p.completedDateTime || p.endDateTime || p.startDateTime || '').slice(0, 10);
+      if (!dt) return true;
+      if (startDate && dt < startDate) return false;
+      if (endDate   && dt > endDate)   return false;
+      return true;
+    });
+  }
 
   // Load settings before early return so user's saved values are preserved
   let settings = { ...PROFITABILITY_DEFAULTS };
@@ -5626,7 +5630,7 @@ ipcMain.handle('run-project-profitability', async (_, { startDate, endDate, incl
 
   const companyMap  = Object.fromEntries(companies.map(c => [c.id, c.companyName || 'ID:' + c.id]));
   const resourceMap = Object.fromEntries(resources.map(r => [r.id, ((r.firstName||'') + ' ' + (r.lastName||'')).trim() || 'ID:' + r.id]));
-  const contractMap = Object.fromEntries(contracts.map(c => [c.id, { type: CONTRACT_TYPE_LABELS[c.contractType] || 'Type:' + c.contractType, typeId: c.contractType }]));
+  const contractMap = Object.fromEntries(contracts.map(c => [c.id, { type: CONTRACT_TYPE_LABELS[c.contractType] || 'Type:' + c.contractType, typeId: c.contractType, name: c.contractName || '' }]));
 
   const withValidContracts = inRange.filter(p => {
     if (!p.contractID) return true;
@@ -5647,7 +5651,7 @@ ipcMain.handle('run-project-profitability', async (_, { startDate, endDate, incl
       const milestones = await atQuery('/ContractMilestones', [{ op: 'eq', field: 'contractID', value: p.contractID }]);
       milestoneMap[p.contractID] = {
         billed:  milestones.filter(m => m.status === 3).reduce((s, m) => s + (m.amount || 0), 0),
-        pending: milestones.filter(m => m.status === 2).reduce((s, m) => s + (m.amount || 0), 0),
+        pending: milestones.filter(m => m.status === 1 || m.status === 2).reduce((s, m) => s + (m.amount || 0), 0),
       };
     } catch {
       milestoneMap[p.contractID] = { billed: 0, pending: 0 };
@@ -5685,10 +5689,36 @@ ipcMain.handle('run-project-profitability', async (_, { startDate, endDate, incl
     }
   }
 
+  // 5. Fetch time entries by contractID to get contract-level hours
+  //    (project fields like actualHours only count project tasks, missing ticket time on same contract)
+  const contractHourMap = {};
+  const TE_CHUNK = 50;
+  const billedContractIds = [...seenContractIds].filter(cid => {
+    const ct = contractMap[cid];
+    return !ct || ct.typeId !== 4; // block-hour contracts use billing items, not time entries
+  });
+  for (let i = 0; i < billedContractIds.length; i += TE_CHUNK) {
+    const chunk = billedContractIds.slice(i, i + TE_CHUNK);
+    try {
+      const entries = await atQuery('/TimeEntries', [{ op: 'in', field: 'contractID', value: chunk }]);
+      for (const te of entries) {
+        if (!te.contractID) continue;
+        const cid = te.contractID;
+        if (!contractHourMap[cid]) contractHourMap[cid] = { total: 0, billable: 0 };
+        const hrs = typeof te.hoursWorked === 'number' ? te.hoursWorked : (parseFloat(te.hoursWorked) || 0);
+        contractHourMap[cid].total += hrs;
+        if (!te.isNonBillable) contractHourMap[cid].billable += hrs;
+      }
+    } catch { /* skip chunk */ }
+  }
+
   // 6. Build rows
   const rows = withValidContracts.map(p => {
     const contractInfo = p.contractID ? (contractMap[p.contractID] || {}) : {};
-    const billingType  = contractInfo.type || (p.contractID ? 'Unknown' : 'No Contract');
+    const nameSuffix   = (contractInfo.name || '').match(/[\s\-]+(T&M|FF)$/i);
+    const billingType  = nameSuffix
+      ? (nameSuffix[1].toUpperCase() === 'FF' ? 'Fixed Price' : 'Time & Materials')
+      : (contractInfo.type || (p.contractID ? 'Unknown' : 'No Contract'));
     const isBlockHours = contractInfo.typeId === 4;
 
     let invoicedAmt, pendingAmt;
@@ -5701,17 +5731,17 @@ ipcMain.handle('run-project-profitability', async (_, { startDate, endDate, incl
       pendingAmt  = ms.pending;
     }
 
-    const estHours    = parseFloat(p.estimatedTime)     || 0;
-    const totalHours  = parseFloat(p.actualHours)       || 0;
-    const billedHours = parseFloat(p.actualBilledHours) || 0;
+    const estHours    = parseFloat(p.estimatedTime) || 0;  // from project (estimate only)
+    const cHours      = p.contractID ? (contractHourMap[p.contractID] || null) : null;
+    const totalHours  = cHours ? cHours.total    : (parseFloat(p.actualHours)       || 0);
+    const billedHours = cHours ? cHours.billable : (parseFloat(p.actualBilledHours) || 0);
 
-    const costOfDelivery    = billedHours * settings.blendedLaborRate;
-    const rackRateValue     = billedHours * settings.standardBillRate;
-    const grossMarginDollar = invoicedAmt - costOfDelivery;
-    const grossMarginPct    = invoicedAmt > 0 ? (grossMarginDollar / invoicedAmt) * 100 : null;
-    const effectiveRate     = billedHours > 0 ? invoicedAmt / billedHours : null;
-    const hoursVariancePct  = estHours    > 0 ? ((billedHours - estHours) / estHours) * 100 : null;
-    const discountVsRack    = rackRateValue > 0 ? invoicedAmt - rackRateValue : null;
+    const totalRevenue      = invoicedAmt + pendingAmt;
+    const costOfDelivery    = totalHours * settings.blendedLaborRate;  // all worked hours drive cost
+    const grossMarginDollar = totalRevenue - costOfDelivery;
+    const grossMarginPct    = totalRevenue > 0 ? (grossMarginDollar / totalRevenue) * 100 : null;
+    const effectiveRate     = totalHours   > 0 ? totalRevenue / totalHours : null;
+    const hoursVariancePct  = estHours     > 0 ? ((totalHours - estHours) / estHours) * 100 : null;
     const endDtStr          = p.completedDateTime || p.endDateTime || '';
 
     const fmtDate = s => {
@@ -5749,11 +5779,9 @@ ipcMain.handle('run-project-profitability', async (_, { startDate, endDate, incl
       invoicedAmt:       invoicedAmt || null,
       pendingAmt:        pendingAmt  || null,
       costOfDelivery:    billedHours ? costOfDelivery    : null,
-      rackRateValue:     billedHours ? rackRateValue     : null,
-      grossMarginDollar: invoicedAmt ? grossMarginDollar : null,
+      grossMarginDollar: totalRevenue ? grossMarginDollar : null,
       grossMarginPct:    grossMarginPct !== null ? parseFloat(grossMarginPct.toFixed(1))  : null,
       effectiveRate:     effectiveRate  !== null ? parseFloat(effectiveRate.toFixed(2))   : null,
-      discountVsRack:    discountVsRack !== null ? parseFloat(discountVsRack.toFixed(2))  : null,
       flags:             flags.join(' | '),
     };
   });
