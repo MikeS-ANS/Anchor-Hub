@@ -102,6 +102,12 @@ contextBridge.exposeInMainWorld('api', {
   saveMscData:     (d)   => ipcRenderer.invoke('save-msc-data', d),
   browseMscFile:   ()    => ipcRenderer.invoke('browse-msc-file'),
 
+  // Project Profitability
+  getProfitabilitySettings:  ()       => ipcRenderer.invoke('get-profitability-settings'),
+  saveProfitabilitySettings: (s)      => ipcRenderer.invoke('save-profitability-settings', s),
+  runProjectProfitability:   (opts)   => ipcRenderer.invoke('run-project-profitability', opts),
+  exportProfitabilityReport: (data)   => ipcRenderer.invoke('export-profitability-report', data),
+
   // Tool Visibility
   getToolVisibility:  ()    => ipcRenderer.invoke('get-tool-visibility'),
   saveToolVisibility: (vis) => ipcRenderer.invoke('save-tool-visibility', vis),

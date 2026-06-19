@@ -238,6 +238,7 @@ function navigate(view) {
   else if (view === 'blackpoint-processor') renderBlackpointProcessor();
   else if (view === 'msc-agreements')      renderMscAgreements();
   else if (view === 'duo-management')      renderDuoManagement();
+  else if (view === 'project-profitability') renderProjectProfitability();
   else if (view === 'settings') renderSettings();
   else if (view === 'help')     renderHelp();
 }
@@ -274,6 +275,8 @@ const TOOL_DEFS = [
     icon: `<path d="M13 8A5 5 0 1 1 8 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M8 1l3 2-3 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 8h2v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>` },
   { key: 'blackpoint-processor', label: 'BlackPoint Usage',
     icon: `<path d="M8 1.5L2 4.5v4c0 3.3 2.4 5.5 6 6 3.6-.5 6-2.7 6-6v-4L8 1.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 8l1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>` },
+  { key: 'project-profitability', label: 'Project Profitability',
+    icon: `<path d="M2 12l3-4 3 2 3-5 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 14H2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>` },
 ];
 
 let _sidebarConfig  = { visibility: {}, layout: [] };
@@ -416,6 +419,12 @@ const HOME_CARDS = [
     label: 'Duo Management',
     desc:  'Manage Duo MFA for employee onboarding and offboarding. Create admin accounts, enroll phones on the anchor user across all administrative units, and send Duo Mobile activation SMS.',
     icon:  `<svg width="24" height="24" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="6" r="3" stroke="currentColor" stroke-width="1.4"/><path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="13" cy="5" r="2" fill="var(--surface,#141720)" stroke="currentColor" stroke-width="1.2"/><path d="M12.3 5l.7.7 1.2-1.2" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  },
+  {
+    key:   'project-profitability',
+    label: 'Project Profitability',
+    desc:  'Analyze completed project margins, invoiced revenue vs cost of delivery, and lead performance.',
+    icon:  `<svg width="24" height="24" viewBox="0 0 16 16" fill="none"><path d="M2 12l3-4 3 2 3-5 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 14H2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>`,
   },
 ];
 
@@ -8136,3 +8145,277 @@ function renderDuoManagement() {
 }
 
 // navigate('home') is called from initApp() after successful authentication
+
+
+// --- Project Profitability ---
+let _profData = null;
+let _profSettings = null;
+
+async function renderProjectProfitability() {
+  const settings = await window.api.getProfitabilitySettings();
+  _profSettings = settings;
+
+  content.innerHTML = [
+    '<div class="view-header">',
+    '  <div>',
+    '    <h1 class="view-title">Project Profitability</h1>',
+    '    <p class="view-subtitle">Analyze completed project margins, invoiced revenue vs cost of delivery, and lead performance</p>',
+    '  </div>',
+    '  <div class="view-actions">',
+    '    <button class="btn btn-ghost btn-sm" id="prof-export-btn" disabled>',
+    '      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">',
+    '        <path d="M7 1v8M4 6l3 3 3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>',
+    '        <path d="M1 10v1.5A1.5 1.5 0 002.5 13h9A1.5 1.5 0 0013 11.5V10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>',
+    '      </svg>',
+    '      Export Excel',
+    '    </button>',
+    '  </div>',
+    '</div>',
+    '<div class="settings-section" style="margin-bottom:16px">',
+    '  <div class="section-header" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between" id="prof-settings-toggle">',
+    '    <span style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Settings</span>',
+    '    <svg id="prof-settings-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none" style="transition:transform .2s">',
+    '      <path d="M3 5l3 3 3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>',
+    '    </svg>',
+    '  </div>',
+    '  <div id="prof-settings-body" style="display:none;margin-top:12px">',
+    '    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px">',
+    '      <div><label class="field-label">Blended Labor Rate ($/hr)</label>',
+    '        <input class="field-input" id="prof-labor-rate" type="number" step="0.01" value="' + settings.blendedLaborRate + '" /></div>',
+    '      <div><label class="field-label">Standard Billable Rate ($/hr)</label>',
+    '        <input class="field-input" id="prof-bill-rate" type="number" step="0.01" value="' + settings.standardBillRate + '" /></div>',
+    '      <div><label class="field-label">Margin Warning Threshold (%)</label>',
+    '        <input class="field-input" id="prof-margin-threshold" type="number" step="1" value="' + settings.marginWarnThreshold + '" /></div>',
+    '    </div>',
+    '    <button class="btn btn-ghost btn-sm" id="prof-save-settings-btn">Save Settings</button>',
+    '    <span id="prof-settings-status" style="font-size:11px;color:var(--text-muted);margin-left:10px"></span>',
+    '  </div>',
+    '</div>',
+    '<div style="display:flex;align-items:flex-end;gap:12px;margin-bottom:16px;flex-wrap:wrap">',
+    '  <div><label class="field-label">Start Date</label>',
+    '    <input class="field-input" id="prof-start" type="date" style="width:160px" /></div>',
+    '  <div><label class="field-label">End Date</label>',
+    '    <input class="field-input" id="prof-end" type="date" style="width:160px" /></div>',
+    '  <div style="display:flex;align-items:center;gap:8px;padding-bottom:2px">',
+    '    <input type="checkbox" id="prof-include-active" style="accent-color:var(--accent);width:14px;height:14px" />',
+    '    <label for="prof-include-active" style="font-size:12px;color:var(--text-muted);cursor:pointer">Include active projects</label>',
+    '  </div>',
+    '  <button class="btn btn-primary" id="prof-run-btn">',
+    '    <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M3 2l9 5-9 5V2z" fill="currentColor"/></svg>',
+    '    Run Report',
+    '  </button>',
+    '</div>',
+    '<div id="prof-status" style="display:none;padding:12px;border-radius:8px;background:var(--bg-surface);margin-bottom:12px;font-size:12px;color:var(--text-muted);align-items:center;gap:10px"></div>',
+    '<div id="prof-results"></div>',
+  ].join('\n');
+
+  const now = new Date();
+  const twoYearsAgo = new Date(now);
+  twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
+  document.getElementById('prof-start').value = twoYearsAgo.toISOString().slice(0, 10);
+  document.getElementById('prof-end').value = now.toISOString().slice(0, 10);
+
+  document.getElementById('prof-settings-toggle').onclick = function() {
+    const body = document.getElementById('prof-settings-body');
+    const chevron = document.getElementById('prof-settings-chevron');
+    const open = body.style.display === 'none';
+    body.style.display = open ? '' : 'none';
+    chevron.style.transform = open ? 'rotate(180deg)' : '';
+  };
+
+  document.getElementById('prof-save-settings-btn').onclick = async function() {
+    const s = {
+      blendedLaborRate:    parseFloat(document.getElementById('prof-labor-rate').value)       || 83.50,
+      standardBillRate:    parseFloat(document.getElementById('prof-bill-rate').value)        || 200.00,
+      marginWarnThreshold: parseFloat(document.getElementById('prof-margin-threshold').value) || 20,
+    };
+    await window.api.saveProfitabilitySettings(s);
+    _profSettings = s;
+    const status = document.getElementById('prof-settings-status');
+    status.textContent = 'Saved.';
+    setTimeout(function() { if (status) status.textContent = ''; }, 2000);
+  };
+
+  if (_profData) profRenderResults(_profData, _profSettings);
+  document.getElementById('prof-run-btn').onclick = profRunReport;
+  document.getElementById('prof-export-btn').onclick = profExport;
+}
+
+async function profRunReport() {
+  const runBtn     = document.getElementById('prof-run-btn');
+  const statusDiv  = document.getElementById('prof-status');
+  const resultsDiv = document.getElementById('prof-results');
+  const exportBtn  = document.getElementById('prof-export-btn');
+  const startDate     = document.getElementById('prof-start').value || null;
+  const endDate       = document.getElementById('prof-end').value   || null;
+  const includeActive = document.getElementById('prof-include-active').checked;
+
+  runBtn.disabled = true;
+  exportBtn.disabled = true;
+  statusDiv.style.display = 'flex';
+  statusDiv.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px"></span>'
+    + '<span>Fetching projects from Autotask\u2026 This may take a few minutes.</span>';
+  resultsDiv.innerHTML = '';
+
+  try {
+    const result = await window.api.runProjectProfitability({ startDate, endDate, includeActive });
+    _profData     = result.projects;
+    _profSettings = result.settings;
+    statusDiv.style.display = 'none';
+    profRenderResults(_profData, _profSettings);
+    exportBtn.disabled = !_profData.length;
+    saveToolStat('project-profitability', _profData.length + ' projects', 'ok');
+  } catch (e) {
+    statusDiv.innerHTML = '<span style="color:var(--error)"><strong>Error:</strong> ' + escHtml(e.message) + '</span>';
+    saveToolStat('project-profitability', 'Error: ' + e.message, 'error');
+  } finally {
+    runBtn.disabled = false;
+  }
+}
+
+function profFmtDollar(n) {
+  if (n == null) return '\u2014';
+  return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+
+function profFmtPct(n) {
+  if (n == null) return '\u2014';
+  return n.toFixed(1) + '%';
+}
+
+function profRenderResults(rows, settings) {
+  const el = document.getElementById('prof-results');
+  if (!el) return;
+
+  if (!rows || !rows.length) {
+    el.innerHTML = '<div style="padding:32px;text-align:center;color:var(--text-muted);font-size:13px">No projects found for the selected date range.</div>';
+    return;
+  }
+
+  const totalInvoiced = rows.reduce(function(s, r) { return s + (r.invoicedAmt || 0); }, 0);
+  const totalCost     = rows.reduce(function(s, r) { return s + (r.costOfDelivery || 0); }, 0);
+  const totalMargin   = totalInvoiced > 0 ? (totalInvoiced - totalCost) / totalInvoiced * 100 : 0;
+  const totalPending  = rows.reduce(function(s, r) { return s + (r.pendingAmt || 0); }, 0);
+  const flaggedCount  = rows.filter(function(r) { return r.flags; }).length;
+
+  const marginColor = totalMargin >= settings.marginWarnThreshold + 10 ? 'var(--success,#4ade80)'
+    : totalMargin >= settings.marginWarnThreshold ? 'var(--warn,#fbbf24)' : 'var(--error,#f87171)';
+
+  const statCards = [
+    ['Projects',         String(rows.length),          'var(--text)'],
+    ['Total Invoiced',   profFmtDollar(totalInvoiced),  'var(--success,#4ade80)'],
+    ['Gross Margin',     profFmtPct(totalMargin),        marginColor],
+    ['Pending Unbilled', profFmtDollar(totalPending),    totalPending > 0 ? 'var(--warn,#fbbf24)' : 'var(--text)'],
+    ['Flagged',          String(flaggedCount),           flaggedCount > 0 ? 'var(--error,#f87171)' : 'var(--text)'],
+  ];
+
+  const cardHtml = statCards.map(function(item) {
+    return '<div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:12px 14px">'
+      + '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">' + item[0] + '</div>'
+      + '<div style="font-size:18px;font-weight:700;color:' + item[2] + '">' + escHtml(item[1]) + '</div>'
+      + '</div>';
+  }).join('');
+
+  const colDefs = [
+    ['Project #',    'projectNumber'],
+    ['Project Name', 'projectName'],
+    ['Client',       'company'],
+    ['Lead',         'lead'],
+    ['Type',         'billingType'],
+    ['Year',         'year'],
+    ['Est. Hrs',     'estHours'],
+    ['Billed Hrs',   'billedHours'],
+    ['Total Hrs',    'totalHours'],
+    ['Hrs Var %',    'hoursVariancePct'],
+    ['Invoiced',     'invoicedAmt'],
+    ['Pending',      'pendingAmt'],
+    ['Cost',         'costOfDelivery'],
+    ['Margin %',     'grossMarginPct'],
+    ['Eff. Rate',    'effectiveRate'],
+    ['vs Rack',      'discountVsRack'],
+  ];
+
+  const headerHtml = colDefs.map(function(c) {
+    return '<th data-col="' + c[1] + '" style="cursor:pointer;white-space:nowrap">'
+      + c[0] + ' <span class="sort-arrow"></span></th>';
+  }).join('') + '<th>Flags</th>';
+
+  const rowsHtml = rows.map(function(r, i) {
+    const altBg    = i % 2 === 1 ? 'background:var(--bg-surface)' : '';
+    const marginBg = r.grossMarginPct == null ? '' :
+      r.grossMarginPct < settings.marginWarnThreshold      ? 'background:#ffc7ce30' :
+      r.grossMarginPct < settings.marginWarnThreshold + 10 ? 'background:#ffeb9c30' : 'background:#c6efce30';
+    const typeBg   = r.billingType === 'Fixed Price'      ? 'background:#e2efda30' :
+                     r.billingType === 'Time & Materials' ? 'background:#ddeeff30' :
+                     r.billingType === 'Block Hours'      ? 'background:#fff2cc30' :
+                     r.billingType === 'No Contract'      ? 'background:#ffc7ce30' : '';
+    const varBg    = r.hoursVariancePct == null ? '' :
+      r.hoursVariancePct > 50 ? 'background:#ffc7ce30' :
+      r.hoursVariancePct > 20 ? 'background:#ffeb9c30' : '';
+    const rackBg   = r.discountVsRack == null ? '' :
+      r.discountVsRack >= 0 ? 'background:#c6efce30' : 'background:#ffeb9c30';
+    const pendBg   = r.pendingAmt > 0 ? 'background:#ffeb9c30' : '';
+    const flagColor = r.flags ? 'var(--warn,#fbbf24)' : 'var(--text-muted)';
+    return '<tr style="' + altBg + '">'
+      + '<td style="white-space:nowrap;font-family:monospace;font-size:11px">' + escHtml(r.projectNumber || '') + '</td>'
+      + '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escHtml(r.projectName) + '">' + escHtml(r.projectName) + '</td>'
+      + '<td style="white-space:nowrap">' + escHtml(r.company) + '</td>'
+      + '<td style="white-space:nowrap">' + escHtml(r.lead) + '</td>'
+      + '<td style="white-space:nowrap;' + typeBg + '">' + escHtml(r.billingType) + '</td>'
+      + '<td style="text-align:center">' + escHtml(r.year || '') + '</td>'
+      + '<td style="text-align:right">' + (r.estHours != null ? Number(r.estHours).toFixed(1) : '\u2014') + '</td>'
+      + '<td style="text-align:right">' + (r.billedHours != null ? Number(r.billedHours).toFixed(1) : '\u2014') + '</td>'
+      + '<td style="text-align:right;color:var(--text-muted)">' + (r.totalHours != null ? Number(r.totalHours).toFixed(1) : '\u2014') + '</td>'
+      + '<td style="text-align:right;' + varBg + '">' + (r.hoursVariancePct != null ? r.hoursVariancePct.toFixed(1) + '%' : '\u2014') + '</td>'
+      + '<td style="text-align:right">' + (r.invoicedAmt != null ? profFmtDollar(r.invoicedAmt) : '\u2014') + '</td>'
+      + '<td style="text-align:right;' + pendBg + '">' + (r.pendingAmt > 0 ? profFmtDollar(r.pendingAmt) : '\u2014') + '</td>'
+      + '<td style="text-align:right">' + (r.costOfDelivery != null ? profFmtDollar(r.costOfDelivery) : '\u2014') + '</td>'
+      + '<td style="text-align:right;' + marginBg + '">' + (r.grossMarginPct != null ? r.grossMarginPct.toFixed(1) + '%' : '\u2014') + '</td>'
+      + '<td style="text-align:right">' + (r.effectiveRate != null ? profFmtDollar(r.effectiveRate) + '/hr' : '\u2014') + '</td>'
+      + '<td style="text-align:right;' + rackBg + '">' + (r.discountVsRack != null ? profFmtDollar(r.discountVsRack) : '\u2014') + '</td>'
+      + '<td style="font-size:11px;color:' + flagColor + ';max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escHtml(r.flags || '') + '">' + escHtml(r.flags || '') + '</td>'
+      + '</tr>';
+  }).join('');
+
+  el.innerHTML = '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px">' + cardHtml + '</div>'
+    + '<div style="overflow-x:auto"><table class="data-table" id="prof-table">'
+    + '<thead><tr>' + headerHtml + '</tr></thead>'
+    + '<tbody>' + rowsHtml + '</tbody></table></div>';
+
+  const numCols = new Set(['estHours','billedHours','totalHours','hoursVariancePct','invoicedAmt','pendingAmt','costOfDelivery','grossMarginPct','effectiveRate','discountVsRack','year']);
+  let sortCol = null, sortDir = 1;
+  el.querySelectorAll('th[data-col]').forEach(function(th) {
+    th.addEventListener('click', function() {
+      const key = th.dataset.col;
+      if (sortCol === key) { sortDir *= -1; } else { sortCol = key; sortDir = 1; }
+      // Re-sort the data array and re-render so zebra striping stays correct
+      const sorted = _profData.slice().sort(function(a, b) {
+        const av = a[key] != null ? a[key] : '';
+        const bv = b[key] != null ? b[key] : '';
+        if (numCols.has(key)) { return ((Number(av) || 0) - (Number(bv) || 0)) * sortDir; }
+        return String(av).localeCompare(String(bv)) * sortDir;
+      });
+      profRenderResults(sorted, _profSettings);
+      // Restore sort arrow after re-render
+      const newTh = document.querySelector('#prof-table th[data-col="' + key + '"]');
+      if (newTh) newTh.querySelector('.sort-arrow').textContent = sortDir === 1 ? ' ▲' : ' ▼';
+    });
+  });
+}
+
+async function profExport() {
+  const btn = document.getElementById('prof-export-btn');
+  const origHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = 'Exporting\u2026';
+  try {
+    const result = await window.api.exportProfitabilityReport({ rows: _profData, settings: _profSettings });
+    if (result.canceled) { return; }
+    if (result.error) { alert('Export failed: ' + result.error); }
+  } catch (e) {
+    alert('Export failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = origHtml;
+  }
+}
