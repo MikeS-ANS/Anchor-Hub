@@ -10,7 +10,7 @@
   --accent:    #D0641C;
   --accent-dim:#D0641C22;
   --text:      #dde2f0;
-  --text-muted:#6b7280;
+  --text-muted:#8b95a8;
   --text-dim:  #9ca3b0;
   --success:   #34d399;
   --warn:      #fbbf24;
@@ -383,7 +383,7 @@ code.ph {
 .field-row { display: flex; gap: 8px; align-items: center; }
 .field-row .field-input { flex: 1; }
 .btn-sm { padding: 7px 12px; font-size: 12px; white-space: nowrap; }
-.field-hint { font-size: 11px; color: var(--text-muted); margin-top: 5px; line-height: 1.5; opacity: 0.75; }
+.field-hint { font-size: 12px; color: var(--text-dim); margin-top: 5px; line-height: 1.6; }
 .settings-actions { display: flex; align-items: center; gap: 10px; max-width: 540px; }
 .save-status { font-size: 12px; margin-left: 4px; }
 .save-status.success { color: var(--success); }

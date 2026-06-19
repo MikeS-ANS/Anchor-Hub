@@ -921,9 +921,9 @@ ipcMain.handle('creds-check', async () => {
 
 // ─── Pax8 API ─────────────────────────────────────────────────────────────────
 async function getPax8Token() {
-  const clientId = await keytar.getPassword(SERVICE_NAME, 'pax8_client_id');
-  const clientSecret = await keytar.getPassword(SERVICE_NAME, 'pax8_client_secret');
-  if (!clientId || !clientSecret) throw new Error('Pax8 credentials not configured. Please go to Settings.');
+  const clientId     = await kvGetSecret('pax8-client-id');
+  const clientSecret = await kvGetSecret('pax8-client-secret');
+  if (!clientId || !clientSecret) throw new Error('Pax8 credentials not found in Key Vault (pax8-client-id / pax8-client-secret).');
   const res = await fetch('https://api.pax8.com/v1/token', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, audience: 'https://api.pax8.com', grant_type: 'client_credentials' })
@@ -973,11 +973,17 @@ async function getAtBaseUrl(username) {
 }
 
 async function atFetch(path, opts = {}) {
-  const username = await keytar.getPassword(SERVICE_NAME, 'autotask_username');
-  const apiKey = await keytar.getPassword(SERVICE_NAME, 'autotask_api_key');
-  const integrationCode = await keytar.getPassword(SERVICE_NAME, 'autotask_integration_code');
-  if (!username || !apiKey) throw new Error('Autotask credentials not configured. Please go to Settings.');
-  if (!integrationCode) throw new Error('Autotask Integration Code not configured. Please go to Settings.');
+  // Personal write key (keytar) takes priority; fall back to shared read-only from Key Vault
+  let username        = await keytar.getPassword(SERVICE_NAME, 'autotask_username');
+  let apiKey          = await keytar.getPassword(SERVICE_NAME, 'autotask_api_key');
+  let integrationCode = await keytar.getPassword(SERVICE_NAME, 'autotask_integration_code');
+  if (!username || !apiKey || !integrationCode) {
+    username        = await kvGetSecret('autotask-username');
+    apiKey          = await kvGetSecret('autotask-secret');
+    integrationCode = await kvGetSecret('autotask-integration-code');
+  }
+  if (!username || !apiKey) throw new Error('Autotask credentials not configured. Add your personal key in Settings or contact your admin.');
+  if (!integrationCode) throw new Error('Autotask Integration Code not configured.');
   const baseUrl = await getAtBaseUrl(username);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30000);
@@ -1094,6 +1100,148 @@ async function getContractServices(contractId, send) {
   if (send) send(`  ⚠ All ContractServices path attempts 404'd for contract ${contractId}`, 'warn');
   return [];
 }
+
+// ─── Autotask Contract Auto-Push ──────────────────────────────────────────────
+
+const AT_SVC_IDS = {
+  azure:      110,
+  nerdio:     159,
+  exclaimer:  [262, 288],  // try standard first, then Pro
+  ironscales: 275,
+  printix:    266,
+};
+const AT_CONTRACT_NAME = {
+  azure:      ['Azure'],
+  nerdio:     ['Azure'],
+  exclaimer:  ['Managed Cloud'],
+  ironscales: ['Managed Cloud', 'Managed Security'],
+  printix:    ['Managed Cloud'],
+};
+
+async function atFindContract(companyId, namePattern, effectiveDate) {
+  const all = await atQuery('/Contracts', [
+    { field: 'companyID',    op: 'eq',       value: parseInt(companyId, 10) },
+    { field: 'contractName', op: 'contains', value: namePattern },
+    { field: 'status',       op: 'eq',       value: 1 },
+  ]);
+  const eligible = all
+    .filter(c => new Date(c.startDate) <= new Date(effectiveDate))
+    .sort((a, b) => new Date(b.startDate) - new Date(a.startDate));
+  return eligible[0] || null;
+}
+
+async function atFindContractService(contractId, serviceId) {
+  const all = await atQuery('/ContractServices', [
+    { field: 'contractID', op: 'eq', value: contractId },
+    { field: 'serviceID',  op: 'eq', value: serviceId  },
+  ]);
+  return all[0] || null;
+}
+
+async function atGetCurrentUnits(contractServiceId) {
+  const all = await atQuery('/ContractServiceUnits', [
+    { field: 'contractServiceID', op: 'eq', value: contractServiceId },
+  ]);
+  if (!all.length) return 0;
+  all.sort((a, b) => new Date(b.startDate || 0) - new Date(a.startDate || 0));
+  return all[0].units || 0;
+}
+
+// Find active contract + matching service line; tries all name patterns and serviceIDs
+async function atLocateService(companyId, serviceType, effectiveDate) {
+  const serviceIds = [].concat(AT_SVC_IDS[serviceType]);
+  const patterns   = AT_CONTRACT_NAME[serviceType];
+  for (const pattern of patterns) {
+    const contract = await atFindContract(companyId, pattern, effectiveDate);
+    if (!contract) continue;
+    for (const svcId of serviceIds) {
+      const cs = await atFindContractService(contract.id, svcId);
+      if (cs) return { contract, cs };
+    }
+  }
+  return null;
+}
+
+ipcMain.handle('at-push-azure', async (_, { rows, effectiveDate }) => {
+  const results = [];
+  for (const row of rows) {
+    if (!row.atCompanyId) { results.push({ company: row.company, status: 'no_mapping' }); continue; }
+    try {
+      const found = await atLocateService(row.atCompanyId, 'azure', effectiveDate);
+      if (!found) { results.push({ company: row.company, status: 'no_contract' }); continue; }
+      const { contract, cs } = found;
+      await atFetch('/ContractServiceAdjustments', {
+        method: 'POST',
+        body: JSON.stringify({
+          contractID:        contract.id,
+          contractServiceID: cs.id,
+          effectiveDate,
+          adjustedUnitCost:  row.cost,
+          adjustedUnitPrice: row.price,
+        }),
+      });
+      // Verify the change took effect
+      const verify = await atFindContractService(contract.id, cs.serviceID);
+      const ok = verify &&
+                 Math.abs(verify.unitCost  - row.cost)  < 0.005 &&
+                 Math.abs(verify.unitPrice - row.price) < 0.005;
+      results.push({ company: row.company, status: 'success', verified: ok,
+                     contractId: contract.id, serviceLineId: cs.id });
+    } catch (e) {
+      results.push({ company: row.company, status: 'error', message: e.message });
+    }
+  }
+  const summary = {
+    success: results.filter(r => r.status === 'success').length,
+    skipped: results.filter(r => ['no_mapping','no_contract','no_change'].includes(r.status)).length,
+    errors:  results.filter(r => r.status === 'error').length,
+  };
+  savePushLogEntry({ ts: new Date().toISOString(), serviceType: 'azure', effectiveDate, results, summary });
+  return { results };
+});
+
+async function atPushQtyService(rows, serviceType, effectiveDate) {
+  const results = [];
+  for (const row of rows) {
+    if (!row.atCompanyId) { results.push({ company: row.company, status: 'no_mapping' }); continue; }
+    try {
+      const found = await atLocateService(row.atCompanyId, serviceType, effectiveDate);
+      if (!found) { results.push({ company: row.company, status: 'no_contract' }); continue; }
+      const { contract, cs } = found;
+      const currentUnits = await atGetCurrentUnits(cs.id);
+      const unitChange   = row.qty - currentUnits;
+      if (unitChange === 0) {
+        results.push({ company: row.company, status: 'no_change', qty: row.qty }); continue;
+      }
+      await atFetch('/ContractServiceAdjustments', {
+        method: 'POST',
+        body: JSON.stringify({
+          contractID:        contract.id,
+          contractServiceID: cs.id,
+          effectiveDate,
+          unitChange,
+        }),
+      });
+      results.push({ company: row.company, status: 'success',
+                     contractId: contract.id, serviceLineId: cs.id,
+                     previousQty: currentUnits, newQty: row.qty, unitChange });
+    } catch (e) {
+      results.push({ company: row.company, status: 'error', message: e.message });
+    }
+  }
+  const summary = {
+    success: results.filter(r => r.status === 'success').length,
+    skipped: results.filter(r => ['no_mapping','no_contract','no_change'].includes(r.status)).length,
+    errors:  results.filter(r => r.status === 'error').length,
+  };
+  savePushLogEntry({ ts: new Date().toISOString(), serviceType, effectiveDate, results, summary });
+  return { results };
+}
+
+ipcMain.handle('at-push-nerdio',     async (_, d) => atPushQtyService(d.rows, 'nerdio',     d.effectiveDate));
+ipcMain.handle('at-push-exclaimer',  async (_, d) => atPushQtyService(d.rows, 'exclaimer',  d.effectiveDate));
+ipcMain.handle('at-push-ironscales', async (_, d) => atPushQtyService(d.rows, 'ironscales', d.effectiveDate));
+ipcMain.handle('at-push-printix',    async (_, d) => atPushQtyService(d.rows, 'printix',    d.effectiveDate));
 
 // ─── Excluded companies helper ────────────────────────────────────────────────
 function loadExcludedCompanies() {
@@ -1790,6 +1938,13 @@ let lastMarginExportData = null;
 const STATE_FILE = path.join(app.getPath('userData'), 'pax8hub-state.json');
 function readState()       { try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch { return {}; } }
 function writeState(patch) { fs.writeFileSync(STATE_FILE, JSON.stringify({ ...readState(), ...patch }), 'utf8'); }
+function savePushLogEntry(entry) {
+  const s = readState();
+  const log = Array.isArray(s.invoicePushLog) ? s.invoicePushLog : [];
+  log.unshift(entry);
+  if (log.length > 100) log.length = 100;
+  writeState({ invoicePushLog: log });
+}
 
 // Reuses getContractServices (with path auto-detection) and extracts pricing fields.
 // Service objects (/Services/ path): id = catalogId, unitPrice = default price
@@ -2772,12 +2927,82 @@ ipcMain.handle('fetch-pax8-invoice-list', async () => {
     const token    = await getPax8Token();
     const invoices = await pax8Paginate(token, '/invoices');
     invoices.sort((a, b) => new Date(b.invoiceDate || 0) - new Date(a.invoiceDate || 0));
-    return { success: true, invoices: invoices.slice(0, 18).map(inv => ({
-      id: inv.id, invoiceDate: inv.invoiceDate || '', total: inv.total ?? inv.amount ?? null,
-      label: `${inv.invoiceDate || inv.id}  —  $${Number(inv.total ?? inv.amount ?? 0).toFixed(2)}`
-    })) };
+    return { success: true, invoices: invoices.slice(0, 18).map(inv => {
+      const m = (inv.invoiceDate || '').match(/^(\d{4})-(\d{2})/);
+      const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+      const dateLabel = m ? `${MONTHS[parseInt(m[2],10)-1]} ${m[1]}` : (inv.invoiceDate || inv.id);
+      const amount = Number(inv.total ?? inv.amount ?? 0);
+      return {
+        id: inv.id, invoiceDate: inv.invoiceDate || '', total: inv.total ?? inv.amount ?? null,
+        dateLabel,
+        label: `${dateLabel}  —  $${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      };
+    }) };
   } catch (e) { return { success: false, error: e.message }; }
 });
+
+// ─── Invoice Processor — fuzzy company auto-match ─────────────────────────────
+function fuzzyMatchScore(a, b) {
+  const norm = s => s.toLowerCase()
+    .replace(/\b(llc|inc|corp|ltd|co\.?|company|the|group|tech|technology|technologies|solutions|services|systems|consulting|it)\b/g, ' ')
+    .replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+  const na = norm(a), nb = norm(b);
+  if (a.toLowerCase() === b.toLowerCase()) return 0.99;
+  if (na === nb) return 0.97;
+  if (na.startsWith(nb) || nb.startsWith(na)) return 0.90;
+  if (na.includes(nb) || nb.includes(na)) return 0.82;
+  const wa = new Set(na.split(' ').filter(w => w.length > 2));
+  const wb = new Set(nb.split(' ').filter(w => w.length > 2));
+  if (!wa.size || !wb.size) return 0;
+  const overlap = [...wa].filter(w => wb.has(w)).length;
+  return (overlap / Math.max(wa.size, wb.size)) * 0.75;
+}
+
+async function findBestAtCompanyMatch(companyName) {
+  const term = companyName.replace(/[^a-z0-9\s]/gi, ' ').split(/\s+/).find(w => w.length >= 4) || companyName.substring(0, 10);
+  let candidates;
+  try {
+    candidates = await atQuery('/Companies', [
+      { field: 'companyName', op: 'contains', value: term.substring(0, 15) },
+      { field: 'isActive',    op: 'eq',       value: true },
+    ]);
+  } catch { return null; }
+  if (!candidates || !candidates.length) return null;
+  let best = null, bestScore = 0;
+  for (const c of candidates) {
+    const s = fuzzyMatchScore(companyName, c.companyName);
+    if (s > bestScore) { bestScore = s; best = c; }
+  }
+  return bestScore >= 0.5 ? { atCompanyId: best.id, atCompanyName: best.companyName, confidence: bestScore } : null;
+}
+
+async function autoMatchCompanies(rawRows, mappingData) {
+  const mapped = new Set((mappingData.companies || []).filter(c => c.atId).map(c => c.pax8Id));
+  const unmapped = new Map();
+  for (const row of rawRows) {
+    if (row.company_id && !mapped.has(row.company_id)) unmapped.set(row.company_id, row.company_name);
+  }
+  if (!unmapped.size) return { autoMapped: [], suggestions: [] };
+
+  const autoMapped = [], suggestions = [];
+  for (const [pax8Id, companyName] of unmapped) {
+    try {
+      const match = await findBestAtCompanyMatch(companyName);
+      if (!match) continue;
+      if (match.confidence >= 0.85) {
+        const data = loadMappings();
+        const existing = data.companies.find(c => c.pax8Id === pax8Id);
+        if (existing) { existing.atId = match.atCompanyId; existing.atName = match.atCompanyName; }
+        else data.companies.push({ pax8Id, pax8Name: companyName, atId: match.atCompanyId, atName: match.atCompanyName, autoMapped: true });
+        saveMappingsFile(data);
+        autoMapped.push({ pax8Id, pax8Name: companyName, atCompanyId: match.atCompanyId, atCompanyName: match.atCompanyName, confidence: match.confidence });
+      } else {
+        suggestions.push({ pax8Id, pax8Name: companyName, atCompanyId: match.atCompanyId, atCompanyName: match.atCompanyName, confidence: match.confidence });
+      }
+    } catch { /* AT unavailable or match failed — skip silently */ }
+  }
+  return { autoMapped, suggestions };
+}
 
 // Process a Pax8 invoice directly from the API (no CSV needed)
 ipcMain.handle('process-pax8-invoice', async (_, { invoiceId, invoiceDate, defaultMarginPct = 20 }) => {
@@ -2785,14 +3010,38 @@ ipcMain.handle('process-pax8-invoice', async (_, { invoiceId, invoiceDate, defau
     const token = await getPax8Token();
     const items = await pax8FetchInvoiceItems(token, invoiceId);
     const rows  = items.map(normalizeInvoiceItem);
+    const mappingData = loadMappings();
+
+    // Auto-match unmapped companies against Autotask (best-effort, won't fail invoice load)
+    let autoMapped = [], suggestions = [];
+    try { ({ autoMapped, suggestions } = await autoMatchCompanies(rows, mappingData)); } catch {}
+
+    // Re-read mappings so auto-matched companies are included
     const { qboTotals, total, azureArr, oneTimeRows, nerdio, exclaimer, ironscales, printix, intuit } =
       processInvoiceRows(rows, defaultMarginPct, loadMappings());
     return { success: true, invoiceId, invoiceDate, totalLines: rows.length,
       qbo: { o365: qboTotals.o365, azure: qboTotals.azure, nerdio: qboTotals.nerdio,
         exclaimer: qboTotals.exclaimer, ironscales: qboTotals.ironscales, printix: qboTotals.printix,
         intuit: qboTotals.intuit, oneTime: qboTotals['one-time'], total },
-      azure: azureArr, oneTime: oneTimeRows, nerdio, exclaimer, ironscales, printix, intuit };
+      azure: azureArr, oneTime: oneTimeRows, nerdio, exclaimer, ironscales, printix, intuit,
+      autoMapped, suggestions };
   } catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('ip-confirm-mapping', async (_, { pax8Id, pax8Name, atCompanyId, atCompanyName }) => {
+  try {
+    const data = loadMappings();
+    const existing = data.companies.find(c => c.pax8Id === pax8Id);
+    if (existing) { existing.atId = atCompanyId; existing.atName = atCompanyName; }
+    else data.companies.push({ pax8Id, pax8Name, atId: atCompanyId, atName: atCompanyName, autoMapped: true });
+    saveMappingsFile(data);
+    return { success: true };
+  } catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('ip-get-push-log', async () => {
+  try { return { success: true, log: readState().invoicePushLog || [] }; }
+  catch { return { success: true, log: [] }; }
 });
 
 ipcMain.handle('export-invoice-breakdown', async (_, data) => {

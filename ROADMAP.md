@@ -31,6 +31,17 @@
 ## 🔄 In Progress
 
 - [ ] Brian's tools — port from Flask (~5 tools)
+- [ ] Company Mapping redesign — Autotask auto-match + centralized storage (see below)
+
+## ✅ Invoice Processor — Near-Term Queue
+
+Work these in order — each one unblocks the next.
+
+- [x] **Pax8 API key → Key Vault** — `pax8-client-id` / `pax8-client-secret` in `anchor-hub-vault`. Code reads from KV, keytar removed for these.
+- [x] **Autotask two-tier key** — shared read-only key in Key Vault (`autotask-username` / `autotask-secret` / `autotask-integration-code`). Personal write key stored in keytar per machine via Settings. `atFetch` checks keytar first, falls back to KV automatically.
+- [ ] **Company auto-match from Autotask** — at invoice processing time, query AT `/Companies/query` with a fuzzy name search for each unmapped company. Auto-assign high-confidence matches, surface low-confidence ones for one-click admin confirmation. Confirmed overrides stored in SharePoint JSON (via Graph) as the bridge until the SQL client directory is built.
+- [ ] **Push error logging** — persist a structured log entry for every AT push run: timestamp, service type, effective date, per-company result (success / skipped / error). Show a "Push History" panel in the tool. Skipped companies and errors surface clearly so mappings can be fixed. Long-term: admin notification via Teams webhook when any company is skipped due to missing mapping.
+- [ ] **QBO auto-push** — connect QuickBooks Online API to directly update the QBO account breakdown instead of copy-paste. Same pattern as Autotask push: per-account buttons, effective date picker, progress modal with per-line results. OAuth flow for QBO credentials stored in keytar (personal, not shared — QBO doesn't have a read-only API user concept the same way).
 
 ---
 
@@ -70,7 +81,10 @@ Specific items:
 - [ ] **Azure Key Vault — full API key migration**
   Move all API credentials out of per-machine keytar into a central, audited Key Vault. Scope covers: Pax8, Autotask, Claude API, Blackpoint, and Datto RMM. When someone leaves or a key rotates, one change propagates to every machine instantly.
 
-  **Autotask two-tier model:** Key Vault holds a shared read-only Autotask API key — every user gets it automatically with no setup required. Users who need write access (ticket creation, time entries, etc.) enter their personal write API key once; the app stores it locally via keytar and uses it in place of the KV key for any write operations. This keeps the shared key clean and auditable while letting authorized users work at full capability without a separate credential request workflow.
+  **Autotask two-tier model (confirmed design):**
+  - **Key Vault** → shared read-only AT API key. Every user gets it automatically with no setup. Scope: Companies, Contracts, ContractServices, ContractServiceUnits (read-only, nothing else).
+  - **Local keytar** → personal write API key. User enters their own AT credentials once per machine. App checks keytar first; if present, uses it for all operations. If absent, uses the shared read-only key (writes fail cleanly — correct behavior for users without write access). Personal keys migrate to Azure SQL in Sprint 2 as an encrypted column tied to the user's Entra identity.
+  - **Creating the shared AT user:** Mike creates a dedicated API-only user in Autotask with read-only access to the entities listed above. Credentials go into Key Vault as `AUTOTASK-USERNAME` and `AUTOTASK-SECRET`. Personal write users follow normal AT user provisioning — each employee's credentials stored locally.
 - [ ] **Azure App Configuration** — centralize tool settings. Admin changes a value, all machines pick it up.
 - [ ] **Azure SQL / Cosmos DB** — run history, notifications, announcements, idea submissions, audit trail.
 - [ ] **Application Insights** — replaces Sentry. Already in the Azure ecosystem.
@@ -150,6 +164,40 @@ These depend on the Azure backend being in place (run history lives in the DB, a
 - [ ] **Audit trail** — Log every significant action (who ran what, what data was changed, when) to Azure DB.
 - [ ] **Azure Trusted Signing** — ~$10/month via Azure. Gives the installer a Microsoft-backed signature and builds SmartScreen reputation over time. Covers distribution outside of Intune (shared links, new machines being set up, etc.).
 - [ ] **Central API key revocation** — Admin UI to revoke or rotate any API key across all users from one place. (Depends on Key Vault)
+
+---
+
+---
+
+## 🗺 Company Mapping — Redesign Plan
+
+The current per-machine manual mapping has two problems: every user has to do it themselves, and names from Pax8/invoices often don't match Autotask names.
+
+### The Right Architecture
+
+Company mapping is not a config problem — it's a **data relationship**: every client exists in multiple portals with different IDs and names, and Autotask is the source of truth. The long-term home is a `clients` table in Azure SQL (Sprint 2) with one row per client and columns for each portal's ID/name.
+
+### Near-Term: Auto-Match from Autotask
+
+Since we already have Autotask API access, most mapping can be **auto-discovered at invoice processing time**:
+
+1. For each company in the invoice, query Autotask `/Companies/query` with a fuzzy name search
+2. If one match is found with high confidence → auto-assign silently
+3. If multiple matches or low confidence → surface to the user for one-time confirmation
+4. Cache confirmed pairs so subsequent runs don't re-query
+
+This eliminates the manual mapping burden for 90%+ of clients. Edge cases are clients whose Pax8/invoice name is substantially different from their Autotask name (abbreviations, DBA names, etc.).
+
+### Centralized Override Storage (Bridge Solution)
+
+For the edge cases that don't auto-match, confirmed overrides need to live somewhere central so admins set them once and everyone gets them:
+
+- **Bridge (now):** SharePoint file via Microsoft Graph — already authenticated from SSO. One JSON file in a known folder, readable by all users, writable by `hub.admin` role only. No new infrastructure required.
+- **Long-term (Sprint 2):** Azure SQL `client_mappings` table, replaces the SharePoint file.
+
+### What Happens to the Current Mapping Tool
+
+The current UI becomes a **Company Directory** — a read-only view of all confirmed cross-platform mappings. Admins get an edit mode. Regular users see the mappings but can't change them. Suggested/unconfirmed matches appear with a confidence indicator and a one-click confirm button.
 
 ---
 

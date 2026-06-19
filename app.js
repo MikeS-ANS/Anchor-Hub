@@ -1492,33 +1492,6 @@ Total CommITment Core</textarea>
 
       <div class="settings-section">
         <h2 class="section-title">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M1 3h14M1 8h10M1 13h7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-          Pax8 Invoice Processor — Prompt Templates
-        </h2>
-        <p class="field-hint" style="margin-bottom:14px">
-          Customize the instruction block sent to Claude. Company/service data is appended automatically after the header.<br/>
-          <strong>Azure placeholders:</strong>
-          <code class="ph">{invoiceRef}</code> <code class="ph">{effectiveDate}</code> <code class="ph">{azureServiceId}</code><br/>
-          <strong>Service placeholders:</strong>
-          <code class="ph">{{INVOICE_ID}}</code> <code class="ph">{{INVOICE_DATE}}</code> <code class="ph">{{BILLING_MONTH_START}}</code> <code class="ph">{{BILLING_MONTH_END}}</code>
-        </p>
-        <div class="field-group">
-          <label class="field-label">Azure Prompt Header</label>
-          <textarea id="pt-azure-header" class="field-input pt-ta" rows="14" spellcheck="false"></textarea>
-        </div>
-        <div class="field-group" style="margin-top:12px">
-          <label class="field-label">Service Quantities Prompt Header</label>
-          <textarea id="pt-service-header" class="field-input pt-ta" rows="14" spellcheck="false"></textarea>
-        </div>
-        <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
-          <button class="btn btn-primary btn-sm" id="btn-save-prompt-templates">Save Templates</button>
-          <button class="btn btn-ghost btn-sm" id="btn-reset-prompt-templates">Reset to Defaults</button>
-          <span class="save-status" id="pt-save-status"></span>
-        </div>
-      </div>
-
-      <div class="settings-section">
-        <h2 class="section-title">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="1" width="12" height="14" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M5 4h6M5 7h6M5 10h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M9 11.5l1.5 1.5L13 10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Kaseya Invoice Processor — Prompt Template
         </h2>
@@ -1564,24 +1537,10 @@ Total CommITment Core</textarea>
 
       <div class="settings-section">
         <h2 class="section-title">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="3" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M1 6h14" stroke="currentColor" stroke-width="1.3"/></svg>
-          Pax8
-        </h2>
-        <div class="field-group">
-          <label class="field-label">Client ID</label>
-          <input class="field-input" id="pax8-client-id" type="text" placeholder="Pax8 OAuth2 Client ID" autocomplete="off" spellcheck="false" />
-        </div>
-        <div class="field-group">
-          <label class="field-label">Client Secret</label>
-          <input class="field-input" id="pax8-client-secret" type="password" placeholder="Pax8 OAuth2 Client Secret" autocomplete="off" />
-        </div>
-      </div>
-
-      <div class="settings-section">
-        <h2 class="section-title">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2C5.79 2 4 3.79 4 6v1H3a1 1 0 00-1 1v5a1 1 0 001 1h10a1 1 0 001-1V8a1 1 0 00-1-1h-1V6c0-2.21-1.79-4-4-4z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
-          Autotask PSA
+          Autotask PSA — Personal Write Key
         </h2>
+        <p class="field-hint" style="margin-bottom:12px">Optional. If set, your personal credentials are used for all Autotask operations. If left blank, the shared read-only key from Key Vault is used automatically.</p>
         <div class="field-group">
           <label class="field-label">Username</label>
           <input class="field-input" id="at-username" type="text" placeholder="API username (email)" autocomplete="off" spellcheck="false" />
@@ -1658,9 +1617,6 @@ Total CommITment Core</textarea>
   loadMarginSettings();
   document.getElementById('btn-save-margin-settings').addEventListener('click', saveMarginSettings);
   custInit();
-  loadPromptTemplateSettings();
-  document.getElementById('btn-save-prompt-templates').addEventListener('click', savePromptTemplateSettings);
-  document.getElementById('btn-reset-prompt-templates').addEventListener('click', resetPromptTemplateSettings);
   // Kaseya prompt save/reset wired to new dedicated buttons on the prompts tab
   document.getElementById('btn-save-kaseya-prompt').addEventListener('click', savePromptTemplateSettings);
   document.getElementById('btn-reset-kaseya-prompt').addEventListener('click', resetPromptTemplateSettings);
@@ -2032,14 +1988,12 @@ async function saveKaseyaSettingsUI() {
 }
 
 const CRED_MAP = {
-  'pax8-client-id':       'pax8_client_id',
-  'pax8-client-secret':   'pax8_client_secret',
-  'at-username':          'autotask_username',
-  'at-api-key':           'autotask_api_key',
-  'at-integration-code':  'autotask_integration_code',
-  'at-url':               'autotask_url',
-  'claude-api-key':       'claude_api_key',
-  'bp-api-key':           'blackpoint_api_key',
+  'at-username':         'autotask_username',
+  'at-api-key':          'autotask_api_key',
+  'at-integration-code': 'autotask_integration_code',
+  'at-url':              'autotask_url',
+  'claude-api-key':      'claude_api_key',
+  'bp-api-key':          'blackpoint_api_key',
 };
 
 async function loadCredentials() {
@@ -2180,25 +2134,26 @@ function renderInvoiceProcessor() {
     <div class="view-header">
       <div>
         <h1 class="view-title">Pax8 Invoice Processor</h1>
-        <p class="view-desc">Import a raw Pax8 invoice CSV to generate QBO breakdowns, Azure per-client pricing, one-time charges, service quantities, and an Excel export.</p>
+        <p class="view-desc">Load directly from Pax8 or import a CSV — processes Azure per-client pricing and service quantities, then pushes changes directly to Autotask contracts. Also generates QBO breakdowns and an Excel export.</p>
       </div>
       <img class="view-header-deco" src="Anchor_Logo_Vertical_High.png" alt="" draggable="false" />
     </div>
 
     <div class="settings-section">
       <div class="section-title">Step 1 — Select Invoice</div>
-      <p class="field-hint" style="margin-bottom:12px">Load directly from Pax8, or browse for a local CSV export.</p>
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-        <button class="btn btn-primary" id="ip-load-pax8-btn">
-          <svg width="13" height="13" viewBox="0 0 13 13" fill="none" style="margin-right:4px"><path d="M6.5 1C3.46 1 1 3.46 1 6.5S3.46 12 6.5 12 12 9.54 12 6.5 9.54 1 6.5 1zm0 2v3.5l2.5 1.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-          Load from Pax8…
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <button class="btn btn-primary" id="ip-load-recent-btn">
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none" style="margin-right:4px"><path d="M6.5 1v3.5l2 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6.5" cy="6.5" r="5.5" stroke="currentColor" stroke-width="1.3"/></svg>
+          Load Most Recent Invoice
         </button>
-        <span style="color:var(--text-muted);font-size:12px">or</span>
-        <button class="btn btn-ghost" id="ip-browse-btn">Browse CSV…</button>
+        <span style="color:var(--text-muted);font-size:12px">·</span>
+        <button class="btn btn-ghost" id="ip-load-pax8-btn" style="font-size:12px">Browse Past Invoices…</button>
+        <span style="color:var(--text-muted);font-size:12px">·</span>
+        <button class="btn btn-ghost" id="ip-browse-btn" style="font-size:12px">Browse CSV…</button>
         <span id="ip-filename" style="font-size:12px;color:var(--text-muted);font-family:var(--font-mono)"></span>
       </div>
-      <div id="ip-invoice-picker" style="display:none;margin-bottom:12px">
-        <select id="ip-invoice-select" style="background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;min-width:320px">
+      <div id="ip-invoice-picker" style="display:none;margin-bottom:10px">
+        <select id="ip-invoice-select" style="background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;min-width:320px;color-scheme:dark">
           <option value="">— select an invoice —</option>
         </select>
       </div>
@@ -2228,11 +2183,9 @@ function renderInvoiceProcessor() {
         <p class="field-hint" style="margin-bottom:10px">Edit Margin % or Client Price directly. Prices are rounded up to the nearest $5. Set price to $0 to update cost only (e.g. internal accounts).</p>
         <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
           <button class="btn btn-ghost" id="ip-recalc-btn" style="font-size:12px">Reset to Default</button>
-          <button class="btn btn-ghost" id="ip-at-prompt-btn" style="font-size:12px">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="margin-right:3px"><rect x="1" y="1" width="10" height="10" rx="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M3 4h6M3 6h4" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
-            Copy Autotask Prompt
+          <button class="btn btn-ghost" id="ip-at-push-btn" style="font-size:12px;color:#4ade80;border-color:#4ade8066">
+            ↑ Push to Autotask
           </button>
-          <span id="ip-at-copied" style="font-size:11px;color:var(--success);display:none">Copied!</span>
         </div>
         <div id="ip-azure-table" style="overflow-x:auto"></div>
       </div>
@@ -2248,11 +2201,7 @@ function renderInvoiceProcessor() {
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px">
           <div class="section-title" style="margin-bottom:0">Service Quantities</div>
           <div style="display:flex;gap:8px;align-items:center">
-            <button class="btn btn-ghost" id="ip-svc-prompt-btn" style="font-size:12px">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="margin-right:3px"><rect x="1" y="1" width="10" height="10" rx="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M3 4h6M3 6h4" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
-              Copy Service Prompt
-            </button>
-            <span id="ip-svc-copied" style="font-size:11px;color:var(--success);display:none">Copied!</span>
+            <span id="ip-svc-push-btns" style="display:flex;gap:6px"></span>
           </div>
         </div>
         <div id="ip-services-tables"></div>
@@ -2274,7 +2223,37 @@ function renderInvoiceProcessor() {
 
   let _pax8InvoiceList = []; // cached invoice list from Pax8
 
-  // Load from Pax8 button
+  // Load Most Recent Invoice — auto-fetches and auto-processes the newest invoice
+  const RECENT_BTN_HTML = '<svg width="13" height="13" viewBox="0 0 13 13" fill="none" style="margin-right:4px"><path d="M6.5 1v3.5l2 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6.5" cy="6.5" r="5.5" stroke="currentColor" stroke-width="1.3"/></svg>Load Most Recent Invoice';
+  document.getElementById('ip-load-recent-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('ip-load-recent-btn');
+    const status = document.getElementById('ip-status');
+    const processBtn = document.getElementById('ip-process-btn');
+    btn.disabled = true; btn.textContent = 'Fetching…';
+    processBtn.disabled = true;
+    status.textContent = 'Fetching latest invoice from Pax8…'; status.className = 'save-status';
+    try {
+      const res = await window.api.fetchPax8InvoiceList();
+      if (!res.success) { status.textContent = `Error: ${res.error}`; status.className = 'save-status error'; return; }
+      if (!res.invoices.length) { status.textContent = 'No invoices found.'; status.className = 'save-status error'; return; }
+      _pax8InvoiceList = res.invoices;
+      _invoiceFilePath = null;
+      document.getElementById('ip-filename').textContent = '';
+      document.getElementById('ip-invoice-picker').style.display = 'none';
+      const latest = res.invoices[0];
+      btn.textContent = 'Processing…';
+      status.textContent = `Processing ${latest.label}…`; status.className = 'save-status';
+      const result = await window.api.processPax8Invoice({ invoiceId: latest.id, invoiceDate: latest.invoiceDate, defaultMarginPct: 20 });
+      if (!result.success) { status.textContent = `Error: ${result.error}`; status.className = 'save-status error'; return; }
+      _invoiceData = result;
+      saveToolStat('invoice-processor', `${result.totalLines} lines — ${latest.label}`, 'ok');
+      status.textContent = `✓ ${latest.label} · ${result.totalLines} lines`; status.className = 'save-status success';
+      renderInvoiceProcessorResults(result);
+    } catch(e) { status.textContent = `Error: ${e.message}`; status.className = 'save-status error'; }
+    finally { btn.disabled = false; btn.innerHTML = RECENT_BTN_HTML; }
+  });
+
+  // Browse Past Invoices — shows the full picker dropdown
   document.getElementById('ip-load-pax8-btn').addEventListener('click', async () => {
     const btn = document.getElementById('ip-load-pax8-btn');
     const status = document.getElementById('ip-status');
@@ -2293,9 +2272,9 @@ function renderInvoiceProcessor() {
       sel.addEventListener('change', () => {
         document.getElementById('ip-process-btn').disabled = !sel.value;
       });
-      status.textContent = `✓ ${res.invoices.length} invoices loaded`; status.className = 'save-status success';
+      status.textContent = `${res.invoices.length} invoices available`; status.className = 'save-status';
     } catch(e) { status.textContent = `Error: ${e.message}`; status.className = 'save-status error'; }
-    finally { btn.disabled = false; btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 13 13" fill="none" style="margin-right:4px"><path d="M6.5 1C3.46 1 1 3.46 1 6.5S3.46 12 6.5 12 12 9.54 12 6.5 9.54 1 6.5 1zm0 2v3.5l2.5 1.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>Load from Pax8…'; }
+    finally { btn.disabled = false; btn.textContent = 'Browse Past Invoices…'; }
   });
 
   // Browse CSV button
@@ -2326,8 +2305,9 @@ function renderInvoiceProcessor() {
       }
       if (!result.success) { status.textContent = `Error: ${result.error}`; status.className = 'save-status error'; return; }
       _invoiceData = result;
-      status.textContent = `✓ Processed ${result.totalLines} lines — ${result.invoiceDate}`; status.className = 'save-status success';
-      saveToolStat('invoice-processor', `${result.totalLines} lines — ${result.invoiceDate || ''}`.trim().replace(/ — $/, ''), 'ok');
+      const pickerLabel = (() => { const m = (result.invoiceDate||'').match(/^(\d{4})-(\d{2})/); const MO = ['January','February','March','April','May','June','July','August','September','October','November','December']; return m ? `${MO[parseInt(m[2],10)-1]} ${m[1]}` : (result.invoiceDate||''); })();
+      status.textContent = `✓ ${pickerLabel} · ${result.totalLines} lines`; status.className = 'save-status success';
+      saveToolStat('invoice-processor', `${result.totalLines} lines — ${pickerLabel}`, 'ok');
       renderInvoiceProcessorResults(result);
     } catch(e) { status.textContent = `Error: ${e.message}`; status.className = 'save-status error'; }
     finally { btn.disabled = false; }
@@ -2337,9 +2317,270 @@ function renderInvoiceProcessor() {
   if (_invoiceData) {
     renderInvoiceProcessorResults(_invoiceData);
     const status = document.getElementById('ip-status');
-    status.textContent = `✓ ${_invoiceData.totalLines} lines — ${_invoiceData.invoiceDate}`; status.className = 'save-status success';
+    const _rm = (_invoiceData.invoiceDate||'').match(/^(\d{4})-(\d{2})/); const _MO = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    const _rl = _rm ? `${_MO[parseInt(_rm[2],10)-1]} ${_rm[1]}` : (_invoiceData.invoiceDate||'');
+    status.textContent = `✓ ${_rl} · ${_invoiceData.totalLines} lines`; status.className = 'save-status success';
     document.getElementById('ip-process-btn').disabled = false;
   }
+}
+
+function showAtPushModal(serviceType, rows, invoiceDate) {
+  const AT_SVC_LABELS = { azure: 'Azure', nerdio: 'Nerdio', exclaimer: 'Exclaimer', ironscales: 'Ironscales', printix: 'Printix' };
+  const AT_HANDLERS   = {
+    azure:      (d) => window.api.atPushAzure(d),
+    nerdio:     (d) => window.api.atPushNerdio(d),
+    exclaimer:  (d) => window.api.atPushExclaimer(d),
+    ironscales: (d) => window.api.atPushIronscales(d),
+    printix:    (d) => window.api.atPushPrintix(d),
+  };
+  const label = AT_SVC_LABELS[serviceType] || serviceType;
+
+  // Azure = 1st of NEXT month (pricing change for next billing period)
+  // Qty services (nerdio/exclaimer/ironscales/printix) = 1st of CURRENT month
+  const base = invoiceDate ? new Date(invoiceDate + 'T12:00:00') : new Date();
+  const isAzure = serviceType === 'azure';
+  const effDate = isAzure
+    ? new Date(base.getFullYear(), base.getMonth() + 1, 1).toISOString().slice(0, 10)
+    : new Date(base.getFullYear(), base.getMonth(), 1).toISOString().slice(0, 10);
+  const dateHint = isAzure ? '1st of next billing period' : '1st of current billing period';
+
+  const mapped   = rows.filter(r => r.atCompanyId);
+  const unmapped = rows.filter(r => !r.atCompanyId);
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9999;display:flex;align-items:center;justify-content:center';
+  overlay.innerHTML = `
+    <div style="background:var(--surface);border:1px solid var(--border-2);border-radius:10px;
+      padding:24px;width:540px;max-width:90vw;max-height:80vh;display:flex;flex-direction:column;gap:14px">
+      <div style="font-size:15px;font-weight:600">Push ${escHtml(label)} to Autotask</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <label style="white-space:nowrap;font-size:13px;color:var(--text-dim)">Effective Date:</label>
+        <input type="date" id="atpm-date" value="${effDate}"
+          style="padding:5px 9px;background:#e8eaf0;border:1px solid #9ca3af;color-scheme:light;
+                 border-radius:6px;color:#111827;font-size:13px;flex:1;font-family:inherit">
+        <span style="font-size:12px;color:var(--text-dim);white-space:nowrap">${dateHint}</span>
+      </div>
+      <div style="font-size:13px;color:var(--text-dim)">
+        ${mapped.length} compan${mapped.length===1?'y':'ies'} to push${unmapped.length>0?` &nbsp;·&nbsp; <span style="color:var(--warn)">${unmapped.length} skipped (no AT mapping)</span>`:''}
+      </div>
+      <div id="atpm-progress" style="display:none;overflow-y:auto;max-height:260px;
+        background:var(--bg);border-radius:6px;padding:12px;border:1px solid var(--border);
+        font-family:var(--font-mono);font-size:12px;line-height:1.8"></div>
+      <div id="atpm-summary" style="display:none;font-size:13px;font-weight:500"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:2px">
+        <button id="atpm-cancel" class="btn btn-ghost" style="font-size:12px">Cancel</button>
+        <button id="atpm-confirm" class="btn" style="font-size:12px;background:var(--accent);color:#fff;border:none">
+          Push ${mapped.length} Compan${mapped.length===1?'y':'ies'}
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  document.getElementById('atpm-cancel').addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+  document.getElementById('atpm-confirm').addEventListener('click', async () => {
+    const effectiveDate = document.getElementById('atpm-date').value;
+    if (!effectiveDate) { alert('Please set an effective date.'); return; }
+
+    const confirmBtn = document.getElementById('atpm-confirm');
+    const cancelBtn  = document.getElementById('atpm-cancel');
+    confirmBtn.disabled = true;
+    cancelBtn.disabled  = true;
+    confirmBtn.textContent = 'Pushing…';
+
+    const progressEl = document.getElementById('atpm-progress');
+    progressEl.style.display = 'block';
+    progressEl.innerHTML = '<span style="color:var(--text-muted)">Connecting to Autotask…</span>';
+
+    try {
+      const res     = await AT_HANDLERS[serviceType]({ rows, effectiveDate });
+      const results = res.results || [];
+      let success = 0, skipped = 0, errors = 0;
+      const lines = [];
+      for (const r of results) {
+        if (r.status === 'success') {
+          success++;
+          const extra = r.verified === false ? ' <span style="color:#f59e0b">(verify mismatch)</span>' : '';
+          lines.push(`<span style="color:#4ade80">✓</span> ${escHtml(r.company)}${extra}`);
+        } else if (r.status === 'no_change') {
+          skipped++;
+          lines.push(`<span style="color:var(--text-muted)">–</span> ${escHtml(r.company)} <span style="color:var(--text-muted)">(no change, qty=${r.qty})</span>`);
+        } else if (r.status === 'no_mapping') {
+          skipped++;
+          lines.push(`<span style="color:var(--text-muted)">–</span> ${escHtml(r.company)} <span style="color:var(--text-muted)">(no AT mapping)</span>`);
+        } else if (r.status === 'no_contract') {
+          skipped++;
+          lines.push(`<span style="color:#f59e0b">⚠</span> ${escHtml(r.company)} <span style="color:var(--text-muted)">(no contract found)</span>`);
+        } else {
+          errors++;
+          lines.push(`<span style="color:var(--error)">✗</span> ${escHtml(r.company)} — <span style="color:var(--error)">${escHtml(r.message||r.status)}</span>`);
+        }
+      }
+      progressEl.innerHTML = lines.join('<br>');
+
+      const summaryEl = document.getElementById('atpm-summary');
+      summaryEl.style.display = 'block';
+      summaryEl.style.color   = errors > 0 ? 'var(--error)' : success > 0 ? '#4ade80' : 'var(--text-muted)';
+      summaryEl.textContent   = `${success} updated · ${skipped} skipped · ${errors} error${errors!==1?'s':''}`;
+
+      cancelBtn.disabled    = false;
+      cancelBtn.textContent = 'Close';
+      confirmBtn.style.display = 'none';
+      const resultsEl = document.getElementById('ip-results');
+      if (resultsEl) renderPushHistory(resultsEl);
+    } catch (e) {
+      progressEl.innerHTML = `<span style="color:var(--error)">Error: ${escHtml(e.message)}</span>`;
+      cancelBtn.disabled    = false;
+      cancelBtn.textContent = 'Close';
+      confirmBtn.style.display = 'none';
+    }
+  });
+}
+
+function renderMappingPanel(container, autoMapped, suggestions) {
+  const existing = document.getElementById('ip-mapping-panel');
+  if (existing) existing.remove();
+  if (!autoMapped.length && !suggestions.length) return;
+
+  const panel = document.createElement('div');
+  panel.id = 'ip-mapping-panel';
+  panel.style.cssText = 'margin-top:16px;border:1px solid var(--border-2);border-radius:8px;overflow:hidden';
+
+  let html = '';
+  if (autoMapped.length > 0) {
+    html += `<div style="padding:10px 14px;background:rgba(74,222,128,.07);border-bottom:1px solid var(--border)">
+      <div style="font-size:12px;font-weight:600;color:#4ade80;margin-bottom:5px">
+        ✓ Auto-Matched ${autoMapped.length} Compan${autoMapped.length===1?'y':'ies'} to Autotask
+      </div>
+      ${autoMapped.map(m => `
+        <div style="font-size:12px;padding:2px 0;display:flex;gap:6px">
+          <span style="color:var(--text)">${escHtml(m.pax8Name)}</span>
+          <span style="color:var(--text-dim)">→</span>
+          <span style="color:var(--text-muted)">${escHtml(m.atCompanyName)}</span>
+          <span style="color:var(--text-dim);font-size:11px">${Math.round(m.confidence*100)}%</span>
+        </div>`).join('')}
+    </div>`;
+  }
+  if (suggestions.length > 0) {
+    html += `<div style="padding:10px 14px">
+      <div style="font-size:12px;font-weight:600;color:#f59e0b;margin-bottom:8px">
+        ⚠ ${suggestions.length} Compan${suggestions.length===1?'y':'ies'} Need Confirmation
+      </div>
+      <div id="ip-suggestions-list" style="display:flex;flex-direction:column;gap:4px">
+        ${suggestions.map((s, i) => `
+          <div data-sug-idx="${i}" style="display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid var(--border)">
+            <div style="flex:1;font-size:12px;display:flex;gap:6px;flex-wrap:wrap">
+              <span style="color:var(--text)">${escHtml(s.pax8Name)}</span>
+              <span style="color:var(--text-dim)">→</span>
+              <span style="color:var(--text-muted)">${escHtml(s.atCompanyName)}</span>
+              <span style="color:var(--text-dim);font-size:11px">${Math.round(s.confidence*100)}% match</span>
+            </div>
+            <button class="btn btn-ghost" style="font-size:11px;color:#4ade80;border-color:#4ade8066;padding:2px 8px;white-space:nowrap"
+              data-confirm='${JSON.stringify(s)}'>Confirm</button>
+          </div>`).join('')}
+      </div>
+    </div>`;
+  }
+  panel.innerHTML = html;
+  container.appendChild(panel);
+
+  panel.querySelectorAll('[data-confirm]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const s = JSON.parse(btn.dataset.confirm);
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      try {
+        const res = await window.api.confirmCompanyMapping({
+          pax8Id: s.pax8Id, pax8Name: s.pax8Name,
+          atCompanyId: s.atCompanyId, atCompanyName: s.atCompanyName,
+        });
+        if (res.success) {
+          // Update in-memory invoice rows so push buttons work immediately
+          for (const arr of [_invoiceData?.azure, _invoiceData?.nerdio, _invoiceData?.exclaimer,
+                              _invoiceData?.ironscales, _invoiceData?.printix]) {
+            if (!arr) continue;
+            for (const row of arr) {
+              if (row.company === s.pax8Name) {
+                row.atCompanyId   = s.atCompanyId;
+                row.atCompanyName = s.atCompanyName;
+              }
+            }
+          }
+          const row = btn.closest('[data-sug-idx]');
+          if (row) { row.style.opacity = '0.4'; btn.textContent = '✓ Saved'; }
+        } else {
+          btn.disabled = false; btn.textContent = 'Retry';
+        }
+      } catch { btn.disabled = false; btn.textContent = 'Retry'; }
+    });
+  });
+}
+
+async function renderPushHistory(container) {
+  let panel = document.getElementById('ip-push-history');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'ip-push-history';
+    panel.style.cssText = 'margin-top:16px';
+    container.appendChild(panel);
+  }
+
+  const fmtTs = ts => { try { return new Date(ts).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); } catch { return ts; } };
+  const statusColor = s => s.errors > 0 ? 'var(--error)' : s.success > 0 ? '#4ade80' : 'var(--text-muted)';
+  const SVC_LABELS = { azure:'Azure', nerdio:'Nerdio', exclaimer:'Exclaimer', ironscales:'Ironscales', printix:'Printix' };
+
+  try {
+    const res = await window.api.getPushLog();
+    const log = res.log || [];
+
+    if (!log.length) {
+      panel.innerHTML = '';
+      return;
+    }
+
+    const rows = log.slice(0, 20).map((entry, i) => {
+      const detailId = `ip-ph-detail-${i}`;
+      const resLines = (entry.results || []).map(r => {
+        if (r.status === 'success') return `<span style="color:#4ade80">✓</span> ${escHtml(r.company)}`;
+        if (r.status === 'no_change') return `<span style="color:var(--text-dim)">–</span> ${escHtml(r.company)} <span style="color:var(--text-dim)">(no change)</span>`;
+        if (r.status === 'no_mapping') return `<span style="color:var(--text-dim)">–</span> ${escHtml(r.company)} <span style="color:var(--text-dim)">(no AT mapping)</span>`;
+        if (r.status === 'no_contract') return `<span style="color:#f59e0b">⚠</span> ${escHtml(r.company)} <span style="color:var(--text-dim)">(no contract)</span>`;
+        return `<span style="color:var(--error)">✗</span> ${escHtml(r.company)} — <span style="color:var(--error)">${escHtml(r.message||r.status)}</span>`;
+      }).join('<br>');
+
+      return `<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="
+        const d=document.getElementById('${detailId}');
+        d.style.display=d.style.display==='none'?'table-row':'none'">
+        <td style="padding:6px 10px;font-size:12px;color:var(--text-muted)">${fmtTs(entry.ts)}</td>
+        <td style="padding:6px 10px;font-size:12px;font-weight:600;color:var(--text)">${escHtml(SVC_LABELS[entry.serviceType]||entry.serviceType)}</td>
+        <td style="padding:6px 10px;font-size:12px;font-family:var(--font-mono);color:var(--text-muted)">${escHtml(entry.effectiveDate||'')}</td>
+        <td style="padding:6px 10px;font-size:12px;color:${statusColor(entry.summary||{})}">${entry.summary?.success||0} updated · ${entry.summary?.skipped||0} skipped · ${entry.summary?.errors||0} err</td>
+      </tr>
+      <tr id="${detailId}" style="display:none;background:var(--bg)">
+        <td colspan="4" style="padding:8px 14px;font-family:var(--font-mono);font-size:11px;line-height:1.7">${resLines}</td>
+      </tr>`;
+    }).join('');
+
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em">Push History</div>
+      </div>
+      <div style="border:1px solid var(--border-2);border-radius:8px;overflow:hidden">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr style="background:rgba(45,77,107,.5)">
+              <th style="text-align:left;padding:5px 10px;font-size:11px;color:var(--text-muted);font-weight:600">When</th>
+              <th style="text-align:left;padding:5px 10px;font-size:11px;color:var(--text-muted);font-weight:600">Service</th>
+              <th style="text-align:left;padding:5px 10px;font-size:11px;color:var(--text-muted);font-weight:600">Eff. Date</th>
+              <th style="text-align:left;padding:5px 10px;font-size:11px;color:var(--text-muted);font-weight:600">Result</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  } catch { panel.innerHTML = ''; }
 }
 
 function renderInvoiceProcessorResults(data) {
@@ -2402,22 +2643,10 @@ function renderInvoiceProcessorResults(data) {
     renderAzureTable(_invoiceData.azure || []);
   });
 
-  // Wire AT prompt copy
-  document.getElementById('ip-at-prompt-btn').addEventListener('click', async () => {
-    const copiedEl = document.getElementById('ip-at-copied');
-    try {
-      const updated        = getInvoiceDataWithCurrentMargins();
-      const marginSettings = await window.api.getMarginSettings();
-      const payload = { ..._invoiceData, azure: updated, azureServiceId: marginSettings.azureServiceId || 110 };
-      const res = await window.api.generateAtPrompt(payload);
-      await navigator.clipboard.writeText(res.prompt);
-      copiedEl.style.display = 'inline';
-      setTimeout(() => { copiedEl.style.display = 'none'; }, 2500);
-    } catch (e) {
-      copiedEl.textContent = `Error: ${e.message}`;
-      copiedEl.style.display = 'inline';
-      copiedEl.style.color = 'var(--error)';
-    }
+  // Wire Azure push to Autotask
+  document.getElementById('ip-at-push-btn').addEventListener('click', () => {
+    const rows = getInvoiceDataWithCurrentMargins();
+    showAtPushModal('azure', rows, _invoiceData.invoiceDate);
   });
 
   // One-time charges
@@ -2492,24 +2721,21 @@ function renderInvoiceProcessorResults(data) {
   if (svcHtmlParts.length > 0) {
     svcSection.style.display = '';
     svcEl.innerHTML = svcHtmlParts.join('');
-    // Wire service prompt button
-    const svcPromptBtn = document.getElementById('ip-svc-prompt-btn');
-    if (svcPromptBtn) {
-      svcPromptBtn.addEventListener('click', async () => {
-        const copiedEl = document.getElementById('ip-svc-copied');
-        try {
-          const res = await window.api.generateServicePrompt({ ..._invoiceData });
-          await navigator.clipboard.writeText(res.prompt);
-          copiedEl.style.display = 'inline';
-          copiedEl.style.color = 'var(--success)';
-          copiedEl.textContent = 'Copied!';
-          setTimeout(() => { copiedEl.style.display = 'none'; }, 2500);
-        } catch (e) {
-          copiedEl.textContent = `Error: ${e.message}`;
-          copiedEl.style.display = 'inline';
-          copiedEl.style.color = 'var(--error)';
-        }
-      });
+    // Wire per-service AT push buttons
+    const pushBtnsEl = document.getElementById('ip-svc-push-btns');
+    if (pushBtnsEl) {
+      const AT_PUSH_SVCS = ['nerdio', 'exclaimer', 'ironscales', 'printix'];
+      const AT_PUSH_LABELS = { nerdio: 'Nerdio', exclaimer: 'Exclaimer', ironscales: 'Ironscales', printix: 'Printix' };
+      for (const key of AT_PUSH_SVCS) {
+        const svcRows = _invoiceData[key] || [];
+        if (!svcRows.length) continue;
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-ghost';
+        btn.style.cssText = 'font-size:11px;color:#4ade80;border-color:#4ade8066;padding:3px 8px';
+        btn.textContent = `↑ ${AT_PUSH_LABELS[key]}`;
+        btn.addEventListener('click', () => showAtPushModal(key, svcRows, _invoiceData.invoiceDate));
+        pushBtnsEl.appendChild(btn);
+      }
     }
   }
 
@@ -2539,6 +2765,10 @@ function renderInvoiceProcessorResults(data) {
       setTimeout(() => { const s = document.getElementById('ip-export-status'); if (s) { s.textContent = ''; s.className = 'save-status'; } }, 5000);
     }
   });
+
+  // Auto-mapping results and push history
+  renderMappingPanel(resultsEl, data.autoMapped || [], data.suggestions || []);
+  renderPushHistory(resultsEl);
 }
 
 function azureMarginColor(mPct) {

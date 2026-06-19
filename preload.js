@@ -67,6 +67,13 @@ contextBridge.exposeInMainWorld('api', {
   generateServicePrompt:  (data) => ipcRenderer.invoke('generate-service-prompt', data),
   getPromptTemplates:    ()  => ipcRenderer.invoke('get-prompt-templates'),
   savePromptTemplates:   (t) => ipcRenderer.invoke('save-prompt-templates', t),
+  atPushAzure:           (d) => ipcRenderer.invoke('at-push-azure', d),
+  atPushNerdio:          (d) => ipcRenderer.invoke('at-push-nerdio', d),
+  atPushExclaimer:       (d) => ipcRenderer.invoke('at-push-exclaimer', d),
+  atPushIronscales:      (d) => ipcRenderer.invoke('at-push-ironscales', d),
+  atPushPrintix:         (d) => ipcRenderer.invoke('at-push-printix', d),
+  confirmCompanyMapping: (d) => ipcRenderer.invoke('ip-confirm-mapping', d),
+  getPushLog:            ()  => ipcRenderer.invoke('ip-get-push-log'),
 
   // Contract Changes
   runContractChanges:         (opts) => ipcRenderer.invoke('run-contract-changes', opts),
