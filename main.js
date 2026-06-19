@@ -5355,7 +5355,14 @@ ipcMain.handle('run-project-profitability', async (_, { startDate, endDate, incl
     return true;
   });
 
-  if (!inRange.length) return { projects: [], settings: PROFITABILITY_DEFAULTS };
+  // Load settings before early return so user's saved values are preserved
+  let settings = { ...PROFITABILITY_DEFAULTS };
+  try {
+    if (fs.existsSync(PROFITABILITY_SETTINGS_FILE))
+      settings = { ...PROFITABILITY_DEFAULTS, ...JSON.parse(fs.readFileSync(PROFITABILITY_SETTINGS_FILE, 'utf8')) };
+  } catch {}
+
+  if (!inRange.length) return { projects: [], settings };
 
   // 2. Batch lookups
   const companyIds  = [...new Set(inRange.map(p => p.companyID).filter(Boolean))];
@@ -5378,10 +5385,13 @@ ipcMain.handle('run-project-profitability', async (_, { startDate, endDate, incl
     return !ct || !PROF_EXCLUDED_CONTRACT_TYPES.has(ct.typeId);
   });
 
-  // 3. Fetch milestones for non-block-hour projects
+  // 3. Fetch milestones for non-block-hour projects (dedupe by contractID)
   const milestoneMap = {};
+  const seenContractIds = new Set();
   for (const p of withValidContracts) {
     if (!p.contractID) continue;
+    if (seenContractIds.has(p.contractID)) continue;
+    seenContractIds.add(p.contractID);
     const ct = contractMap[p.contractID];
     if (ct && ct.typeId === 4) continue; // Block Hours handled separately
     try {
@@ -5425,13 +5435,6 @@ ipcMain.handle('run-project-profitability', async (_, { startDate, endDate, incl
       blockHourRevenueMap[p.id] = 0;
     }
   }
-
-  // 5. Load settings
-  let settings = { ...PROFITABILITY_DEFAULTS };
-  try {
-    if (fs.existsSync(PROFITABILITY_SETTINGS_FILE))
-      settings = { ...PROFITABILITY_DEFAULTS, ...JSON.parse(fs.readFileSync(PROFITABILITY_SETTINGS_FILE, 'utf8')) };
-  } catch {}
 
   // 6. Build rows
   const rows = withValidContracts.map(p => {
