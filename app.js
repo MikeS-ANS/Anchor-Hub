@@ -6371,16 +6371,16 @@ function renderDuoManagement() {
             const sp = subByNum[num];
             if (sp) {
               fullRows.push({ status: sp.activated ? 'active' : 'unactivated',
-                name: pp.name, number: pp.number, platform: sp.platform || '—',
+                name: pp.name, deviceName: sp.name || '', number: pp.number, platform: sp.platform || '—',
                 phoneId: sp.phone_id, acctId: selectedAcctId, acctName: acctData.acct.name });
             } else {
-              fullRows.push({ status: 'missing', name: pp.name, number: pp.number, platform: '—',
+              fullRows.push({ status: 'missing', name: pp.name, deviceName: '', number: pp.number, platform: '—',
                 phoneId: null, acctId: selectedAcctId, acctName: acctData.acct.name });
             }
           });
           subPhones.forEach(sp => {
             if (!parentByNum[normalize(sp.number)]) {
-              fullRows.push({ status: 'orphan', name: sp.name || '—', number: sp.number,
+              fullRows.push({ status: 'orphan', name: sp.name || '—', deviceName: sp.name || '', number: sp.number,
                 platform: sp.platform || '—', phoneId: sp.phone_id,
                 acctId: selectedAcctId, acctName: acctData.acct.name });
             }
@@ -6413,9 +6413,28 @@ function renderDuoManagement() {
 
           tbody.innerHTML = fullRows.length ? fullRows.map(r => {
             const s = ACCT_STATUS[r.status];
+            const isDefaultDevName = !r.deviceName || /^phone\d+$/i.test(r.deviceName.trim());
+            const nameMatches = !isDefaultDevName && r.deviceName.trim().toLowerCase() === (r.name||'').trim().toLowerCase();
+            let deviceTag = '';
+            if (r.phoneId) {
+              if (nameMatches)        deviceTag = `<div style="font-size:10px;color:#4ade80;margin-top:2px;">✓ ${escHtml(r.deviceName)}</div>`;
+              else if (!isDefaultDevName) deviceTag = `<div style="font-size:10px;color:#fbbf24;margin-top:2px;">⚠ ${escHtml(r.deviceName)}</div>`;
+              else                    deviceTag = `<div style="font-size:10px;color:#f87171;margin-top:2px;">✗ Not set</div>`;
+            }
+            const editPrefill = (!isDefaultDevName ? r.deviceName : r.name || '').replace(/"/g,'&quot;');
             return `<tr>
-              <td style="${TD}">${r.name}</td>
-              <td style="${TD}">${r.number}</td>
+              <td style="${TD}">
+                <div style="display:flex;align-items:flex-start;gap:6px;">
+                  <div>
+                    <div>${escHtml(r.name || '—')}</div>
+                    ${deviceTag}
+                  </div>
+                  ${r.phoneId ? `<button class="da" data-action="edit-name" style="${BTN}margin-top:1px;font-size:10px;padding:1px 5px;opacity:.5;flex-shrink:0;"
+                    data-phone-id="${r.phoneId}" data-acct-id="${r.acctId}"
+                    data-current-name="${editPrefill}">✏</button>` : ''}
+                </div>
+              </td>
+              <td style="${TD}">${escHtml(r.number)}</td>
               <td style="${TD}color:var(--text-muted);">${r.platform}</td>
               <td style="${TD}"><span style="padding:2px 8px;border-radius:10px;background:${s.bg};
                 color:${s.color};font-size:11px;font-weight:500;">${s.label}</span></td>
@@ -6537,6 +6556,41 @@ function renderDuoManagement() {
           else           { b.textContent = 'Sent ✓'; b.style.color = '#4ade80'; }
         }
         if (b.dataset.action === 'enroll') await enrollPhone(b);
+        if (b.dataset.action === 'edit-name') {
+          const td = b.closest('td');
+          const phoneId = b.dataset.phoneId;
+          const acctId  = b.dataset.acctId;
+          const cur     = b.dataset.currentName;
+          td.innerHTML = `
+            <input class="drift-name-inp" value="${cur.replace(/"/g,'&quot;')}"
+              style="width:130px;padding:3px 6px;background:#1e1e2e;color:#e2e8f0;
+                border:1px solid #334155;border-radius:4px;font-size:12px;outline:none;">
+            <button class="drift-name-save" style="${BTN}margin-left:4px;color:#4ade80;border-color:#4ade8066;">Save</button>
+            <button class="drift-name-cancel" style="${BTN}margin-left:2px;">✕</button>`;
+          const inp     = td.querySelector('.drift-name-inp');
+          const saveBtn = td.querySelector('.drift-name-save');
+          td.querySelector('.drift-name-cancel').addEventListener('click', () => redraw());
+          async function doSave() {
+            const name = inp.value.trim();
+            if (!name) return;
+            saveBtn.disabled = true; saveBtn.textContent = '…';
+            const r2 = await window.api.duoSubUpdatePhone({ accountId: acctId, phoneId, name });
+            if (r2.error) { saveBtn.disabled = false; saveBtn.textContent = 'Failed'; saveBtn.style.color = '#f87171'; }
+            else {
+              // Update deviceName in the row data so redraw reflects the new name immediately
+              const row = allRows.find(r => r.phoneId === phoneId) ||
+                          (acctDataMap[acctId]?.subPhones || []).find(p => p.phone_id === phoneId);
+              if (row) row.deviceName = name;
+              const sp = (acctDataMap[acctId]?.subPhones || []).find(p => p.phone_id === phoneId);
+              if (sp) sp.name = name;
+              _auditCache.driftArgs = null;
+              redraw();
+            }
+          }
+          saveBtn.addEventListener('click', doSave);
+          inp.addEventListener('keydown', e => { if (e.key === 'Enter') doSave(); if (e.key === 'Escape') redraw(); });
+          inp.focus(); inp.select();
+        }
         if (b.dataset.action === 'remove') {
           if (!confirm(`Remove ${b.dataset.number} from ${b.dataset.acctName}?`)) return;
           b.disabled = true; b.textContent = 'Removing…';
@@ -6620,7 +6674,8 @@ function renderDuoManagement() {
         });
         subPhones.forEach(sp => {
           const num = normalize(sp.number);
-          if (parentByNum[num] && !sp.activated) issues.push({ type: 'unactivated', name: sp.name, number: sp.number, phoneId: sp.phone_id });
+          const pp = parentByNum[num];
+          if (pp && !sp.activated) issues.push({ type: 'unactivated', name: pp.name, number: sp.number, phoneId: sp.phone_id });
         });
         subPhones.forEach(sp => {
           const num = normalize(sp.number);
@@ -7010,6 +7065,10 @@ function renderDuoManagement() {
           return;
         }
         s.app = { name, integration_key: r.app.integration_key, secret_key: r.app.secret_key, api_hostname: r.app.api_hostname };
+        if (r.app._userAccessWarning) {
+          errEl.style.display=''; errEl.style.color='#f59e0b';
+          errEl.textContent=`App created — but user access could not be set automatically (${r.app._userAccessWarning}). Set "User access" to "Enable for all users" manually in Duo.`;
+        }
         renderCreateApp(el, nextBtn);
       });
     }
@@ -7059,8 +7118,8 @@ function renderDuoManagement() {
 
         for (const phone of parentPhones) {
           const num = phone.number;
-          addLog(`Enrolling ${num}...`);
-          const createR = await window.api.duoSubCreatePhone({ accountId: s.accountId, number: num });
+          addLog(`Enrolling ${num}${phone.name ? ' (' + phone.name + ')' : ''}...`);
+          const createR = await window.api.duoSubCreatePhone({ accountId: s.accountId, number: num, name: phone.name || undefined });
           if (createR.error) { addLog(`  ✗ Create failed: ${createR.error}`); continue; }
           const phoneId = createR.phone.phone_id;
           const assocR  = await window.api.duoSubAssociatePhone({ accountId: s.accountId, userId: subUserId, phoneId });

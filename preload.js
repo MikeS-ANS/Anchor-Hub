@@ -134,6 +134,7 @@ contextBridge.exposeInMainWorld('api', {
   duoSubSendActivation:  (opts) => ipcRenderer.invoke('duo-sub-send-activation', opts),
   duoSubFindPhones:      (opts) => ipcRenderer.invoke('duo-sub-find-phones', opts),
   duoSubDeletePhone:     (opts) => ipcRenderer.invoke('duo-sub-delete-phone', opts),
+  duoSubUpdatePhone:     (opts) => ipcRenderer.invoke('duo-sub-update-phone', opts),
 
   // Duo Management — account + application management
   duoCreateAccount:           (opts) => ipcRenderer.invoke('duo-create-account', opts),

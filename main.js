@@ -344,6 +344,15 @@ ipcMain.handle('duo-sub-delete-phone', async (_, { accountId, phoneId }) => {
   } catch (e) { return { error: e.message }; }
 });
 
+ipcMain.handle('duo-sub-update-phone', async (_, { accountId, phoneId, name }) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    await duoRequest(ikey, skey, host, 'POST', `/admin/v1/phones/${phoneId}`,
+      { account_id: accountId, name });
+    return { success: true };
+  } catch (e) { return { error: e.message }; }
+});
+
 // ─── Duo — account + application management ───────────────────────────────────
 ipcMain.handle('duo-create-account', async (_, { name, phone, addr1, addr2, city, state, zip, country }) => {
   try {
@@ -366,6 +375,10 @@ ipcMain.handle('duo-create-parent-application', async (_, { name }) => {
     const { ikey, skey, host } = await getDuoAdminCreds();
     const app = await duoRequest(ikey, skey, host, 'POST', '/admin/v1/integrations', { name, type: 'rdp' });
     app.api_hostname = app.api_hostname || host;
+    try {
+      await duoRequest(ikey, skey, host, 'POST', `/admin/v1/integrations/${app.integration_key}`,
+        { user_access: 'ALL_USERS' });
+    } catch (e2) { app._userAccessWarning = e2.message; }
     return { app };
   } catch (e) { return { error: e.message }; }
 });
@@ -376,6 +389,10 @@ ipcMain.handle('duo-create-sub-application', async (_, { accountId, name }) => {
     const app = await duoRequest(ikey, skey, host, 'POST', '/admin/v1/integrations',
       { name, type: 'rdp', account_id: accountId });
     app.api_hostname = app.api_hostname || host;
+    try {
+      await duoRequest(ikey, skey, host, 'POST', `/admin/v1/integrations/${app.integration_key}`,
+        { account_id: accountId, user_access: 'ALL_USERS' });
+    } catch (e2) { app._userAccessWarning = e2.message; }
     return { app };
   } catch (e) { return { error: e.message }; }
 });
