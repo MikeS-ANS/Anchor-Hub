@@ -425,14 +425,26 @@ ipcMain.handle('duo-delete-parent-application', async (_, { integrationKey }) =>
   } catch (e) { return { error: e.message }; }
 });
 
-ipcMain.handle('duo-sub-create-user', async (_, { accountId, username, realname }) => {
+ipcMain.handle('duo-sub-create-user', async (_, { accountId, username, realname, email, firstname, lastname }) => {
   try {
     const { ikey, skey, host } = await getDuoAdminCreds();
     const params = { username, account_id: accountId };
-    if (realname) params.realname = realname;
+    if (realname)  params.realname  = realname;
+    if (email)     params.email     = email;
+    if (firstname) params.firstname = firstname;
+    if (lastname)  params.lastname  = lastname;
     const user = await duoRequest(ikey, skey, host, 'POST', '/admin/v1/users', params);
     return { user };
   } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('duo-get-excluded-accounts', () => {
+  return { excluded: readState().duoExcludedAccounts || [] };
+});
+
+ipcMain.handle('duo-save-excluded-accounts', (_, { excluded }) => {
+  writeState({ duoExcludedAccounts: Array.isArray(excluded) ? excluded : [] });
+  return { success: true };
 });
 
 // ─── Datto RMM ────────────────────────────────────────────────────────────────

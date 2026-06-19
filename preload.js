@@ -144,6 +144,8 @@ contextBridge.exposeInMainWorld('api', {
   duoListParentApplications:  ()     => ipcRenderer.invoke('duo-list-parent-applications'),
   duoDeleteParentApplication: (opts) => ipcRenderer.invoke('duo-delete-parent-application', opts),
   duoSubCreateUser:           (opts) => ipcRenderer.invoke('duo-sub-create-user', opts),
+  duoGetExcludedAccounts:     ()     => ipcRenderer.invoke('duo-get-excluded-accounts'),
+  duoSaveExcludedAccounts:    (opts) => ipcRenderer.invoke('duo-save-excluded-accounts', opts),
 
   // Datto RMM
   dattoListSites:       ()     => ipcRenderer.invoke('datto-list-sites'),

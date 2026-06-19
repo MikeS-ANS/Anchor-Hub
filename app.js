@@ -5707,6 +5707,7 @@ function renderDuoManagement() {
     { key: 'termination', label: 'Termination' },
     { key: 'audit',       label: 'Audit' },
     { key: 'new-sub',     label: 'New Sub Account' },
+    { key: 'new-user',    label: 'New Client User' },
     { key: 'term-sub',    label: 'Term Sub Account' },
   ];
 
@@ -5743,6 +5744,7 @@ function renderDuoManagement() {
     else if (activeTab === 'termination') renderTermTab(tc);
     else if (activeTab === 'audit')       renderAuditTab(tc);
     else if (activeTab === 'new-sub')     renderNewSubTab(tc);
+    else if (activeTab === 'new-user')    renderNewUserTab(tc);
     else if (activeTab === 'term-sub')    renderTermSubTab(tc);
   }
 
@@ -6055,8 +6057,12 @@ function renderDuoManagement() {
   // ── Audit Tab ────────────────────────────────────────────────────────────────
   // Persists across tab switches — cleared only on explicit reload
   const _auditCache = { admins: null, parentPhones: null, driftArgs: null };
+  let _excludedIds = new Set();
 
-  function renderAuditTab(tc) {
+  async function renderAuditTab(tc) {
+    const excR = await window.api.duoGetExcludedAccounts().catch(() => ({ excluded: [] }));
+    _excludedIds = new Set(excR.excluded || []);
+
     tc.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:16px;">
 
@@ -6231,11 +6237,16 @@ function renderDuoManagement() {
         orphan:      { label: 'Not in Parent',  color: '#a78bfa', bg: '#a78bfa18' },
       };
 
-      const dirty = results.filter(r => r.issues.length);
-      const clean = results.length - dirty.length;
+      // Build name map for all accounts (needed by exceptions bar even after filtering)
+      const allAccountNames = {};
+      results.forEach(r => { allAccountNames[r.acct.account_id] = r.acct.name; });
+      const filteredResults = results.filter(r => !_excludedIds.has(r.acct.account_id));
+
+      const dirty = filteredResults.filter(r => r.issues.length);
+      const clean = filteredResults.length - dirty.length;
 
       if (!dirty.length) {
-        el.innerHTML = `<div style="font-size:12px;color:#4ade80;">All ${results.length} sub-accounts are in sync with the parent. No issues found.</div>`;
+        el.innerHTML = `<div style="font-size:12px;color:#4ade80;">All ${filteredResults.length} sub-account${filteredResults.length!==1?'s':''}${_excludedIds.size ? ` (${_excludedIds.size} excepted)` : ''} are in sync with the parent. No issues found.</div>`;
         btn.disabled = false; btn.textContent = 'Re-run Audit'; return;
       }
 
@@ -6246,13 +6257,13 @@ function renderDuoManagement() {
       });
       // Map accountId → { acct, subPhones } for Show All mode
       const acctDataMap = {};
-      results.forEach(r => { acctDataMap[r.acct.account_id] = r; });
+      filteredResults.forEach(r => { acctDataMap[r.acct.account_id] = r; });
 
       const counts = { missing: 0, unactivated: 0, orphan: 0 };
       allRows.forEach(r => { if (counts[r.type] !== undefined) counts[r.type]++; });
 
       // Sorted account list for dropdown
-      const sortedAccts = [...results].sort((a, b) => a.acct.name.localeCompare(b.acct.name));
+      const sortedAccts = [...filteredResults].sort((a, b) => a.acct.name.localeCompare(b.acct.name));
 
       // State
       let sortCol = 'account';
@@ -6288,6 +6299,9 @@ function renderDuoManagement() {
               <option style="background:#1e1e2e;color:#e2e8f0;" value="">All Accounts</option>
               ${sortedAccts.map(r => `<option style="background:#1e1e2e;color:#e2e8f0;" value="${r.acct.account_id}">${r.acct.name}</option>`).join('')}
             </select>
+            <button id="drift-exclude-btn" style="display:none;padding:4px 10px;border-radius:6px;
+              border:1px solid #f8717155;background:#f8717108;color:#f87171;
+              font-size:11px;cursor:pointer;">&#8856; Exclude</button>
             <button id="drift-show-all" style="padding:4px 12px;border-radius:6px;
               border:1px solid var(--border);background:var(--bg-secondary);
               color:var(--text-muted);font-size:11px;cursor:pointer;display:none;">Show All Phones</button>
@@ -6300,6 +6314,7 @@ function renderDuoManagement() {
               display:none;">Fix All Missing</button>
           </div>
         </div>
+        <div id="drift-exceptions-bar" style="display:none;margin-bottom:6px;"></div>
         <div id="drift-status" style="font-size:11px;color:var(--text-muted);margin-bottom:8px;"></div>
         <div style="overflow-x:auto;">
           <table style="width:100%;border-collapse:collapse;">
@@ -6515,6 +6530,8 @@ function renderDuoManagement() {
         const showAllBtn = document.getElementById('drift-show-all');
         showAllBtn.style.display = selectedAcctId ? '' : 'none';
         showAllBtn.textContent = 'Show All Phones';
+        const excludeBtn = document.getElementById('drift-exclude-btn');
+        if (excludeBtn) excludeBtn.style.display = selectedAcctId ? '' : 'none';
         document.getElementById('drift-search').placeholder = selectedAcctId ? 'Search employee or number…' : 'Search…';
         redraw();
       });
@@ -6609,6 +6626,44 @@ function renderDuoManagement() {
         for (const b of missing) await enrollPhone(b);
         fixBtn.disabled = false; fixBtn.textContent = 'Fix All Missing';
       });
+
+      // ── Exclude account from drift report ────────────────────────────────────
+      document.getElementById('drift-exclude-btn').addEventListener('click', async () => {
+        if (!selectedAcctId) return;
+        _excludedIds.add(selectedAcctId);
+        await window.api.duoSaveExcludedAccounts({ excluded: [..._excludedIds] });
+        renderDrift(parentPhones, results, subAccounts);
+      });
+
+      // ── Exceptions bar (shows excluded accounts with restore buttons) ─────────
+      function updateExclusionsBar() {
+        const bar = document.getElementById('drift-exceptions-bar');
+        if (!bar) return;
+        if (!_excludedIds.size) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+        bar.style.display = '';
+        const tags = [..._excludedIds].map(id => {
+          const name = allAccountNames[id] || id;
+          return `<span style="display:inline-flex;align-items:center;gap:3px;padding:2px 6px 2px 8px;
+            border:1px solid var(--border);border-radius:10px;font-size:11px;color:var(--text-muted);">
+            ${escHtml(name)}
+            <button data-restore="${id}" style="background:none;border:none;color:var(--text-muted);
+              cursor:pointer;font-size:15px;padding:0 2px;line-height:1;margin-left:1px;">&#215;</button>
+          </span>`;
+        }).join(' ');
+        bar.innerHTML = `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;padding:3px 0;">
+          <span style="font-size:11px;color:var(--text-muted);font-weight:500;white-space:nowrap;">Excepted from report:</span>
+          ${tags}
+        </div>`;
+        bar.querySelectorAll('[data-restore]').forEach(restoreBtn => {
+          restoreBtn.addEventListener('click', async () => {
+            _excludedIds.delete(restoreBtn.dataset.restore);
+            await window.api.duoSaveExcludedAccounts({ excluded: [..._excludedIds] });
+            renderDrift(parentPhones, results, subAccounts);
+          });
+        });
+      }
+
+      updateExclusionsBar();
     }
 
     // ── Restore cached data on tab switch ─────────────────────────────────────
@@ -7617,6 +7672,168 @@ function renderDuoManagement() {
           Sub-account termination is handled manually in the Duo Admin portal.
         </div>
       </div>`;
+  }
+
+  // ── New Client User Tab ───────────────────────────────────────────────────────
+  async function renderNewUserTab(tc) {
+    const S = 'width:100%;box-sizing:border-box;padding:8px 10px;background:var(--bg-secondary);' +
+              'border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:13px;';
+    const L = 'font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;';
+
+    tc.innerHTML = `
+      <div class="glass-card" style="padding:20px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;">
+          <div>
+            <div style="font-size:13px;font-weight:600;margin-bottom:14px;">Add User to Client Sub-Account</div>
+
+            <div style="margin-bottom:10px;">
+              <label style="${L}">Sub-Account *</label>
+              <select id="nu-acct" style="${S}color-scheme:dark;">
+                <option value="">Loading…</option>
+              </select>
+            </div>
+
+            <div style="margin-bottom:10px;">
+              <label style="${L}">Username * <span style="font-size:10px;opacity:.7;">(AD username, e.g. jsmith)</span></label>
+              <input id="nu-username" type="text" placeholder="jsmith" style="${S}">
+            </div>
+
+            <div style="margin-bottom:10px;">
+              <label style="${L}">Display Name</label>
+              <input id="nu-realname" type="text" placeholder="John Smith" style="${S}">
+            </div>
+
+            <div style="margin-bottom:10px;">
+              <label style="${L}">Email Address</label>
+              <input id="nu-email" type="email" placeholder="jsmith@client.com" style="${S}">
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+              <div>
+                <label style="${L}">First Name</label>
+                <input id="nu-first" type="text" placeholder="John" style="${S}">
+              </div>
+              <div>
+                <label style="${L}">Last Name</label>
+                <input id="nu-last" type="text" placeholder="Smith" style="${S}">
+              </div>
+            </div>
+
+            <div style="margin-bottom:10px;">
+              <label style="${L}">Mobile Phone Number *</label>
+              <input id="nu-phone" type="tel" placeholder="+15551234567" style="${S}">
+            </div>
+
+            <div style="margin-bottom:16px;">
+              <label style="${L}">Device Name <span style="font-size:10px;opacity:.7;">(auto-filled from first + last name)</span></label>
+              <input id="nu-device" type="text" placeholder="John Smith" style="${S}">
+            </div>
+
+            <div id="nu-error" style="display:none;color:#f87171;font-size:12px;margin-bottom:8px;"></div>
+            <button id="nu-run" style="padding:8px 20px;background:var(--accent);border:none;border-radius:6px;
+              color:#fff;font-size:13px;cursor:pointer;font-weight:500;">Add User</button>
+          </div>
+
+          <div>
+            <div style="font-size:13px;font-weight:600;margin-bottom:14px;">Progress</div>
+            <div id="nu-log" style="font-family:monospace;font-size:11px;line-height:1.7;min-height:80px;"></div>
+          </div>
+        </div>
+      </div>`;
+
+    // Load sub-accounts
+    const acctSel = tc.querySelector('#nu-acct');
+    const r = await window.api.duoListSubAccounts();
+    if (r.error) {
+      acctSel.innerHTML = `<option value="">Error: ${escHtml(r.error)}</option>`;
+    } else {
+      const sorted = (r.accounts || []).sort((a, b) => a.name.localeCompare(b.name));
+      acctSel.innerHTML = `<option style="background:#1e1e2e;color:#e2e8f0;" value="">— Select account —</option>` +
+        sorted.map(a => `<option style="background:#1e1e2e;color:#e2e8f0;" value="${a.account_id}">${escHtml(a.name)}</option>`).join('');
+    }
+
+    // Auto-fill device name when first/last changes
+    function syncDevice() {
+      const first = tc.querySelector('#nu-first').value.trim();
+      const last  = tc.querySelector('#nu-last').value.trim();
+      const combined = [first, last].filter(Boolean).join(' ');
+      if (combined) tc.querySelector('#nu-device').value = combined;
+    }
+    tc.querySelector('#nu-first').addEventListener('input', syncDevice);
+    tc.querySelector('#nu-last').addEventListener('input', syncDevice);
+
+    tc.querySelector('#nu-run').addEventListener('click', async () => {
+      const accountId  = acctSel.value;
+      const username   = tc.querySelector('#nu-username').value.trim();
+      const realname   = tc.querySelector('#nu-realname').value.trim();
+      const email      = tc.querySelector('#nu-email').value.trim();
+      const firstname  = tc.querySelector('#nu-first').value.trim();
+      const lastname   = tc.querySelector('#nu-last').value.trim();
+      const phone      = tc.querySelector('#nu-phone').value.trim();
+      const deviceName = tc.querySelector('#nu-device').value.trim();
+      const errEl      = tc.querySelector('#nu-error');
+      const logEl      = tc.querySelector('#nu-log');
+
+      errEl.style.display = 'none';
+      if (!accountId) { errEl.style.display = ''; errEl.textContent = 'Select a sub-account.'; return; }
+      if (!username)  { errEl.style.display = ''; errEl.textContent = 'Username is required.'; return; }
+      if (!phone)     { errEl.style.display = ''; errEl.textContent = 'Phone number is required.'; return; }
+
+      const btn = tc.querySelector('#nu-run');
+      btn.disabled = true; btn.textContent = 'Adding…';
+      const lines = [];
+      const log = (msg, ok) => {
+        const c = ok === true ? '#4ade80' : ok === false ? '#f87171' : 'var(--text-muted)';
+        const i = ok === true ? '✓' : ok === false ? '✗' : '·';
+        lines.push(`<span style="color:${c}">${i} ${escHtml(msg)}</span>`);
+        logEl.innerHTML = lines.join('<br>');
+      };
+
+      try {
+        log(`Creating user "${username}"…`);
+        const uR = await window.api.duoSubCreateUser({
+          accountId,
+          username,
+          realname:  realname  || undefined,
+          email:     email     || undefined,
+          firstname: firstname || undefined,
+          lastname:  lastname  || undefined,
+        });
+        if (uR.error) throw new Error(uR.error);
+        log(`User created (ID: ${uR.user.user_id})`, true);
+
+        log(`Adding phone ${phone}…`);
+        const pR = await window.api.duoSubCreatePhone({ accountId, number: phone, name: deviceName || undefined });
+        if (pR.error) throw new Error(pR.error);
+        log(`Phone added${deviceName ? ` — device name: "${deviceName}"` : ''}`, true);
+
+        log(`Associating phone with user…`);
+        const aR = await window.api.duoSubAssociatePhone({ accountId, userId: uR.user.user_id, phoneId: pR.phone.phone_id });
+        if (aR.error) throw new Error(aR.error);
+        log(`Phone associated`, true);
+
+        log(`Sending activation SMS…`);
+        const sR = await window.api.duoSubSendActivation({ accountId, phoneId: pR.phone.phone_id });
+        if (sR.error) { log(`Activation SMS failed: ${sR.error}`, false); }
+        else           { log(`Activation SMS sent`, true); }
+
+        const acctName = acctSel.options[acctSel.selectedIndex]?.textContent || '';
+        log(`Done — ${username} added to ${acctName.trim()}`, true);
+        btn.textContent = 'Add Another';
+        btn.disabled = false;
+        btn.addEventListener('click', () => {
+          ['#nu-username','#nu-realname','#nu-email','#nu-first','#nu-last','#nu-phone','#nu-device']
+            .forEach(sel => { const el2 = tc.querySelector(sel); if (el2) el2.value = ''; });
+          logEl.innerHTML = ''; lines.length = 0;
+          btn.textContent = 'Add User';
+        }, { once: true });
+
+      } catch (e) {
+        log(e.message, false);
+        errEl.style.display = ''; errEl.textContent = e.message;
+        btn.disabled = false; btn.textContent = 'Add User';
+      }
+    });
   }
 
   render();
