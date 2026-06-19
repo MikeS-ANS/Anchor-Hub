@@ -67,7 +67,10 @@ Replace all local-only storage with a proper centralized backend. The Electron a
 | Email idea submissions | **Microsoft Graph → Teams channel or Planner** |
 
 Specific items:
-- [ ] **Azure Key Vault** — migrate API keys out of keytar. When someone leaves, revoke from one place.
+- [ ] **Azure Key Vault — full API key migration**
+  Move all API credentials out of per-machine keytar into a central, audited Key Vault. Scope covers: Pax8, Autotask, Claude API, Blackpoint, and Datto RMM. When someone leaves or a key rotates, one change propagates to every machine instantly.
+
+  **Autotask two-tier model:** Key Vault holds a shared read-only Autotask API key — every user gets it automatically with no setup required. Users who need write access (ticket creation, time entries, etc.) enter their personal write API key once; the app stores it locally via keytar and uses it in place of the KV key for any write operations. This keeps the shared key clean and auditable while letting authorized users work at full capability without a separate credential request workflow.
 - [ ] **Azure App Configuration** — centralize tool settings. Admin changes a value, all machines pick it up.
 - [ ] **Azure SQL / Cosmos DB** — run history, notifications, announcements, idea submissions, audit trail.
 - [ ] **Application Insights** — replaces Sentry. Already in the Azure ecosystem.
@@ -99,7 +102,16 @@ These depend on the Azure backend being in place (run history lives in the DB, a
 
 ### Sprint 4 — Access Control & Polish
 
-- [ ] **Role-based tool access** — Gate tool visibility by Entra ID role. Manage access from Azure portal without touching the app. (Depends on SSO)
+- [ ] **Role-based tool access & permissions architecture**
+  Gate tool visibility and write operations by Entra ID role (`hub.admin`, `hub.standard`, `hub.readonly`). Manage access from the Azure portal without touching the app.
+
+  **Access model (important for Key Vault design):** Key Vault is accessed by the Hub's own Entra service principal — not by individual users. This means every authenticated user gets the secrets the app needs (shared read-only API keys, hostnames, etc.) without requiring per-user KV permissions. Entra ID roles then control what the *app* allows each user to do with those secrets. The result: one place to manage user access (Entra app roles), one place to manage credentials (Key Vault), no overlap.
+
+  **What roles gate:**
+  - Tool visibility (already partially in place via sidebar config)
+  - Write operations vs. read-only mode (e.g., a `hub.readonly` user can run reports but cannot trigger Quick Jobs or modify Duo)
+  - Sensitive tools entirely (e.g., Duo Management restricted to `hub.admin`)
+  - Personal write API key entry (e.g., only `hub.standard`+ can register a personal Autotask write key)
 - [ ] **Audit trail** — Log every significant action (who ran what, what data was changed, when) to Azure DB.
 - [ ] **Azure Trusted Signing** — ~$10/month via Azure. Gives the installer a Microsoft-backed signature and builds SmartScreen reputation over time. Covers distribution outside of Intune (shared links, new machines being set up, etc.).
 - [ ] **Central API key revocation** — Admin UI to revoke or rotate any API key across all users from one place. (Depends on Key Vault)
@@ -112,6 +124,26 @@ Drop ideas here. Nothing too small or too big.
 
 - [ ] New employee onboarding checklist tool
 - [ ] In-app bug / feedback reporter
+
+- [ ] **Hub Home / Quick-Access Intranet Page**
+  Replace or supplement the current home screen with a proper internal portal — something that functions like a lightweight company intranet. Core ideas:
+  - **Quick-launch tiles** for frequently used external websites and internal tools (Autotask, Pax8, Duo Admin, Datto, Microsoft 365 Admin, etc.) — one click, no hunting for bookmarks
+  - **Admin-managed link collections** pushed to all users (e.g., "Vendor Portals", "Internal Resources") alongside **personal bookmarks** each user can add and arrange themselves
+  - **Information widgets** — pinned announcements from admin, recent Hub activity, maybe a plain-text "message of the day" field
+  - Fully customizable layout: drag to reorder tiles, show/hide sections, resize groups
+  - Builds on Sprint 3's Notifications center (announcements feed) and the Azure backend (user preferences stored centrally so the layout follows the user across machines)
+  Goal: when someone opens the Hub, this is the one tab they never close — the intranet home they actually use instead of a SharePoint page nobody keeps up to date.
+
+- [ ] **Device Coverage Tool**
+  A cross-platform coverage matrix that answers the question: *"For every device we manage, what's installed and what's missing?"* Covers all connected platforms — Datto RMM, Duo, Bitdefender/EDR, CyberQP, Splashtop, and others as integrations are added.
+
+  **Two modes:**
+  - **Per-client view** — select a client, see every device with a color-coded coverage grid (green = present, red = missing, grey = unknown). Click a gap to see details or kick off remediation.
+  - **Full fleet sweep** — run across all clients and surface the worst coverage gaps first: devices with no EDR, no MFA, no RMM agent, etc. Exportable for QBR prep or internal review.
+
+  **Remediation:** for gaps that can be fixed via Datto RMM (Duo install, agent deployment, etc.), a one-click "Push Quick Job" button triggers the install directly from the coverage view — same mechanism as the Duo Management wizard, just surfaced at the fleet level.
+
+  Long-term goal: replace the manual quarterly tool inventory spreadsheet and turn reactive coverage reviews into a live, always-current dashboard.
 
 - [ ] **Duo Billing Tool (separate app or role-gated section)**
   Admins who run billing should not need write access to Duo. Separate this from the Duo Management tool entirely — either a standalone tool or a role-gated read-only section. Would pull sub-account edition/telephony data from Duo and map it to Pax8 or billing records for monthly reconciliation. Requires `duo-accounts-ikey/skey` (Accounts API read) but zero write permissions on the Admin API key.
