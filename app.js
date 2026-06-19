@@ -5700,25 +5700,19 @@ function renderDuoManagement() {
     return;
   }
 
-  // Tabs available to all authorized users (hub.standard and above)
-  const CLIENT_TABS = [
-    { key: 'new-user',      label: 'New Client User' },
-    { key: 'phone-replace', label: 'Phone Replace' },
-    { key: 'offboard-user', label: 'Offboard User' },
+  // admin:true tabs are hidden from hub.standard users
+  const ALL_TABS = [
+    { key: 'audit',         label: 'Audit',               admin: true  },
+    { key: 'new-hire',      label: 'New Hire',             admin: true  },
+    { key: 'termination',   label: 'Termination',          admin: true  },
+    { key: 'new-sub',       label: 'New Client Account',   admin: true  },
+    { key: 'new-user',      label: 'New Client User',      admin: false },
+    { key: 'phone-replace', label: 'Replace Phone',        admin: false },
+    { key: 'offboard-user', label: 'Offboard User',        admin: false },
+    { key: 'term-sub',      label: 'Term Client Account',  admin: true  },
   ];
 
-  // Additional tabs for hub.it / hub.admin only
-  const ADMIN_TABS = [
-    { key: 'new-hire',    label: 'New Hire' },
-    { key: 'termination', label: 'Termination' },
-    { key: 'audit',       label: 'Audit' },
-    { key: 'new-sub',     label: 'New Sub Account' },
-    { key: 'term-sub',    label: 'Term Sub Account' },
-  ];
-
-  const TABS = isFullAccess
-    ? [...ADMIN_TABS, ...CLIENT_TABS]
-    : CLIENT_TABS;
+  const TABS = isFullAccess ? ALL_TABS : ALL_TABS.filter(t => !t.admin);
 
   let activeTab   = TABS[0].key;
   let isRunning   = false;
