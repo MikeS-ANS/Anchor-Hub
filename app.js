@@ -8388,19 +8388,17 @@ function profRenderResults(rows, settings) {
     th.addEventListener('click', function() {
       const key = th.dataset.col;
       if (sortCol === key) { sortDir *= -1; } else { sortCol = key; sortDir = 1; }
-      el.querySelectorAll('th .sort-arrow').forEach(function(s) { s.textContent = ''; });
-      th.querySelector('.sort-arrow').textContent = sortDir === 1 ? ' \u25b2' : ' \u25bc';
-      const tbody = document.querySelector('#prof-table tbody');
-      const thList = Array.from(document.querySelectorAll('#prof-table th[data-col]'));
-      const idx = thList.findIndex(function(c) { return c.dataset.col === key; });
-      const rowEls = Array.from(tbody.querySelectorAll('tr'));
-      rowEls.sort(function(a, b) {
-        const av = a.cells[idx] ? a.cells[idx].textContent.trim().replace(/[$,/hr%]/g, '') : '';
-        const bv = b.cells[idx] ? b.cells[idx].textContent.trim().replace(/[$,/hr%]/g, '') : '';
-        if (numCols.has(key)) { return ((parseFloat(av) || 0) - (parseFloat(bv) || 0)) * sortDir; }
-        return av.localeCompare(bv) * sortDir;
+      // Re-sort the data array and re-render so zebra striping stays correct
+      const sorted = _profData.slice().sort(function(a, b) {
+        const av = a[key] != null ? a[key] : '';
+        const bv = b[key] != null ? b[key] : '';
+        if (numCols.has(key)) { return ((Number(av) || 0) - (Number(bv) || 0)) * sortDir; }
+        return String(av).localeCompare(String(bv)) * sortDir;
       });
-      rowEls.forEach(function(r) { tbody.appendChild(r); });
+      profRenderResults(sorted, _profSettings);
+      // Restore sort arrow after re-render
+      const newTh = document.querySelector('#prof-table th[data-col="' + key + '"]');
+      if (newTh) newTh.querySelector('.sort-arrow').textContent = sortDir === 1 ? ' ▲' : ' ▼';
     });
   });
 }
