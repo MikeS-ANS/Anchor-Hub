@@ -94,7 +94,13 @@ These build directly on the SSO foundation already in place. No Azure backend re
 
 These depend on the Azure backend being in place (run history lives in the DB, announcements come from the backend).
 
-- [ ] **Tool run schedule & status badges** — Each tool gets a configurable run frequency (daily / weekly / monthly). Last-run timestamp stored in Azure DB. Home card badge turns green (on schedule), yellow (due soon), red (overdue).
+- [ ] **Home screen card revamp**
+  Cards currently treat every tool the same — last-run timestamp, color status, etc. That model doesn't fit management/utility tools like Duo Management where "last ran" is meaningless and there's no pass/fail result to color-code. The revamp introduces two card types:
+  - **Report cards** (Subscription Audit, Invoice Monitor, Margin Analyzer, etc.): keep the run schedule + status badge model — green/yellow/red based on whether the report has been run on time.
+  - **Management/utility cards** (Duo Management, Device Coverage, etc.): show contextual status instead — e.g., "X drift issues" from last audit, "N sub-accounts" managed — whatever is a meaningful at-a-glance health indicator for that tool. No run-schedule badge.
+  Card metadata (type, status source) defined per-tool so new tools register correctly when built.
+
+- [ ] **Tool run schedule & status badges** — Each report card gets a configurable run frequency (daily / weekly / monthly). Last-run timestamp stored in Azure DB. Badge turns green (on schedule), yellow (due soon), red (overdue).
 - [ ] **Notifications center** — Bell icon with badge count. Pulls overdue tool alerts, admin announcements, and new release notes. Admins post announcements from a simple admin panel.
 - [ ] **In-app idea submission** — Button that submits to the Azure backend → posts directly to a designated Teams channel via Graph (`ChannelMessage.Send`) so ideas are visible and trackable without leaving the hub.
 
@@ -103,15 +109,44 @@ These depend on the Azure backend being in place (run history lives in the DB, a
 ### Sprint 4 — Access Control & Polish
 
 - [ ] **Role-based tool access & permissions architecture**
-  Gate tool visibility and write operations by Entra ID role (`hub.admin`, `hub.standard`, `hub.readonly`). Manage access from the Azure portal without touching the app.
+  Gate tool visibility and write operations by Entra ID role. Manage access from the Azure portal without touching the app.
 
   **Access model (important for Key Vault design):** Key Vault is accessed by the Hub's own Entra service principal — not by individual users. This means every authenticated user gets the secrets the app needs (shared read-only API keys, hostnames, etc.) without requiring per-user KV permissions. Entra ID roles then control what the *app* allows each user to do with those secrets. The result: one place to manage user access (Entra app roles), one place to manage credentials (Key Vault), no overlap.
 
   **What roles gate:**
   - Tool visibility (already partially in place via sidebar config)
   - Write operations vs. read-only mode (e.g., a `hub.readonly` user can run reports but cannot trigger Quick Jobs or modify Duo)
-  - Sensitive tools entirely (e.g., Duo Management restricted to `hub.admin`)
+  - Tab-level access within tools (already live for Duo Management: `hub.it`/`hub.admin` = all tabs; `hub.standard` = client-facing tabs only)
   - Personal write API key entry (e.g., only `hub.standard`+ can register a personal Autotask write key)
+
+- [ ] **Job-title-based hub role assignment**
+  Replace manual per-user role assignment with automatic mapping from Entra/Teams job titles. When someone signs in, their job title determines their hub role — no admin intervention required for normal hires.
+
+  **Known job title → hub role mappings to define** (list is not exhaustive — finalize with Mike):
+  | Job Title | Hub Role |
+  |---|---|
+  | Technical Account Manager | `hub.it` |
+  | Account Manager | `hub.standard` |
+  | Client Experience Manager | `hub.standard` |
+  | Service Desk Engineer | `hub.standard` |
+  | Workstation Deployment Engineer | `hub.standard` |
+  | *(others TBD)* | |
+
+  **Individual exceptions:** When one person on a team needs access their role doesn't normally grant, an admin assigns them an *additive* override role directly in Entra (e.g., `hub.it.exception`). The app merges their base role with the exception at sign-in. Exceptions are visible in the Entra app registration assignments so they're auditable and don't get lost.
+
+  **Implementation path:** Entra supports both app roles and claims transformation rules. The cleanest approach is a short Azure Function that reads the user's job title from Graph and assigns the correct app role on first sign-in, with the exception mechanism handled by direct role assignment that the function does not overwrite.
+
+- [ ] **Role × Tool access matrix** *(living document — update as new tools are built)*
+  A canonical reference showing every tool and what each role can do with it. Rows = tools, columns = roles, cells = No Access / Read Only / Full Access. Reviewed when building new tools so access is designed in, not bolted on. Current draft to be filled in once job-title roles are finalized.
+
+  | Tool | hub.admin | hub.it | hub.standard | hub.readonly |
+  |---|---|---|---|---|
+  | Subscription Audit | Full | Full | Read Only | Read Only |
+  | Invoice Monitor | Full | Full | Read Only | Read Only |
+  | Duo Management (admin tabs) | Full | Full | No Access | No Access |
+  | Duo Management (client tabs) | Full | Full | Full | No Access |
+  | Datto RMM Quick Jobs | Full | Full | Full | No Access |
+  | *(expand as tools are built)* | | | | |
 - [ ] **Audit trail** — Log every significant action (who ran what, what data was changed, when) to Azure DB.
 - [ ] **Azure Trusted Signing** — ~$10/month via Azure. Gives the installer a Microsoft-backed signature and builds SmartScreen reputation over time. Covers distribution outside of Intune (shared links, new machines being set up, etc.).
 - [ ] **Central API key revocation** — Admin UI to revoke or rotate any API key across all users from one place. (Depends on Key Vault)

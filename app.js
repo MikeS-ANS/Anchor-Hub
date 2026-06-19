@@ -5684,8 +5684,10 @@ function renderHelp() {
 function renderDuoManagement() {
   const content = document.getElementById('content');
 
-  const hasAccess = _currentUser?.roles?.includes('hub.it') ||
-                    _currentUser?.roles?.includes('hub.admin');
+  const roles = _currentUser?.roles || [];
+  const isFullAccess = roles.includes('hub.it') || roles.includes('hub.admin');
+  const isStandard   = roles.includes('hub.standard');
+  const hasAccess    = isFullAccess || isStandard;
 
   if (!hasAccess) {
     content.innerHTML = `
@@ -5693,25 +5695,34 @@ function renderDuoManagement() {
       <div style="display:flex;align-items:center;justify-content:center;height:200px;
                   color:var(--text-muted);font-size:14px;flex-direction:column;gap:8px;">
         <div style="font-size:20px;">🔒</div>
-        <div>You need the <strong style="color:var(--text-primary);">hub.it</strong> role to access this tool.</div>
+        <div>You need the <strong style="color:var(--text-primary);">hub.it</strong> or <strong style="color:var(--text-primary);">hub.standard</strong> role to access this tool.</div>
       </div>`;
     return;
   }
 
-  let activeTab   = 'new-hire';
-  let isRunning   = false;
-  let prefillTerm = null; // { email, phone } — set by "Start Termination" from Audit
+  // Tabs available to all authorized users (hub.standard and above)
+  const CLIENT_TABS = [
+    { key: 'new-user',      label: 'New Client User' },
+    { key: 'phone-replace', label: 'Phone Replace' },
+    { key: 'offboard-user', label: 'Offboard User' },
+  ];
 
-  const TABS = [
+  // Additional tabs for hub.it / hub.admin only
+  const ADMIN_TABS = [
     { key: 'new-hire',    label: 'New Hire' },
     { key: 'termination', label: 'Termination' },
     { key: 'audit',       label: 'Audit' },
     { key: 'new-sub',     label: 'New Sub Account' },
-    { key: 'new-user',      label: 'New Client User' },
-    { key: 'phone-replace', label: 'Phone Replace' },
-    { key: 'offboard-user', label: 'Offboard User' },
-    { key: 'term-sub',      label: 'Term Sub Account' },
+    { key: 'term-sub',    label: 'Term Sub Account' },
   ];
+
+  const TABS = isFullAccess
+    ? [...ADMIN_TABS, ...CLIENT_TABS]
+    : CLIENT_TABS;
+
+  let activeTab   = TABS[0].key;
+  let isRunning   = false;
+  let prefillTerm = null; // { email, phone } — set by "Start Termination" from Audit
 
   function render() {
     content.innerHTML = `
