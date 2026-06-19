@@ -406,6 +406,17 @@ ipcMain.handle('duo-list-parent-applications', async () => {
   } catch (e) { return { error: e.message }; }
 });
 
+ipcMain.handle('duo-list-applications', async (_, { accountId } = {}) => {
+  try {
+    const { ikey, skey, host } = await getDuoAdminCreds();
+    const params = accountId ? { account_id: accountId } : {};
+    const apps = await duoRequest(ikey, skey, host, 'GET', '/admin/v1/integrations', params);
+    const rdpApps = (Array.isArray(apps) ? apps : []).filter(a => a.type === 'rdp');
+    rdpApps.forEach(a => { if (!a.api_hostname) a.api_hostname = host; });
+    return { apps: rdpApps };
+  } catch (e) { return { error: e.message }; }
+});
+
 ipcMain.handle('duo-delete-parent-application', async (_, { integrationKey }) => {
   try {
     const { ikey, skey, host } = await getDuoAdminCreds();

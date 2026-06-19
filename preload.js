@@ -128,6 +128,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Duo Management — sub-accounts
   duoListSubAccounts:    ()     => ipcRenderer.invoke('duo-list-sub-accounts'),
+  duoListApplications:   (opts) => ipcRenderer.invoke('duo-list-applications', opts),
   duoSubFindUsers:       (opts) => ipcRenderer.invoke('duo-sub-find-users', opts),
   duoSubCreatePhone:     (opts) => ipcRenderer.invoke('duo-sub-create-phone', opts),
   duoSubAssociatePhone:  (opts) => ipcRenderer.invoke('duo-sub-associate-phone', opts),

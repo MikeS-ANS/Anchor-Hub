@@ -6706,8 +6706,8 @@ function renderDuoManagement() {
         manualConfirmed: false,
         retireAppIkey: null,
         siteUid: null, siteName: null, sites: [],
-        deviceUid: null, deviceName: null, devices: [],
-        jobUid: null, jobLog: [],
+        selectedDevices: [], devices: [],
+        jobResults: [], jobLog: [],
         accountId: null, accountName: null,
       };
     }
@@ -6724,7 +6724,7 @@ function renderDuoManagement() {
     function stepLabel(id) {
       return { 'choose-account':'Choose Account','create-account':'Create Account','create-app':'Create App',
         'setup-anchor':'Setup Anchor','client-user':'Client User','manual-notice':'Uninstall Notice',
-        'remove-parent-app':'Remove Old App','choose-server':'Select Server','deploy':'Deploy' }[id] || id;
+        'remove-parent-app':'Remove Old App','choose-server':'Select Servers','deploy':'Deploy' }[id] || id;
     }
 
     function logBox(lines) {
@@ -7027,40 +7027,99 @@ function renderDuoManagement() {
             <div style="font-size:13px;font-weight:600;color:var(--green,#22c55e);margin-bottom:8px;">&#10003; Application: ${escHtml(s.app.name)}</div>
             <div style="font-size:12px;display:grid;gap:4px;font-family:monospace;">
               <div><span style="color:var(--text-muted);">IKEY: </span>${escHtml(s.app.integration_key)}</div>
-              <div><span style="color:var(--text-muted);">SKEY: </span>${escHtml(s.app.secret_key)}</div>
+              <div><span style="color:var(--text-muted);">SKEY: </span>${escHtml(s.app.secret_key||'(hidden)')}</div>
               <div><span style="color:var(--text-muted);">HOST: </span>${escHtml(s.app.api_hostname)}</div>
             </div>
+            <button id="change-app" style="margin-top:8px;padding:4px 10px;border:1px solid var(--border);border-radius:5px;
+              background:transparent;color:var(--text-muted);font-size:11px;cursor:pointer;">Change App</button>
           </div>`;
         enableNext(nextBtn);
         nextBtn.addEventListener('click', nextStep);
+        el.querySelector('#change-app').addEventListener('click', () => { s.app=null; renderCreateApp(el, nextBtn); });
         return;
       }
       const acctLabel = s.accountName ? ` in <strong>${escHtml(s.accountName)}</strong>` : ' in the parent Anchor account';
       el.innerHTML = `
-        <div style="margin-bottom:12px;">
-          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Application Name *</label>
-          <input id="app-name-input" type="text" value="${escHtml(s.appName)}" placeholder="e.g. RDP - Acme Corp"
-            style="width:100%;padding:7px 10px;background:#1e1e2e;color:#e2e8f0;border:1px solid #334155;
-              border-radius:6px;font-size:13px;box-sizing:border-box;outline:none;">
-          <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Creates a Duo RDP application${acctLabel}.</div>
+        <div style="display:flex;gap:8px;margin-bottom:14px;">
+          <button id="tab-create" style="flex:1;padding:6px 0;border:1px solid var(--accent);border-radius:6px;
+            background:var(--accent);color:#fff;font-size:12px;cursor:pointer;font-weight:500;">Create New</button>
+          <button id="tab-existing" style="flex:1;padding:6px 0;border:1px solid var(--border);border-radius:6px;
+            background:transparent;color:var(--text-muted);font-size:12px;cursor:pointer;">Use Existing</button>
         </div>
-        <div id="app-error" style="display:none;color:#f87171;font-size:12px;margin-bottom:8px;font-family:monospace;white-space:pre-wrap;"></div>
-        <button id="create-app-btn" style="padding:8px 18px;background:var(--accent);border:none;
-          border-radius:6px;color:#fff;font-size:13px;cursor:pointer;font-weight:500;">Create Application</button>`;
+        <div id="pane-create">
+          <div style="margin-bottom:12px;">
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Application Name *</label>
+            <input id="app-name-input" type="text" value="${escHtml(s.appName)}" placeholder="e.g. RDP - Acme Corp"
+              style="width:100%;padding:7px 10px;background:#1e1e2e;color:#e2e8f0;border:1px solid #334155;
+                border-radius:6px;font-size:13px;box-sizing:border-box;outline:none;">
+            <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Creates a Duo RDP application${acctLabel}.</div>
+          </div>
+          <div id="app-error" style="display:none;font-size:12px;margin-bottom:8px;font-family:monospace;white-space:pre-wrap;"></div>
+          <button id="create-app-btn" style="padding:8px 18px;background:var(--accent);border:none;
+            border-radius:6px;color:#fff;font-size:13px;cursor:pointer;font-weight:500;">Create Application</button>
+        </div>
+        <div id="pane-existing" style="display:none;">
+          <div id="existing-loading" style="font-size:12px;color:var(--text-muted);">Loading applications...</div>
+          <div id="existing-list" style="display:none;max-height:240px;overflow-y:auto;display:grid;gap:6px;"></div>
+          <div id="existing-error" style="display:none;font-size:12px;"></div>
+        </div>`;
 
+      function setTab(t) {
+        const isCreate = t === 'create';
+        el.querySelector('#tab-create').style.cssText    += `;background:${isCreate?'var(--accent)':'transparent'};color:${isCreate?'#fff':'var(--text-muted)'};border-color:${isCreate?'var(--accent)':'var(--border)'}`;
+        el.querySelector('#tab-existing').style.cssText  += `;background:${!isCreate?'var(--accent)':'transparent'};color:${!isCreate?'#fff':'var(--text-muted)'};border-color:${!isCreate?'var(--accent)':'var(--border)'}`;
+        el.querySelector('#pane-create').style.display   = isCreate ? '' : 'none';
+        el.querySelector('#pane-existing').style.display = isCreate ? 'none' : '';
+        if (!isCreate) loadExisting();
+      }
+
+      let existingLoaded = false;
+      async function loadExisting() {
+        if (existingLoaded) return;
+        existingLoaded = true;
+        const loadEl = el.querySelector('#existing-loading');
+        const listEl = el.querySelector('#existing-list');
+        const errEl  = el.querySelector('#existing-error');
+        loadEl.style.display = ''; listEl.style.display = 'none'; errEl.style.display = 'none';
+        const r = await window.api.duoListApplications(s.accountId ? { accountId: s.accountId } : {});
+        loadEl.style.display = 'none';
+        if (r.error) { errEl.style.display=''; errEl.style.color='#f87171'; errEl.textContent=r.error; return; }
+        const apps = r.apps || [];
+        if (!apps.length) { errEl.style.display=''; errEl.style.color='var(--text-muted)'; errEl.textContent='No RDP applications found.'; return; }
+        listEl.style.display = 'grid';
+        listEl.innerHTML = apps.map(a => `
+          <div data-ikey="${escHtml(a.integration_key)}" data-skey="${escHtml(a.secret_key||'')}"
+            data-host="${escHtml(a.api_hostname||'')}" data-name="${escHtml(a.name)}"
+            style="padding:8px 12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;
+              transition:border-color 0.15s,background 0.15s;"
+            onmouseover="this.style.borderColor='var(--accent)';this.style.background='rgba(99,102,241,0.08)'"
+            onmouseout="this.style.borderColor='var(--border)';this.style.background='transparent'">
+            <div style="font-size:13px;font-weight:500;">${escHtml(a.name)}</div>
+            <div style="font-size:11px;color:var(--text-muted);font-family:monospace;">${escHtml(a.integration_key)}</div>
+          </div>`).join('');
+        listEl.querySelectorAll('[data-ikey]').forEach(row => {
+          row.addEventListener('click', () => {
+            s.app = { name: row.dataset.name, integration_key: row.dataset.ikey, secret_key: row.dataset.skey, api_hostname: row.dataset.host };
+            renderCreateApp(el, nextBtn);
+          });
+        });
+      }
+
+      el.querySelector('#tab-create').addEventListener('click', () => setTab('create'));
+      el.querySelector('#tab-existing').addEventListener('click', () => setTab('existing'));
       el.querySelector('#app-name-input').addEventListener('input', e => { s.appName = e.target.value.trim(); });
 
       el.querySelector('#create-app-btn').addEventListener('click', async () => {
-        const name = el.querySelector('#app-name-input').value.trim();
+        const name  = el.querySelector('#app-name-input').value.trim();
         const errEl = el.querySelector('#app-error');
-        if (!name) { errEl.style.display=''; errEl.textContent='Application name is required.'; return; }
+        if (!name) { errEl.style.display=''; errEl.style.color='#f87171'; errEl.textContent='Application name is required.'; return; }
         const btn = el.querySelector('#create-app-btn');
         btn.disabled=true; btn.textContent='Creating...'; errEl.style.display='none';
         const r = s.accountId
           ? await window.api.duoCreateSubApplication({ accountId: s.accountId, name })
           : await window.api.duoCreateParentApplication({ name });
         if (r.error) {
-          errEl.style.display=''; errEl.textContent=r.error;
+          errEl.style.display=''; errEl.style.color='#f87171'; errEl.textContent=r.error;
           btn.disabled=false; btn.textContent='Create Application';
           return;
         }
@@ -7301,16 +7360,21 @@ function renderDuoManagement() {
 
     // ── choose-server ────────────────────────────────────────────────────────
     async function renderChooseServer(el, nextBtn) {
-      if (s.deviceUid) {
+      if (s.selectedDevices.length) {
         el.innerHTML = `
           <div style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);border-radius:8px;padding:12px;margin-bottom:12px;">
-            <div style="font-size:13px;font-weight:600;color:var(--green,#22c55e);">✓ Server: ${escHtml(s.deviceName)}</div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Site: ${escHtml(s.siteName||'')}</div>
+            <div style="font-size:13px;font-weight:600;color:var(--green,#22c55e);margin-bottom:6px;">
+              &#10003; ${s.selectedDevices.length} server${s.selectedDevices.length>1?'s':''} selected
+            </div>
+            <div style="font-size:12px;display:grid;gap:2px;">
+              ${s.selectedDevices.map(d=>`<div>&#8226; ${escHtml(d.name)}</div>`).join('')}
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Site: ${escHtml(s.siteName||'')}</div>
           </div>
           <button id="change-srv" style="padding:5px 12px;background:transparent;border:1px solid var(--border);
-            border-radius:6px;color:var(--text-muted);font-size:12px;cursor:pointer;">Change Server</button>`;
+            border-radius:6px;color:var(--text-muted);font-size:12px;cursor:pointer;">Change Servers</button>`;
         enableNext(nextBtn); nextBtn.addEventListener('click', nextStep);
-        el.querySelector('#change-srv').addEventListener('click', () => { s.deviceUid=null; s.deviceName=null; renderChooseServer(el, nextBtn); });
+        el.querySelector('#change-srv').addEventListener('click', () => { s.selectedDevices=[]; renderChooseServer(el, nextBtn); });
         return;
       }
 
@@ -7327,32 +7391,44 @@ function renderDuoManagement() {
             border-radius:6px;color:#fff;font-size:13px;cursor:pointer;opacity:0.4;white-space:nowrap;">Load Servers</button>
         </div>
         <div id="server-area"></div>
+        <div id="confirm-area" style="display:none;margin-top:10px;">
+          <button id="confirm-sel-btn" style="padding:7px 18px;background:var(--accent);border:none;
+            border-radius:6px;color:#fff;font-size:13px;cursor:pointer;font-weight:500;">Confirm Selection</button>
+        </div>
         <div id="srv-error" style="display:none;color:#f87171;font-size:12px;margin-top:6px;font-family:monospace;white-space:pre-wrap;"></div>
         <div id="manual-srv-section" style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);border-radius:6px;transition:border-color .2s,background .2s;">
           <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">— or enter device details manually —</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
             <div>
               <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:3px;">Server Name</label>
-              <input id="manual-hostname" type="text" placeholder="SERVERNAME" value="${escHtml(s.deviceName||'')}"
+              <input id="manual-hostname" type="text" placeholder="SERVERNAME" value=""
                 style="width:100%;padding:6px 10px;background:#1e1e2e;color:#e2e8f0;border:1px solid #334155;
                   border-radius:6px;font-size:13px;box-sizing:border-box;outline:none;">
             </div>
             <div>
               <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:3px;">Datto Device UID</label>
-              <input id="manual-uid" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" value="${escHtml(s.deviceUid||'')}"
+              <input id="manual-uid" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" value=""
                 style="width:100%;padding:6px 10px;background:#1e1e2e;color:#e2e8f0;border:1px solid #334155;
                   border-radius:6px;font-size:13px;box-sizing:border-box;outline:none;">
             </div>
           </div>
           <button id="manual-srv-btn" style="padding:6px 14px;background:transparent;border:1px solid var(--border);
-            border-radius:6px;color:var(--text-muted);font-size:12px;cursor:pointer;">Use Manual Entry</button>
+            border-radius:6px;color:var(--text-muted);font-size:12px;cursor:pointer;">Add Server</button>
         </div>`;
 
       el.querySelector('#manual-srv-btn').addEventListener('click', () => {
         const hostname = el.querySelector('#manual-hostname').value.trim();
         const uid      = el.querySelector('#manual-uid').value.trim();
         if (!hostname || !uid) return;
-        s.deviceName = hostname; s.deviceUid = uid; s.siteName = 'Manual Entry';
+        s.selectedDevices = [{ uid, name: hostname }];
+        s.siteName = 'Manual Entry';
+        renderChooseServer(el, nextBtn);
+      });
+
+      el.querySelector('#confirm-sel-btn').addEventListener('click', () => {
+        const checked = [...el.querySelectorAll('#server-area input[type=checkbox]:checked')];
+        if (!checked.length) return;
+        s.selectedDevices = checked.map(cb => ({ uid: cb.dataset.uid, name: cb.dataset.name }));
         renderChooseServer(el, nextBtn);
       });
 
@@ -7363,7 +7439,6 @@ function renderDuoManagement() {
       if (sitesR.error) {
         siteSel.innerHTML = `<option style="background:#1e1e2e;color:#e2e8f0;" value="">Datto unavailable — use manual entry below</option>`;
         el.querySelector('#srv-error').style.display=''; el.querySelector('#srv-error').textContent=sitesR.error;
-        // Scroll/highlight the manual section when Datto fails
         const manualSection = el.querySelector('#manual-srv-section');
         if (manualSection) {
           manualSection.style.borderColor = 'var(--accent)';
@@ -7382,14 +7457,21 @@ function renderDuoManagement() {
         s.siteName = siteSel.options[siteSel.selectedIndex]?.textContent || '';
         loadBtn.disabled = !s.siteUid; loadBtn.style.opacity = s.siteUid ? '1' : '0.4';
         el.querySelector('#server-area').innerHTML = '';
+        el.querySelector('#confirm-area').style.display = 'none';
         s.devices = [];
       });
+
+      function updateConfirmArea() {
+        const anyChecked = el.querySelectorAll('#server-area input[type=checkbox]:checked').length > 0;
+        el.querySelector('#confirm-area').style.display = anyChecked ? '' : 'none';
+      }
 
       async function loadServers() {
         if (!s.siteUid) return;
         const area   = el.querySelector('#server-area');
         const errEl  = el.querySelector('#srv-error');
         area.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">Loading servers...</div>';
+        el.querySelector('#confirm-area').style.display = 'none';
         errEl.style.display = 'none'; loadBtn.disabled = true;
         const r = await window.api.dattoListSiteServers({ siteUid: s.siteUid });
         loadBtn.disabled = false; loadBtn.style.opacity = '1';
@@ -7397,23 +7479,23 @@ function renderDuoManagement() {
         s.devices = r.devices || [];
         if (!s.devices.length) { area.innerHTML='<div style="font-size:12px;color:var(--text-muted);">No servers found in this site.</div>'; return; }
         area.innerHTML = `
-          <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">Click a server to select it:</div>
-          <div style="display:grid;gap:6px;max-height:200px;overflow-y:auto;">
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">Select one or more servers:</div>
+          <div style="display:grid;gap:6px;max-height:220px;overflow-y:auto;">
             ${s.devices.map(d => `
-              <div data-uid="${d.uid}" data-name="${escHtml(d.hostname)}"
-                style="padding:8px 12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;
-                  transition:border-color 0.15s,background 0.15s;display:flex;justify-content:space-between;align-items:center;"
+              <label style="padding:8px 12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;
+                display:flex;align-items:center;gap:10px;transition:border-color 0.15s,background 0.15s;"
                 onmouseover="this.style.borderColor='var(--accent)';this.style.background='rgba(99,102,241,0.08)'"
                 onmouseout="this.style.borderColor='var(--border)';this.style.background='transparent'">
+                <input type="checkbox" data-uid="${d.uid}" data-name="${escHtml(d.hostname)}"
+                  style="accent-color:var(--accent);width:15px;height:15px;flex-shrink:0;cursor:pointer;" />
                 <div>
                   <div style="font-size:13px;font-weight:500;">${escHtml(d.hostname)}</div>
                   <div style="font-size:11px;color:var(--text-muted);">${escHtml(d.os||'Windows Server')}</div>
                 </div>
-                <div style="font-size:11px;color:var(--text-muted);">Select &#8594;</div>
-              </div>`).join('')}
+              </label>`).join('')}
           </div>`;
-        area.querySelectorAll('[data-uid]').forEach(row => {
-          row.addEventListener('click', () => { s.deviceUid=row.dataset.uid; s.deviceName=row.dataset.name; renderChooseServer(el, nextBtn); });
+        area.querySelectorAll('input[type=checkbox]').forEach(cb => {
+          cb.addEventListener('change', updateConfirmArea);
         });
       }
 
@@ -7423,24 +7505,30 @@ function renderDuoManagement() {
 
     // ── deploy ───────────────────────────────────────────────────────────────
     function renderDeploy(el, nextBtn) {
-      if (s.jobLog.some(l => l.includes('&#10003; Job submitted'))) {
+      if (s.jobResults.length) {
+        const succeeded = s.jobResults.filter(r => !r.error);
+        const failed    = s.jobResults.filter(r => r.error);
         el.innerHTML = `
           <div style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);border-radius:8px;padding:14px;margin-bottom:12px;">
-            <div style="font-size:13px;font-weight:600;color:var(--green,#22c55e);">&#10003; Quick Job submitted to Datto RMM</div>
-            ${s.jobUid ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px;font-family:monospace;">Job UID: ${escHtml(s.jobUid)}</div>` : ''}
-            <div style="font-size:12px;color:var(--text-muted);margin-top:6px;">Check Datto RMM for completion status.</div>
+            <div style="font-size:13px;font-weight:600;color:var(--green,#22c55e);">
+              &#10003; ${succeeded.length} quick job${succeeded.length!==1?'s':''} submitted to Datto RMM
+            </div>
+            ${failed.length ? `<div style="font-size:12px;color:#f87171;margin-top:4px;">&#9888; ${failed.length} failed — see log below</div>` : ''}
+            <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Check Datto RMM for completion status.</div>
           </div>
           ${logBox(s.jobLog)}`;
         enableNext(nextBtn);
         nextBtn.textContent = 'Finish';
         nextBtn.addEventListener('click', () => {
+          const serverList = s.selectedDevices.map(d => d.name).join(', ');
           tc.innerHTML = `
             <div class="glass-card" style="padding:40px;text-align:center;">
               <div style="font-size:40px;margin-bottom:14px;">&#9989;</div>
               <div style="font-size:15px;font-weight:600;margin-bottom:6px;">All Done!</div>
               <div style="font-size:13px;color:var(--text-muted);margin-bottom:6px;">
-                Duo Quick Job submitted for <strong>${escHtml(s.deviceName||'the server')}</strong>.
+                Duo Quick Job submitted for <strong>${s.selectedDevices.length} server${s.selectedDevices.length!==1?'s':''}</strong>.
               </div>
+              <div style="font-size:11px;color:var(--text-muted);margin-bottom:16px;">${escHtml(serverList)}</div>
               <div style="font-size:12px;color:var(--text-muted);margin-bottom:20px;">
                 The install will run in the background via Datto RMM.
               </div>
@@ -7452,24 +7540,28 @@ function renderDuoManagement() {
         return;
       }
 
+      const serverSummary = s.selectedDevices.length
+        ? s.selectedDevices.map(d => escHtml(d.name)).join(', ')
+        : '—';
       el.innerHTML = `
         <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:16px;font-size:13px;">
           <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Deployment summary</div>
           <div style="display:grid;gap:4px;">
             <div><span style="color:var(--text-muted);">Account: </span>${escHtml(s.accountName||'Anchor (Parent)')}</div>
             <div><span style="color:var(--text-muted);">Application: </span>${escHtml(s.app?.name||'—')}</div>
-            <div><span style="color:var(--text-muted);">Server: </span>${escHtml(s.deviceName||'—')}</div>
+            <div><span style="color:var(--text-muted);">Servers (${s.selectedDevices.length}): </span>${serverSummary}</div>
             <div><span style="color:var(--text-muted);">Site: </span>${escHtml(s.siteName||'—')}</div>
           </div>
         </div>
         <div id="deploy-log-area" style="margin-bottom:12px;"></div>
         <div id="deploy-error" style="display:none;color:#f87171;font-size:12px;margin-bottom:8px;"></div>
         <button id="deploy-btn" style="padding:8px 20px;background:var(--accent);border:none;
-          border-radius:6px;color:#fff;font-size:13px;cursor:pointer;font-weight:500;">&#128640; Run Quick Job</button>`;
+          border-radius:6px;color:#fff;font-size:13px;cursor:pointer;font-weight:500;">
+          &#128640; Run Quick Job${s.selectedDevices.length>1?'s':''}</button>`;
 
       el.querySelector('#deploy-btn').addEventListener('click', async () => {
-        const btn    = el.querySelector('#deploy-btn');
-        const errEl  = el.querySelector('#deploy-error');
+        const btn     = el.querySelector('#deploy-btn');
+        const errEl   = el.querySelector('#deploy-error');
         const logArea = el.querySelector('#deploy-log-area');
         btn.disabled=true; btn.textContent='Submitting...'; errEl.style.display='none';
 
@@ -7480,31 +7572,35 @@ function renderDuoManagement() {
 
         try {
           if (!s.app) throw new Error('No application configured — go back and create an app first.');
-          if (!s.deviceUid) throw new Error('No server selected — go back and select a server.');
+          if (!s.selectedDevices.length) throw new Error('No servers selected — go back and select a server.');
 
-          addLog(`Submitting Quick Job to Datto RMM...`);
-          addLog(`  Server: ${s.deviceName}`);
+          addLog(`Submitting Quick Job${s.selectedDevices.length>1?'s':''} to Datto RMM...`);
           addLog(`  App IKEY: ${s.app.integration_key}`);
           addLog(`  App HOST: ${s.app.api_hostname}`);
 
-          const r = await window.api.dattoRunDuoQuickjob({
-            deviceUid:   s.deviceUid,
-            ikey:        s.app.integration_key,
-            skey:        s.app.secret_key,
-            apiHostname: s.app.api_hostname,
-          });
+          for (const device of s.selectedDevices) {
+            addLog(`  &#8594; ${device.name}...`);
+            const r = await window.api.dattoRunDuoQuickjob({
+              deviceUid:   device.uid,
+              ikey:        s.app.integration_key,
+              skey:        s.app.secret_key,
+              apiHostname: s.app.api_hostname,
+            });
+            if (r.error) {
+              addLog(`    &#10007; Failed: ${r.error}`);
+              s.jobResults.push({ uid: device.uid, name: device.name, error: r.error });
+            } else {
+              addLog(`    &#10003; Submitted${r.jobUid ? ` (UID: ${r.jobUid})` : ''}`);
+              s.jobResults.push({ uid: device.uid, name: device.name, jobUid: r.jobUid });
+            }
+          }
 
-          if (r.error) throw new Error(r.error);
-
-          s.jobUid = r.jobUid;
-          addLog(`&#10003; Job submitted successfully`);
-          if (r.jobUid) addLog(`  Job UID: ${r.jobUid}`);
           renderDeploy(el, nextBtn);
 
         } catch(e) {
           addLog(`&#10007; Error: ${e.message}`);
           errEl.style.display=''; errEl.textContent=e.message;
-          btn.disabled=false; btn.textContent='&#128640; Run Quick Job';
+          btn.disabled=false; btn.textContent=`&#128640; Run Quick Job${s.selectedDevices.length>1?'s':''}`;
         }
       });
     }
