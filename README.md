@@ -15,6 +15,8 @@ Internal MSP tooling for Anchor Network Solutions. A Windows desktop app built w
 | **Pax8 Invoice Processor** | Processes and formats Pax8 invoices for review. |
 | **Kaseya Invoice Processor** | Parses Kaseya billing exports and reconciles against contract values. |
 | **Project Time Summary** | Pulls active Professional Services projects from Autotask, shows hours vs. estimates, flags at-risk projects, and emails a formatted HTML report. |
+| **Project Profitability** | Analyzes profitability for Professional Services contracts — hours, invoiced, pending, margin, and effective rate per project. |
+| **MSC Agreements** | Manages Microsoft Cloud Agreement (MCA) tracking and status across clients. |
 | **Contract Changes** | Tracks and surfaces contract modifications in Autotask. |
 | **Contract Renewals** | Lists upcoming contract renewals with configurable look-ahead window. |
 | **Blackpoint Processor** | Processes Blackpoint Cyber billing data. |
