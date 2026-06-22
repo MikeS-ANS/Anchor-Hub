@@ -239,6 +239,31 @@ Drop ideas here. Nothing too small or too big.
   - **Full quarterly snapshot** — pulls counts for every client across every system and writes a new dated tab into the shared SharePoint Excel file, matching the existing column layout exactly. Can be triggered manually by whoever runs the quarterly review or scheduled to run automatically so the file is always up to date before anyone asks for it.
   The long-term goal is eliminating the manual "log into eight systems and type the numbers in" process entirely.
 
+- [ ] **Employee Scorecard Tool**
+  Replaces the manual monthly Excel scorecard (7 employee tabs) that was previously updated by hand and emailed individually. No longer being maintained — this tool automates the entire pipeline.
+
+  **How it works:**
+  - Pulls metrics automatically from **Autotask** (hours, tickets, project surveys, timesheets) and **Strety** (client touches, KPIs)
+  - For metrics that can't be auto-pulled (continuing education, some client touches), prompts the employee or manager to enter them via the app
+  - Updates each employee's **individual Strety scorecard** (not just team-level scorecards)
+  - Sends each person their scorecard via **email or Teams message** on a configurable schedule
+  - Role-based: employees see only their own data; managers see their direct reports
+
+  **Employees & key metrics tracked:**
+  | Role | Key Metrics |
+  |---|---|
+  | Director (Brian French) | TSMs (≥5), hours, revenue, cabling/hardware profit, cont. ed |
+  | Client Experience (Susan Castle) | Unique touch points (75/mo), proactive visits (40/yr), trainings (4/yr) |
+  | TAM (Cody Mead) | Project survey avg (≥4.5), site reviews (8-10/mo), tickets, onboard projects |
+  | Pro Services Mgr (Andi Gingrich) | Team survey avg, project on-time %, revenue billed |
+  | WSD (Michael Nolan) | CSAT (≥98%), tickets, hours |
+  | Service Desk Mgr (Patrick Kiah) | CSAT, tickets, hours, certifications |
+  | Cybersecurity (Andy Harper) | Project survey avg, site reviews, tickets, onboard projects |
+
+  **Color thresholds:** Red = below goal, Orange = approaching, Green = on target (defined per metric)
+
+  **Dependencies:** Strety API, Autotask API (both available), Graph `Mail.Send` (Sprint 2.5 for email delivery), SharePoint as client-touches fallback source.
+
 ---
 
 ## 🤝 Contributors
