@@ -1581,11 +1581,7 @@ Total CommITment Core</textarea>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1.5L2 4.5v4c0 3.3 2.4 5.5 6 6 3.6-.5 6-2.7 6-6v-4L8 1.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 8l1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
           BlackPoint / CompassOne
         </h2>
-        <div class="field-group">
-          <label class="field-label">API Key</label>
-          <input class="field-input" id="bp-api-key" type="password" placeholder="bpc_..." autocomplete="off" />
-          <p class="field-hint">Used for the BlackPoint Endpoint Usage tool. Find your API key in the CompassOne portal under API settings.</p>
-        </div>
+        <p class="field-hint" style="margin-top:6px">API key is managed centrally in Azure Key Vault (<code>BLACKPOINT-API-KEY</code>). No configuration needed here.</p>
       </div>
 
       <div class="settings-actions">
@@ -1993,7 +1989,6 @@ const CRED_MAP = {
   'at-integration-code': 'autotask_integration_code',
   'at-url':              'autotask_url',
   'claude-api-key':      'claude_api_key',
-  'bp-api-key':          'blackpoint_api_key',
 };
 
 async function loadCredentials() {
@@ -5432,17 +5427,55 @@ async function saveMscSettingsUI() {
   setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2500);
 }
 
-// ─── BlackPoint Endpoint Usage ────────────────────────────────────────────────
-let bpData = null;
+// ─── BlackPoint / CompassOne ──────────────────────────────────────────────────
+let bpData        = null;
+let bpCompareRows = null;
+let bpAllFiles    = null;
+let bpMatchState  = null;
+let bpPushProgressHandler = null;
+let bpActiveFilter = null;
 
 function renderBlackpointProcessor() {
   content.innerHTML = `
     <div class="view-header">
       <div>
-        <h1 class="view-title">BlackPoint Endpoint Usage</h1>
-        <p class="view-subtitle">Track protected endpoint counts per client and identify billing deltas month over month</p>
+        <h1 class="view-title">BlackPoint / CompassOne</h1>
+        <p class="view-subtitle">Compare monthly Account Usage Report against Autotask billing and push unit changes</p>
       </div>
-      <div class="view-actions">
+    </div>
+
+    <div style="display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:20px">
+      <button class="bp-tab" data-tab="compare" style="padding:8px 18px;border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;font-size:13px;font-weight:500;margin-bottom:-1px;transition:color .15s">Invoice Compare &amp; Push</button>
+      <button class="bp-tab" data-tab="usage" style="padding:8px 18px;border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;font-size:13px;font-weight:500;margin-bottom:-1px;transition:color .15s">Endpoint Usage (API)</button>
+    </div>
+
+    <!-- Tab: Invoice Compare + Push -->
+    <div id="bp-tab-compare">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+        <select id="bp-year-sel" class="field-input" style="width:110px;color-scheme:dark">
+          <option value="">Year…</option>
+        </select>
+        <select id="bp-file-sel" class="field-input" style="width:360px;color-scheme:dark">
+          <option value="">Select a CSV file…</option>
+        </select>
+        <button class="btn btn-primary btn-sm" id="bp-load-btn" disabled>Load &amp; Compare</button>
+        <button class="btn btn-ghost btn-sm" id="bp-refresh-files-btn" title="Refresh file list from SharePoint" style="padding:4px 8px;font-size:13px">↻</button>
+      </div>
+      <p class="field-hint" style="margin-bottom:16px">Files loaded from SharePoint: ANSVendors/Blackpoint/invoices/{year}/</p>
+      <div id="bp-compare-status"></div>
+      <div id="bp-compare-results" style="display:none">
+        <div id="bp-compare-table-wrap"></div>
+        <div style="display:flex;gap:10px;margin-top:16px;padding-top:16px;border-top:1px solid var(--border);flex-wrap:wrap;align-items:center">
+          <button class="btn btn-primary" id="bp-push-sp-btn" disabled>Push Security+</button>
+          <button class="btn btn-primary" id="bp-push-def-btn" disabled>Push 365 Defense</button>
+          <button class="btn btn-ghost" id="bp-export-compare-btn" disabled style="margin-left:auto">Export to Excel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Endpoint Usage (API) -->
+    <div id="bp-tab-usage" style="display:none">
+      <div style="display:flex;gap:8px;margin-bottom:16px">
         <button class="btn btn-ghost btn-sm" id="bp-export-btn" disabled>
           <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
             <path d="M7 1v8M4 6l3 3 3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
@@ -5458,18 +5491,594 @@ function renderBlackpointProcessor() {
           Run Query
         </button>
       </div>
-    </div>
-    <div class="view-body">
-      <div id="bp-status" class="bp-status-area" style="display:none"></div>
+      <div id="bp-status" style="display:none"></div>
       <div id="bp-results"></div>
+    </div>
+
+    <!-- Company match modal -->
+    <div id="bp-match-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center">
+      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:24px;width:520px;max-height:80vh;overflow-y:auto">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <h3 style="margin:0;font-size:15px">Confirm Company Match</h3>
+          <button id="bp-match-close" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:20px;line-height:1">&times;</button>
+        </div>
+        <p style="font-size:12px;color:var(--text-muted);margin:0 0 2px">Blackpoint company:</p>
+        <p style="font-size:14px;font-weight:600;margin:0 0 14px" id="bp-match-customer-lbl"></p>
+        <p style="font-size:12px;color:var(--text-muted);margin:0 0 6px">Suggested matches:</p>
+        <div id="bp-match-candidates" style="margin-bottom:14px"></div>
+        <div style="margin-bottom:14px">
+          <input class="field-input" id="bp-match-search" placeholder="Search Autotask companies…" type="text" style="width:100%;box-sizing:border-box" />
+          <div id="bp-match-search-results" style="margin-top:6px"></div>
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="btn btn-ghost" id="bp-match-cancel">Cancel</button>
+          <button class="btn btn-primary" id="bp-match-confirm" disabled>Confirm Match</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Push progress modal -->
+    <div id="bp-push-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center">
+      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:24px;width:560px;max-height:80vh;overflow-y:auto">
+        <h3 style="margin:0 0 14px;font-size:15px" id="bp-push-modal-title">Confirm Push</h3>
+        <!-- Confirmation step — shown before push fires -->
+        <div id="bp-push-confirm-step" style="display:none">
+          <div id="bp-push-confirm-body" style="font-size:13px;margin-bottom:14px;max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:10px"></div>
+          <div style="display:flex;gap:10px;justify-content:flex-end">
+            <button class="btn btn-ghost" id="bp-push-confirm-cancel">Cancel</button>
+            <button class="btn btn-primary" id="bp-push-confirm-ok">Confirm &amp; Push</button>
+          </div>
+        </div>
+        <!-- Progress step — shown while push is running -->
+        <div id="bp-push-progress-step">
+          <div id="bp-push-progress-list" style="font-size:12px;max-height:300px;overflow-y:auto;margin-bottom:14px;border:1px solid var(--border);border-radius:6px;padding:8px"></div>
+          <div id="bp-push-summary" style="display:none;padding:12px;background:var(--surface);border-radius:6px;margin-bottom:14px;font-size:13px;line-height:1.6"></div>
+          <div style="display:flex;justify-content:flex-end">
+            <button class="btn btn-ghost" id="bp-push-close" disabled>Close</button>
+          </div>
+        </div>
+      </div>
     </div>`;
 
+  // Tab switching
+  document.querySelectorAll('.bp-tab').forEach(btn => {
+    btn.addEventListener('click', () => bpShowTab(btn.dataset.tab));
+  });
+  bpShowTab('compare');
+
+  // Init: load SP file list
+  bpLoadFiles();
+
+  // Refresh file list button
+  document.getElementById('bp-refresh-files-btn').addEventListener('click', bpRefreshFiles);
+
+  // Export comparison button
+  document.getElementById('bp-export-compare-btn').addEventListener('click', bpExportComparison);
+
+  // Usage tab
   document.getElementById('bp-run-btn').addEventListener('click', bpRunQuery);
   document.getElementById('bp-export-btn').addEventListener('click', bpExportReport);
 
-  // Restore previous results if available
+  // Match modal
+  document.getElementById('bp-match-close').addEventListener('click', bpCloseMatchModal);
+  document.getElementById('bp-match-cancel').addEventListener('click', bpCloseMatchModal);
+  document.getElementById('bp-match-confirm').addEventListener('click', bpConfirmMatch);
+  let bpSearchTimer = null;
+  document.getElementById('bp-match-search').addEventListener('input', e => {
+    clearTimeout(bpSearchTimer);
+    bpSearchTimer = setTimeout(() => bpSearchMatchCompanies(e.target.value), 300);
+  });
+
+  // Push modal close (progress step)
+  document.getElementById('bp-push-close').addEventListener('click', () => {
+    document.getElementById('bp-push-modal').style.display = 'none';
+  });
+
+  // Register push progress listener (once per render; duplicates are harmless)
+  window.api.onBpPushProgress(data => {
+    if (typeof bpPushProgressHandler === 'function') bpPushProgressHandler(data);
+  });
+
+  // Restore usage tab data if available
   if (bpData) bpRenderResults();
 }
+
+function bpShowTab(tab) {
+  document.querySelectorAll('.bp-tab').forEach(btn => {
+    const active = btn.dataset.tab === tab;
+    btn.style.color            = active ? 'var(--accent)' : 'var(--text-muted)';
+    btn.style.borderBottomColor = active ? 'var(--accent)' : 'transparent';
+  });
+  document.getElementById('bp-tab-compare').style.display = tab === 'compare' ? '' : 'none';
+  document.getElementById('bp-tab-usage').style.display   = tab === 'usage'   ? '' : 'none';
+}
+
+// ── Compare Tab ────────────────────────────────────────────────────────────────
+
+async function bpLoadFiles() {
+  const yearSel = document.getElementById('bp-year-sel');
+  const fileSel = document.getElementById('bp-file-sel');
+  const loadBtn = document.getElementById('bp-load-btn');
+  if (!yearSel) return;
+
+  yearSel.addEventListener('change', () => {
+    bpPopulateFiles(yearSel.value);
+  });
+  fileSel.addEventListener('change', () => {
+    if (loadBtn) loadBtn.disabled = !fileSel.value;
+  });
+  if (loadBtn) loadBtn.addEventListener('click', bpLoadAndCompare);
+
+  try {
+    bpAllFiles = await window.api.bpListSpFiles();
+    yearSel.innerHTML = '<option value="">Year…</option>' +
+      (bpAllFiles.years || []).map(y => `<option value="${y}">${escHtml(y)}</option>`).join('');
+  } catch (e) {
+    const st = document.getElementById('bp-compare-status');
+    if (st) st.innerHTML = `<div class="error-banner" style="margin-bottom:12px">Could not load SharePoint file list: ${escHtml(e.message)}</div>`;
+  }
+}
+
+function bpPopulateFiles(year) {
+  const fileSel = document.getElementById('bp-file-sel');
+  const loadBtn = document.getElementById('bp-load-btn');
+  if (!fileSel || !bpAllFiles) return;
+  const files = (bpAllFiles.files || []).filter(f => f.year === year);
+  fileSel.innerHTML = '<option value="">Select a CSV file…</option>' +
+    files.map(f => `<option value="${escHtml(f.name)}">${escHtml(f.name)}</option>`).join('');
+  if (loadBtn) loadBtn.disabled = true;
+}
+
+async function bpLoadAndCompare() {
+  const yearSel   = document.getElementById('bp-year-sel');
+  const fileSel   = document.getElementById('bp-file-sel');
+  const loadBtn   = document.getElementById('bp-load-btn');
+  const statusEl  = document.getElementById('bp-compare-status');
+  const resultsEl = document.getElementById('bp-compare-results');
+  if (!yearSel || !yearSel.value || !fileSel || !fileSel.value) return;
+
+  if (loadBtn) loadBtn.disabled = true;
+  if (resultsEl) resultsEl.style.display = 'none';
+  statusEl.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;padding:14px;background:var(--surface);border-radius:6px;margin-bottom:12px;font-size:13px;color:var(--text-muted)">
+      <span class="spinner" style="width:14px;height:14px;border-width:2px;flex-shrink:0"></span>
+      <span id="bp-loading-txt">Loading CSV from SharePoint…</span>
+    </div>`;
+
+  try {
+    const { rows: csvRows } = await window.api.bpLoadSpCsv({ year: yearSel.value, fileName: fileSel.value });
+    const loadTxt = document.getElementById('bp-loading-txt');
+    if (loadTxt) loadTxt.textContent = `Comparing ${csvRows.length} companies against Autotask… (30-60 seconds)`;
+
+    const { rows } = await window.api.bpGetAtComparison({ rows: csvRows, force: true });
+    bpCompareRows = rows;
+    statusEl.innerHTML = '';
+    bpRenderCompareTable(rows);
+    if (resultsEl) resultsEl.style.display = '';
+    const exportBtn = document.getElementById('bp-export-compare-btn');
+    if (exportBtn) exportBtn.disabled = false;
+    saveToolStat('blackpoint-processor', `Compare: ${rows.length} companies loaded`, 'ok');
+  } catch (e) {
+    statusEl.innerHTML = `<div class="error-banner" style="margin-bottom:12px">Error: ${escHtml(e.message)}</div>`;
+    saveToolStat('blackpoint-processor', `Compare error: ${e.message}`, 'error');
+  } finally {
+    if (loadBtn) loadBtn.disabled = false;
+  }
+}
+
+async function bpRefreshFiles() {
+  const yearSel    = document.getElementById('bp-year-sel');
+  const statusEl   = document.getElementById('bp-compare-status');
+  const refreshBtn = document.getElementById('bp-refresh-files-btn');
+  if (refreshBtn) { refreshBtn.disabled = true; refreshBtn.textContent = '…'; }
+  try {
+    bpAllFiles = await window.api.bpListSpFiles();
+    const currYear = yearSel ? yearSel.value : '';
+    if (yearSel) {
+      yearSel.innerHTML = '<option value="">Year…</option>' +
+        (bpAllFiles.years || []).map(y => `<option value="${y}">${escHtml(y)}</option>`).join('');
+      if (currYear) { yearSel.value = currYear; bpPopulateFiles(currYear); }
+    }
+  } catch (e) {
+    if (statusEl) statusEl.innerHTML = `<div class="error-banner" style="margin-bottom:12px">Could not refresh file list: ${escHtml(e.message)}</div>`;
+  } finally {
+    if (refreshBtn) { refreshBtn.disabled = false; refreshBtn.textContent = '↻'; }
+  }
+}
+
+async function bpExportComparison() {
+  if (!bpCompareRows) return;
+  const btn = document.getElementById('bp-export-compare-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Exporting…'; }
+  try {
+    const res = await window.api.bpExportComparison({ rows: bpCompareRows });
+    if (res.error) alert(`Export failed: ${res.error}`);
+  } catch (e) {
+    alert(`Export failed: ${e.message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Export to Excel'; }
+  }
+}
+
+async function bpRetryErrors() {
+  if (!bpCompareRows) return;
+  const errorRows = bpCompareRows.filter(r => r.atError);
+  if (!errorRows.length) return;
+  const btn = document.getElementById('bp-retry-errors-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Retrying…'; }
+  const statusEl = document.getElementById('bp-compare-status');
+  try {
+    const csvRows = errorRows.map(r => ({ customer: r.customer, securityPlus: r.securityPlus, cloudResponse: r.cloudResponse }));
+    const { rows: retried } = await window.api.bpGetAtComparison({ rows: csvRows, force: false });
+    const retryMap = {};
+    retried.forEach(r => { retryMap[r.customer] = r; });
+    bpCompareRows = bpCompareRows.map(r => retryMap[r.customer] || r);
+    bpRenderCompareTable(bpCompareRows);
+  } catch (e) {
+    if (statusEl) statusEl.innerHTML = `<div class="error-banner" style="margin-bottom:12px">Retry failed: ${escHtml(e.message)}</div>`;
+  }
+}
+
+function bpFilterBadge(label, filter, count, color, active) {
+  if (!count && filter !== null) return '';
+  const isActive = bpActiveFilter === filter;
+  const base = `cursor:pointer;font-size:12px;padding:2px 8px;border-radius:12px;border:1px solid;transition:all 0.15s;user-select:none`;
+  const style = isActive
+    ? `${base};background:${color};border-color:${color};color:#000`
+    : `${base};background:transparent;border-color:${color};color:${color}`;
+  return `<button id="bp-filter-${filter || 'all'}" style="${style}">${count != null ? count + ' ' : ''}${label}</button>`;
+}
+
+function bpRenderCompareTable(rows) {
+  const wrap   = document.getElementById('bp-compare-table-wrap');
+  const spBtn  = document.getElementById('bp-push-sp-btn');
+  const defBtn = document.getElementById('bp-push-def-btn');
+  if (!wrap || !rows) return;
+
+  const total      = rows.length;
+  const spChanges  = rows.filter(r => r.atCompanyId && r.spDelta  != null && r.spDelta  !== 0).length;
+  const defChanges = rows.filter(r => r.atCompanyId && r.defDelta != null && r.defDelta !== 0).length;
+  const matched    = rows.filter(r => ['matched', 'auto_match'].includes(r.matchStatus)).length;
+  const unmatched  = rows.filter(r => ['low_confidence', 'unmatched'].includes(r.matchStatus)).length;
+  const errCount   = rows.filter(r => r.atError).length;
+  const excluded   = rows.filter(r => r.matchStatus === 'excluded').length;
+
+  if (spBtn)  { spBtn.disabled  = spChanges  === 0; spBtn.textContent  = `Push Security+ (${spChanges} changes)`;  spBtn.onclick  = () => bpPush('security_plus'); }
+  if (defBtn) { defBtn.disabled = defChanges === 0; defBtn.textContent = `Push 365 Defense (${defChanges} changes)`; defBtn.onclick = () => bpPush('defense_365'); }
+
+  const filtered = bpActiveFilter === null ? rows
+    : bpActiveFilter === 'matched'    ? rows.filter(r => ['matched','auto_match'].includes(r.matchStatus))
+    : bpActiveFilter === 'unmatched'  ? rows.filter(r => ['low_confidence','unmatched'].includes(r.matchStatus))
+    : bpActiveFilter === 'atError'    ? rows.filter(r => r.atError)
+    : bpActiveFilter === 'spChange'   ? rows.filter(r => r.atCompanyId && r.spDelta  != null && r.spDelta  !== 0)
+    : bpActiveFilter === 'defChange'  ? rows.filter(r => r.atCompanyId && r.defDelta != null && r.defDelta !== 0)
+    : bpActiveFilter === 'excluded'   ? rows.filter(r => r.matchStatus === 'excluded')
+    : rows;
+
+  wrap.innerHTML = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
+      ${bpFilterBadge('All', null,        total,      'var(--text-muted)', true)}
+      ${bpFilterBadge('matched',    'matched',   matched,    '#4ade80', true)}
+      ${unmatched  ? bpFilterBadge('need match', 'unmatched', unmatched,  '#fb923c', true) : ''}
+      ${errCount   ? bpFilterBadge('AT errors',  'atError',   errCount,   '#f87171', true) : ''}
+      ${spChanges  ? bpFilterBadge('SP changes', 'spChange',  spChanges,  '#fb923c', true) : ''}
+      ${defChanges ? bpFilterBadge('365D changes','defChange', defChanges, '#fb923c', true) : ''}
+      ${excluded   ? bpFilterBadge('excluded',   'excluded',  excluded,   '#6b7280', true) : ''}
+      ${bpActiveFilter !== null ? `<button id="bp-filter-clear" style="font-size:11px;padding:2px 6px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer">✕ clear</button>` : ''}
+      ${errCount   ? `<button id="bp-retry-errors-btn" style="margin-left:auto;font-size:11px;padding:2px 8px;border-radius:10px;border:1px solid #f87171;background:transparent;color:#f87171;cursor:pointer">↺ Retry ${errCount} error${errCount > 1 ? 's' : ''}</button>` : ''}
+    </div>
+    <div style="overflow-x:auto">
+    <table class="audit-table" style="width:100%;font-size:12px">
+      <thead>
+        <tr>
+          <th style="text-align:left;min-width:180px">Company</th>
+          <th style="text-align:center">Match</th>
+          <th style="text-align:center" title="MDR device count from Blackpoint invoice">MDR Devices</th>
+          <th style="text-align:center" title="Security+ units currently billed in Autotask">Billed Security+</th>
+          <th style="text-align:center" title="Change needed in Autotask (positive = increase, negative = decrease)">Security+ Change</th>
+          <th style="text-align:center" title="Cloud Response seats included free with MDR (MDR × 1.3)">CR Included</th>
+          <th style="text-align:center" title="Cloud Response seats in use (from Blackpoint invoice)">CR Used</th>
+          <th style="text-align:center" title="Billable Cloud Response = max(0, Used − Included)">CR Billable</th>
+          <th style="text-align:center" title="365 Defense units currently billed in Autotask">Billed 365 Defense</th>
+          <th style="text-align:center" title="Change needed in Autotask for 365 Defense">365D Change</th>
+          <th style="text-align:center;min-width:60px"></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${filtered.map((r, idx) => bpCompareRow(r, rows.indexOf(r))).join('')}
+      </tbody>
+    </table>
+    </div>`;
+
+  // Filter badge clicks
+  wrap.querySelectorAll('[id^="bp-filter-"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const f = btn.id.replace('bp-filter-', '');
+      bpActiveFilter = (f === 'all' || f === 'clear') ? null : (bpActiveFilter === f ? null : f);
+      bpRenderCompareTable(rows);
+    });
+  });
+
+  // Match buttons
+  rows.forEach((r, idx) => {
+    const btn = document.getElementById(`bp-match-btn-${idx}`);
+    if (btn) btn.addEventListener('click', () => bpOpenMatchModal(r, idx));
+  });
+
+  // Exclude / un-exclude buttons
+  rows.forEach((r, idx) => {
+    const btn = document.getElementById(`bp-excl-btn-${idx}`);
+    if (btn) btn.addEventListener('click', () => bpToggleExclude(r, idx));
+  });
+
+  // Retry errors button
+  const retryBtn = document.getElementById('bp-retry-errors-btn');
+  if (retryBtn) retryBtn.addEventListener('click', bpRetryErrors);
+}
+
+function bpCompareRow(r, idx) {
+  const isExcluded = r.matchStatus === 'excluded';
+
+  const matchBadge = (() => {
+    switch (r.matchStatus) {
+      case 'matched':    return `<span style="color:#4ade80;font-size:11px">✓ Confirmed</span>`;
+      case 'auto_match': return `<span style="color:#a3e635;font-size:11px" title="${escHtml(r.atCompanyName || '')}">~ Auto</span>`;
+      case 'skipped':    return `<span style="color:var(--text-muted);font-size:11px">— ANS</span>`;
+      case 'excluded':   return `<span style="color:#6b7280;font-size:11px">— Excluded</span>`;
+      case 'low_confidence':
+        return `<span style="font-size:11px;color:#fb923c" title="${escHtml(r.atCompanyName || '')} (${Math.round((r.confidence||0)*100)}%)">${escHtml((r.atCompanyName||'').substring(0,18))}… <button id="bp-match-btn-${idx}" class="btn btn-ghost btn-sm" style="font-size:10px;padding:1px 6px">Fix</button></span>`;
+      default:
+        return `<span style="color:#f87171;font-size:11px">No match <button id="bp-match-btn-${idx}" class="btn btn-ghost btn-sm" style="font-size:10px;padding:1px 6px">Set</button></span>`;
+    }
+  })();
+
+  const fmtNum = n => n == null ? `<span style="color:var(--text-muted)">—</span>` : n;
+  const deltaCell = d => {
+    if (d == null) return `<td style="text-align:center"><span style="color:var(--text-muted)">—</span></td>`;
+    if (d === 0)   return `<td style="text-align:center;color:var(--text-muted)">0</td>`;
+    if (d > 0)     return `<td style="text-align:center;color:#fb923c;font-weight:600">+${d}</td>`;
+    return           `<td style="text-align:center;color:#60a5fa;font-weight:600">${d}</td>`;
+  };
+
+  const rowOpacity = isExcluded ? 'opacity:0.45;' : '';
+  const rowBg = r.atError ? 'background:rgba(248,113,113,0.05);' : '';
+  const atNameHint = r.atCompanyName && !['unmatched','excluded'].includes(r.matchStatus)
+    ? `<br><span style="font-size:10px;color:var(--text-muted)">${escHtml(r.atCompanyName)}</span>` : '';
+  const errHint = r.atError
+    ? `<br><span style="font-size:10px;color:#f87171" title="${escHtml(r.atError)}">⚠ AT error</span>` : '';
+  const exclBtn = `<button id="bp-excl-btn-${idx}" title="${isExcluded ? 'Un-exclude' : 'Exclude from billing'}" class="btn btn-ghost btn-sm" style="font-size:10px;padding:1px 6px;color:${isExcluded ? '#4ade80' : 'var(--text-muted)'}">${isExcluded ? '↩' : '✕'}</button>`;
+
+  return `
+    <tr style="${rowBg}${rowOpacity}">
+      <td style="padding:5px 8px">${escHtml(r.customer)}${atNameHint}${errHint}</td>
+      <td style="text-align:center;padding:5px 8px;white-space:nowrap">${matchBadge}</td>
+      <td style="text-align:center">${fmtNum(r.securityPlus)}</td>
+      <td style="text-align:center">${fmtNum(r.atSP)}</td>
+      ${deltaCell(r.spDelta)}
+      <td style="text-align:center;color:var(--text-muted)">${fmtNum(r.included365D)}</td>
+      <td style="text-align:center">${fmtNum(r.cloudResponse)}</td>
+      <td style="text-align:center;font-weight:${r.billable365D > 0 ? '600' : 'normal'}">${fmtNum(r.billable365D)}</td>
+      <td style="text-align:center">${fmtNum(r.atDef)}</td>
+      ${deltaCell(r.defDelta)}
+      <td style="text-align:center">${exclBtn}</td>
+    </tr>`;
+}
+
+async function bpToggleExclude(row, rowIdx) {
+  const isExcluded = row.matchStatus === 'excluded';
+  try {
+    await window.api.bpSetExcluded({ customer: row.customer, excluded: !isExcluded });
+    if (bpCompareRows) {
+      bpCompareRows[rowIdx] = { ...bpCompareRows[rowIdx], matchStatus: isExcluded ? 'unmatched' : 'excluded' };
+      bpRenderCompareTable(bpCompareRows);
+    }
+  } catch (e) {
+    alert('Failed to update exclusion: ' + e.message);
+  }
+}
+
+// ── Company match modal ────────────────────────────────────────────────────────
+
+function bpOpenMatchModal(row, rowIdx) {
+  bpMatchState = { customer: row.customer, rowIdx, selected: null };
+  document.getElementById('bp-match-customer-lbl').textContent = row.customer;
+  document.getElementById('bp-match-confirm').disabled = true;
+  document.getElementById('bp-match-search').value = '';
+  document.getElementById('bp-match-search-results').innerHTML = '';
+
+  const cands = row.candidates || [];
+  const candWrap = document.getElementById('bp-match-candidates');
+  candWrap.innerHTML = cands.length
+    ? cands.map(c => `
+        <div class="bp-cand-row" data-id="${c.atCompanyId}" data-name="${escHtml(c.atCompanyName)}"
+             style="padding:7px 10px;border-radius:5px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;border:1px solid var(--border)">
+          <span style="font-size:13px">${escHtml(c.atCompanyName)}</span>
+          <span style="font-size:11px;color:var(--text-muted)">${Math.round((c.confidence||0)*100)}%</span>
+        </div>`).join('')
+    : '<p style="font-size:12px;color:var(--text-muted)">No suggestions — search manually below.</p>';
+
+  candWrap.querySelectorAll('.bp-cand-row').forEach(el =>
+    el.addEventListener('click', () => bpSelectMatchCandidate(el)));
+
+  const modal = document.getElementById('bp-match-modal');
+  modal.style.display = 'flex';
+}
+
+function bpSelectMatchCandidate(el) {
+  document.querySelectorAll('#bp-match-candidates .bp-cand-row, #bp-match-search-results .bp-cand-row')
+    .forEach(r => r.style.background = '');
+  el.style.background = 'rgba(99,102,241,0.15)';
+  bpMatchState.selected = { atCompanyId: parseInt(el.dataset.id, 10), atCompanyName: el.dataset.name };
+  document.getElementById('bp-match-confirm').disabled = false;
+}
+
+function bpCloseMatchModal() {
+  document.getElementById('bp-match-modal').style.display = 'none';
+  bpMatchState = null;
+}
+
+async function bpSearchMatchCompanies(query) {
+  const resultsEl = document.getElementById('bp-match-search-results');
+  if (!resultsEl) return;
+  if (!query || query.length < 3) { resultsEl.innerHTML = ''; return; }
+  try {
+    const companies = await window.api.bpSearchAtCompanies({ query });
+    resultsEl.innerHTML = companies.length
+      ? companies.map(c => `
+          <div class="bp-cand-row" data-id="${c.atCompanyId}" data-name="${escHtml(c.atCompanyName)}"
+               style="padding:7px 10px;border-radius:5px;cursor:pointer;display:flex;align-items:center;margin-bottom:4px;border:1px solid var(--border)">
+            <span style="font-size:13px">${escHtml(c.atCompanyName)}</span>
+          </div>`).join('')
+      : '<p style="font-size:12px;color:var(--text-muted)">No results</p>';
+    resultsEl.querySelectorAll('.bp-cand-row').forEach(el =>
+      el.addEventListener('click', () => bpSelectMatchCandidate(el)));
+  } catch {}
+}
+
+async function bpConfirmMatch() {
+  if (!bpMatchState?.selected) return;
+  const { customer, rowIdx, selected } = bpMatchState;
+  const btn = document.getElementById('bp-match-confirm');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    await window.api.bpConfirmCompanyMatch({ customer, atCompanyId: selected.atCompanyId, atCompanyName: selected.atCompanyName });
+    bpCloseMatchModal();
+    // Re-run comparison for just this one row
+    if (rowIdx != null && bpCompareRows) {
+      const orig = bpCompareRows[rowIdx];
+      const { rows: updated } = await window.api.bpGetAtComparison({
+        rows: [{ customer: orig.customer, securityPlus: orig.securityPlus, cloudResponse: orig.cloudResponse }],
+        force: false,
+      });
+      if (updated[0]) bpCompareRows[rowIdx] = updated[0];
+      bpRenderCompareTable(bpCompareRows);
+    }
+  } catch (e) {
+    alert(`Failed to save match: ${e.message}`);
+    btn.disabled = false; btn.textContent = 'Confirm Match';
+  }
+}
+
+// ── Push ──────────────────────────────────────────────────────────────────────
+
+let _bpPushActive = false;
+
+async function bpPush(serviceType) {
+  if (!bpCompareRows || _bpPushActive) return;
+  _bpPushActive = true;
+  const modal        = document.getElementById('bp-push-modal');
+  const title        = document.getElementById('bp-push-modal-title');
+  const confirmStep  = document.getElementById('bp-push-confirm-step');
+  const confirmBody  = document.getElementById('bp-push-confirm-body');
+  const confirmOk    = document.getElementById('bp-push-confirm-ok');
+  const progressStep = document.getElementById('bp-push-progress-step');
+  const list         = document.getElementById('bp-push-progress-list');
+  const summary      = document.getElementById('bp-push-summary');
+  const closeBtn     = document.getElementById('bp-push-close');
+  const label        = serviceType === 'security_plus' ? 'Security+' : '365 Defense';
+  const effectiveDate = serviceType === 'security_plus'
+    ? 'increases → 1st of this month, decreases → 1st of next month'
+    : 'increases → 1st of this month, decreases → 1st of next month';
+
+  const pushRows = bpCompareRows.filter(r => {
+    if (!r.atCompanyId || !['matched', 'auto_match'].includes(r.matchStatus)) return false;
+    return serviceType === 'security_plus'
+      ? (r.spDelta  != null && r.spDelta  !== 0)
+      : (r.defDelta != null && r.defDelta !== 0);
+  });
+
+  if (!pushRows.length) return;
+
+  // ── Step 1: Show confirmation dialog ─────────────────────────────────────
+  title.textContent = `Confirm ${label} Push`;
+  confirmStep.style.display  = '';
+  progressStep.style.display = 'none';
+  modal.style.display = 'flex';
+
+  const increases = pushRows.filter(r => (serviceType === 'security_plus' ? r.spDelta : r.defDelta) > 0);
+  const decreases = pushRows.filter(r => (serviceType === 'security_plus' ? r.spDelta : r.defDelta) < 0);
+
+  confirmBody.innerHTML = `
+    <p style="margin:0 0 10px;color:var(--text-muted);font-size:12px">Effective date: ${escHtml(effectiveDate)}</p>
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr>
+        <th style="text-align:left;padding:3px 6px;border-bottom:1px solid var(--border)">Company</th>
+        <th style="text-align:center;padding:3px 6px;border-bottom:1px solid var(--border)">Current</th>
+        <th style="text-align:center;padding:3px 6px;border-bottom:1px solid var(--border)">New</th>
+        <th style="text-align:center;padding:3px 6px;border-bottom:1px solid var(--border)">Change</th>
+      </tr></thead>
+      <tbody>
+        ${pushRows.map(r => {
+          const delta   = serviceType === 'security_plus' ? r.spDelta  : r.defDelta;
+          const current = serviceType === 'security_plus' ? r.atSP     : r.atDef;
+          const bpVal   = serviceType === 'security_plus' ? r.securityPlus : r.billable365D;
+          const color   = delta > 0 ? '#fb923c' : '#60a5fa';
+          return `<tr>
+            <td style="padding:3px 6px;border-bottom:1px solid var(--border)">${escHtml(r.atCompanyName || r.customer)}</td>
+            <td style="text-align:center;padding:3px 6px;border-bottom:1px solid var(--border)">${current ?? '—'}</td>
+            <td style="text-align:center;padding:3px 6px;border-bottom:1px solid var(--border)">${bpVal}</td>
+            <td style="text-align:center;padding:3px 6px;border-bottom:1px solid var(--border);color:${color};font-weight:600">${delta > 0 ? '+' : ''}${delta}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+    <p style="margin:10px 0 0;font-size:11px;color:var(--text-muted)">${pushRows.length} companies · ${increases.length} increase${increases.length !== 1 ? 's' : ''} · ${decreases.length} decrease${decreases.length !== 1 ? 's' : ''}</p>`;
+
+  // ── Step 2: Wait for Confirm or Cancel ───────────────────────────────────
+  const cancelBtn = document.getElementById('bp-push-confirm-cancel');
+  const confirmed = await new Promise(resolve => {
+    const onConfirm = () => { cancelBtn.removeEventListener('click', onCancel, { once: true }); resolve(true); };
+    const onCancel  = () => { confirmOk.removeEventListener('click', onConfirm, { once: true }); modal.style.display = 'none'; resolve(false); };
+    confirmOk.addEventListener('click', onConfirm, { once: true });
+    cancelBtn.addEventListener('click', onCancel,  { once: true });
+  });
+  if (!confirmed) { _bpPushActive = false; return; }
+
+  // ── Step 3: Run push ──────────────────────────────────────────────────────
+  title.textContent = `Pushing ${label} changes…`;
+  confirmStep.style.display  = 'none';
+  progressStep.style.display = '';
+  list.innerHTML = '';
+  summary.style.display = 'none';
+  closeBtn.disabled = true;
+
+  const rowEls = {};
+  bpPushProgressHandler = ({ company, status, detail }) => {
+    if (!rowEls[company]) {
+      const el = document.createElement('div');
+      el.style.cssText = 'padding:4px 0;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:baseline';
+      el.innerHTML = `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(company)}</span><span class="bp-ps"></span>`;
+      list.appendChild(el);
+      rowEls[company] = el;
+    }
+    const colors = { success: '#4ade80', error: '#f87171', no_change: 'var(--text-muted)', no_contract: '#fbbf24', no_service: '#fbbf24', negative_qty: '#fbbf24', working: 'var(--text-muted)' };
+    const labels = { success: '✓', error: '✗', no_change: '—', no_contract: '⚠ no contract', no_service: '⚠ no service', negative_qty: '⚠ neg qty', working: '…' };
+    const ps = rowEls[company].querySelector('.bp-ps');
+    ps.style.color    = colors[status] || 'var(--text-muted)';
+    ps.style.fontSize = '11px';
+    ps.textContent    = `${labels[status] || status}${detail ? ' · ' + detail : ''}`;
+    list.scrollTop    = list.scrollHeight;
+  };
+
+  try {
+    const { results, summary: s } = await window.api.bpPush({ rows: pushRows, serviceType });
+    bpPushProgressHandler = null;
+    title.textContent     = `${label} push complete`;
+    summary.style.display = '';
+    summary.innerHTML     = `<strong>Done</strong><br>✓ Updated: ${s.updated} &nbsp;·&nbsp; — Skipped: ${s.skipped} &nbsp;·&nbsp; ✗ Errors: ${s.errors}`;
+    closeBtn.disabled     = false;
+    saveToolStat('blackpoint-processor', `Push ${label}: ${s.updated} updated, ${s.errors} errors`, s.errors ? 'error' : 'ok');
+  } catch (e) {
+    bpPushProgressHandler = null;
+    title.textContent = `${label} push failed`;
+    list.innerHTML   += `<div style="color:#f87171;padding:6px 0">${escHtml(e.message)}</div>`;
+    closeBtn.disabled = false;
+  } finally {
+    _bpPushActive = false;
+  }
+}
+
+// ── Endpoint Usage (API) ──────────────────────────────────────────────────────
 
 async function bpRunQuery() {
   const runBtn    = document.getElementById('bp-run-btn');

@@ -87,6 +87,16 @@ contextBridge.exposeInMainWorld('api', {
   // BlackPoint / CompassOne
   runBlackpointUsage:     ()     => ipcRenderer.invoke('run-blackpoint-usage'),
   exportBlackpointReport: (data) => ipcRenderer.invoke('export-blackpoint-report', data),
+  bpListSpFiles:          ()     => ipcRenderer.invoke('bp-list-sp-files'),
+  bpLoadSpCsv:            (opts) => ipcRenderer.invoke('bp-load-sp-csv', opts),
+  bpGetAtComparison:      (opts) => ipcRenderer.invoke('bp-get-at-comparison', opts),
+  bpConfirmCompanyMatch:  (opts) => ipcRenderer.invoke('bp-confirm-company-match', opts),
+  bpSearchAtCompanies:    (opts) => ipcRenderer.invoke('bp-search-at-companies', opts),
+  bpPush:                 (opts) => ipcRenderer.invoke('bp-push', opts),
+  bpLoadCompanyMappings:  ()     => ipcRenderer.invoke('bp-load-company-mappings'),
+  bpSetExcluded:          (opts) => ipcRenderer.invoke('bp-set-excluded', opts),
+  bpExportComparison:     (opts) => ipcRenderer.invoke('bp-export-comparison', opts),
+  onBpPushProgress:       (cb)   => ipcRenderer.on('bp-push-progress', (_, data) => cb(data)),
 
   // Sidebar config
   getSidebarConfig:  ()  => ipcRenderer.invoke('get-sidebar-config'),
