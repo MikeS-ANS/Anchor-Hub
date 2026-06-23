@@ -1324,6 +1324,37 @@ code.ph {
   border-radius: 3px;
 }
 
+/* Role table */
+.help-role-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 8px;
+}
+.help-role-table th {
+  text-align: left;
+  padding: 6px 10px;
+  background: rgba(255,255,255,.06);
+  color: var(--text-muted);
+  font-weight: 600;
+  border-bottom: 1px solid rgba(255,255,255,.1);
+}
+.help-role-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(255,255,255,.05);
+  vertical-align: top;
+  line-height: 1.5;
+}
+.help-role-table tr:last-child td { border-bottom: none; }
+.help-role-table code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: rgba(255,255,255,.08);
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
 /* Footer */
 .help-footer {
   display: flex;

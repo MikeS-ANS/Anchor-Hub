@@ -6390,7 +6390,7 @@ function renderHelp() {
           </div>
           <div class="help-tool-card">
             <div class="help-tool-name">Pax8 Invoice Comparison</div>
-            <p>Pulls a Pax8 invoice and compares line items against Autotask contract services to detect price changes, new charges, and removed items. Optionally uses Claude AI to summarize what changed and why.</p>
+            <p>Pulls a Pax8 invoice and compares line items against Autotask contract services to detect price changes, new charges, and removed items. Optionally uses AI to summarize what changed and why.</p>
           </div>
           <div class="help-tool-card">
             <div class="help-tool-name">M365 Margin Analyzer</div>
@@ -6409,6 +6409,10 @@ function renderHelp() {
             <p>Imports Kaseya/Datto invoices and splits costs across QuickBooks Online accounts and classes based on your configured percentages (PSA, RMM, IT Glue, bundled products). Generates an Autotask update prompt.</p>
           </div>
           <div class="help-tool-card">
+            <div class="help-tool-name">Project Time Summary</div>
+            <p>Pulls time entries from Autotask for a selected project and summarizes hours by role, phase, and team member. Helps project managers track burn rate and identify where time is being spent.</p>
+          </div>
+          <div class="help-tool-card">
             <div class="help-tool-name">Autotask Contract Changes</div>
             <p>Audits recent changes made to Autotask contracts — showing who changed what field and when. Useful for tracking unexpected modifications, auditing renewals, and seeing what the AI updated after running a prompt.</p>
           </div>
@@ -6418,8 +6422,174 @@ function renderHelp() {
           </div>
           <div class="help-tool-card">
             <div class="help-tool-name">BlackPoint Usage</div>
-            <p>Fetches the current protected endpoint (active agent) count for every client from the BlackPoint CompassOne API. Compares against the last saved snapshot to show month-over-month changes, then generates a Claude MCP prompt to update Security+ service quantities in Autotask to match.</p>
+            <p>Fetches current protected endpoint counts from BlackPoint CompassOne, compares against Autotask contract service quantities, and surfaces deltas. Push updates directly to Autotask contract services from within the tool.</p>
           </div>
+          <div class="help-tool-card">
+            <div class="help-tool-name">MSC Agreements</div>
+            <p>Reviews and manages Managed Services Contracts — surfaces agreement discrepancies and helps keep contract service quantities in sync across clients.</p>
+          </div>
+          <div class="help-tool-card">
+            <div class="help-tool-name">Duo Management</div>
+            <p>Connects to the Duo Admin API to manage users, devices, and enrollment across your clients. Access level varies by role — Service Delivery gets full access; TAM and Strategic see a client-focused view.</p>
+          </div>
+          <div class="help-tool-card">
+            <div class="help-tool-name">Project Profitability</div>
+            <p>Compares budgeted vs. actual hours for Autotask projects to calculate labor cost, revenue, and margin. Helps identify projects that are going over budget before they become a problem.</p>
+          </div>
+        </div>`
+    },
+    {
+      id: 'roles',
+      icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="6" cy="5" r="2.5" stroke="currentColor" stroke-width="1.3"/><path d="M1.5 13c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M11 7.5l1.5 1.5L15 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+      title: 'Roles &amp; Permissions',
+      body: `
+        <p class="help-intro">Anchor Hub uses Azure AD App Roles to control which tools each person can see. The sidebar is filtered automatically at sign-in — users only see the tools their role allows.</p>
+
+        <div class="help-api-block">
+          <div class="help-api-header">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 1l1.8 3.6L14 5.6l-3 2.9.7 4.1L8 10.5l-3.7 2.1.7-4.1-3-2.9 4.2-.9L8 1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+            How it works
+          </div>
+          <p style="margin:0 0 8px">When someone signs into Anchor Hub, their Azure AD App Roles are read from their login token. Those roles are matched against the <strong>Hub Role Matrix</strong> list in SharePoint to determine which tools they can see. Role changes take effect the next time the app is restarted.</p>
+          <p style="margin:0">Roles are assigned automatically based on job title via Azure AD Dynamic Groups — when someone's title changes in M365, their Hub role updates within a few minutes without any manual steps.</p>
+        </div>
+
+        <div class="help-api-block">
+          <div class="help-api-header">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h8M2 12h5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            Hub Roles — who has access to what
+          </div>
+          <table class="help-role-table">
+            <thead>
+              <tr>
+                <th>Role</th>
+                <th>Job titles</th>
+                <th>Tools</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>hub.admin</code></td>
+                <td>Directors</td>
+                <td>All tools</td>
+              </tr>
+              <tr>
+                <td><code>hub.manager</code></td>
+                <td>Managers of Service Delivery &amp; Professional Services</td>
+                <td>M365 Subscription Comparison, Project Time Summary, Duo Management, Project Profitability</td>
+              </tr>
+              <tr>
+                <td><code>hub.delivery</code></td>
+                <td>Service Desk Engineers &amp; Leads, Co-Managed Tech Lead, CTS, Cybersecurity Admin, Office Admin</td>
+                <td>Duo Management</td>
+              </tr>
+              <tr>
+                <td><code>hub.tam</code></td>
+                <td>Technical Account Manager</td>
+                <td>Duo Management</td>
+              </tr>
+              <tr>
+                <td><code>hub.strategic</code></td>
+                <td>Account Manager, Client Experience Manager, Technology Strategist</td>
+                <td>M365 Subscription Comparison, BlackPoint Usage, MSC Agreements, Duo Management</td>
+              </tr>
+              <tr>
+                <td><code>hub.projects</code></td>
+                <td>Technical Project Engineer, Project Engineer</td>
+                <td>Project Time Summary, Project Profitability</td>
+              </tr>
+              <tr>
+                <td><code>hub.finance</code></td>
+                <td>Accountant, Accounting Assistant</td>
+                <td>M365 Subscription Comparison, Pax8 Invoice Processor, M365 Margin Analyzer, Pax8 Invoice Comparison, Kaseya Invoice Processor, Autotask Contract Changes, Autotask Contract Renewals, BlackPoint Usage, MSC Agreements</td>
+              </tr>
+              <tr>
+                <td><code>hub.sales</code></td>
+                <td>Business Development</td>
+                <td>None currently assigned</td>
+              </tr>
+              <tr>
+                <td><code>hub.wsd</code></td>
+                <td>Workstation Deployment Specialist</td>
+                <td>None currently assigned</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="help-api-block">
+          <div class="help-api-header">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M5 8h6M8 5v6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            Update which roles can see a tool
+          </div>
+          <p style="margin:0 0 8px">The <strong>Hub Role Matrix</strong> SharePoint list controls tool access. Each row is one tool; each boolean column is a role. Toggling a column to <em>Yes</em> for a role grants that role access to the tool.</p>
+          <ol class="help-api-steps">
+            <li>Go to <strong>SharePoint Intranet → Lists → Hub Role Matrix</strong></li>
+            <li>Find the row for the tool you want to change (e.g. <em>BlackPoint Usage</em>)</li>
+            <li>Click the row to edit it</li>
+            <li>Toggle the role column (e.g. <em>RoleManager</em>) to <strong>Yes</strong> or <strong>No</strong></li>
+            <li>Save — the change takes effect the next time affected users restart the app</li>
+          </ol>
+          <p style="margin:8px 0 0;color:var(--text-muted);font-size:12px;">Column names: RoleAdmin, RoleManager, RoleDelivery, RoleTam, RoleStrategic, RoleProjects, RoleFinance, RoleSales, RoleWsd</p>
+        </div>
+
+        <div class="help-api-block">
+          <div class="help-api-header">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M5 8h6M8 5v6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            Add a new tool to the matrix
+          </div>
+          <p style="margin:0 0 8px">When a new tool is added to Anchor Hub, it won't appear for anyone until it's added to the Hub Role Matrix.</p>
+          <ol class="help-api-steps">
+            <li>Go to <strong>SharePoint Intranet → Lists → Hub Role Matrix</strong></li>
+            <li>Click <strong>+ New</strong></li>
+            <li>Set <strong>Title</strong> to the tool's display name (e.g. <em>New Tool Name</em>)</li>
+            <li>Set <strong>ToolKey</strong> to the exact key used in the app (this will be in the release notes for the new tool)</li>
+            <li>Toggle each role column to <strong>Yes</strong> for the roles that should see the tool</li>
+            <li>Save — users with matching roles will see the tool on their next restart</li>
+          </ol>
+        </div>
+
+        <div class="help-api-block">
+          <div class="help-api-header">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="6" cy="5" r="2.5" stroke="currentColor" stroke-width="1.3"/><path d="M1.5 13c0-2.5 2-4 4.5-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="12" cy="11" r="3" stroke="currentColor" stroke-width="1.3"/><path d="M11 11h2M12 10v2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            Grant one person access to a specific tool (overrides)
+          </div>
+          <p style="margin:0 0 8px">If someone needs access to a tool that isn't part of their role — without giving them a whole new role — use the <strong>Hub User Overrides</strong> SharePoint list. Each row grants one person access to one tool.</p>
+          <ol class="help-api-steps">
+            <li>Go to <strong>SharePoint Intranet → Lists → Hub User Overrides</strong></li>
+            <li>Click <strong>+ New</strong></li>
+            <li>Set <strong>Title</strong> to the person's M365 email address (e.g. <code>patm@anchornetworksolutions.com</code>)</li>
+            <li>Set <strong>ToolKey</strong> to the exact tool key (see the table below)</li>
+            <li>Save — the person will see the tool the next time they restart the app</li>
+          </ol>
+          <p style="margin:8px 0 4px">To grant multiple tools to the same person, add one row per tool. To remove access, delete the row.</p>
+          <p style="margin:8px 0 4px"><strong>Tool keys:</strong></p>
+          <table class="help-role-table">
+            <thead><tr><th>Tool key</th><th>Tool name</th></tr></thead>
+            <tbody>
+              <tr><td><code>subscription-audit</code></td><td>M365 Subscription Comparison</td></tr>
+              <tr><td><code>invoice-monitor</code></td><td>Pax8 Invoice Processor (AI)</td></tr>
+              <tr><td><code>margin-analyzer</code></td><td>M365 Margin Analyzer</td></tr>
+              <tr><td><code>company-mapping</code></td><td>Company Mapping</td></tr>
+              <tr><td><code>invoice-processor</code></td><td>Pax8 Invoice Comparison</td></tr>
+              <tr><td><code>kaseya-processor</code></td><td>Kaseya Invoice Processor</td></tr>
+              <tr><td><code>project-time-summary</code></td><td>Project Time Summary</td></tr>
+              <tr><td><code>contract-changes</code></td><td>Autotask Contract Changes</td></tr>
+              <tr><td><code>contract-renewals</code></td><td>Autotask Contract Renewals</td></tr>
+              <tr><td><code>blackpoint-processor</code></td><td>BlackPoint Usage</td></tr>
+              <tr><td><code>msc-agreements</code></td><td>MSC Agreements</td></tr>
+              <tr><td><code>duo-management</code></td><td>Duo Management</td></tr>
+              <tr><td><code>project-profitability</code></td><td>Project Profitability</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="help-api-block">
+          <div class="help-api-header">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3"/><path d="M8 5v3.5l2 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            When do changes take effect?
+          </div>
+          <p style="margin:0">All permission changes — whether to the Hub Role Matrix, Hub User Overrides, or Azure AD role assignments — take effect the next time the user <strong>restarts Anchor Hub</strong>. Role data is cached for the session to keep the app fast.</p>
         </div>`
     },
     {
