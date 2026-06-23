@@ -1,8 +1,8 @@
 const { app, shell } = require('electron');
 const path = require('path');
 const fetch = require('node-fetch');
-const keytar = require('keytar');
-const { SERVICE_NAME, getMainWindow } = require('../shared/state');
+const { getMainWindow } = require('../shared/state');
+const { kvGetSecret } = require('../shared/kv');
 const { getPax8Token, pax8Paginate } = require('../shared/pax8');
 
 const PARTIAL_RE = /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+Partial:/i;
@@ -28,20 +28,19 @@ async function pax8FetchInvoiceItems(token, invoiceId) {
 }
 
 async function callClaude(apiKey, prompt) {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const res = await fetch('https://ai.hatz.ai/v1/anthropic/messages', {
     method: 'POST',
     headers: {
       'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
       'content-type': 'application/json'
     },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'anthropic.claude-haiku-4-5',
       max_tokens: 600,
       messages: [{ role: 'user', content: prompt }]
     })
   });
-  if (!res.ok) throw new Error(`Claude API ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw new Error(`Hatz AI ${res.status}: ${await res.text()}`);
   const data = await res.json();
   return data.content?.[0]?.text?.trim() || '';
 }
@@ -171,8 +170,8 @@ module.exports = function registerInvoiceMonitor(ipcMain) {
     const results = { analyzed: 0, anomalies: [], clean: 0, errors: [], invoiceId: null, invoiceDate: null, invoiceTotal: null, aiSummary: null };
 
     try {
-      const claudeKey = await keytar.getPassword(SERVICE_NAME, 'claude_api_key');
-      if (!claudeKey) throw new Error('Claude API key not configured. Please add it in Settings.');
+      const claudeKey = await kvGetSecret('hatz-api-key');
+      if (!claudeKey) throw new Error('Hatz AI key not found in Key Vault (secret: hatz-api-key).');
 
       send('Authenticating with Pax8...');
       const token = await getPax8Token();

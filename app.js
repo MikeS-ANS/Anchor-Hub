@@ -829,7 +829,7 @@ function renderInvoiceResults(results, container) {
       <div class="metric-card m-clean"><span class="metric-num">${results.clean}</span><span class="metric-label">Unchanged</span></div>
       <div class="metric-card m-orange"><span class="metric-num" style="font-size:18px">${totalFmt}</span><span class="metric-label">Total Amount</span></div>
     </div>
-    <div class="ai-summary"><div class="ai-summary-label">AI Summary</div><p class="ai-summary-text">${results.aiSummary ? escHtml(results.aiSummary) : '<em style="opacity:0.5">AI analysis did not return a result for this run. Check that your Claude API key is set in Settings.</em>'}</p></div>
+    <div class="ai-summary"><div class="ai-summary-label">AI Summary</div><p class="ai-summary-text">${results.aiSummary ? escHtml(results.aiSummary) : '<em style="opacity:0.5">AI analysis did not return a result for this run.</em>'}</p></div>
     <div id="finding-cards"></div>
   `;
 
@@ -1564,25 +1564,7 @@ Total CommITment Core</textarea>
         </div>
       </div>
 
-      <div class="settings-section">
-        <h2 class="section-title">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-          Claude (Anthropic)
-        </h2>
-        <div class="field-group">
-          <label class="field-label">API Key</label>
-          <input class="field-input" id="claude-api-key" type="password" placeholder="sk-ant-..." autocomplete="off" />
-          <p class="field-hint">Used for Pax8 Invoice Comparison AI analysis. Get your key at console.anthropic.com.</p>
-        </div>
-      </div>
 
-      <div class="settings-section">
-        <h2 class="section-title">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1.5L2 4.5v4c0 3.3 2.4 5.5 6 6 3.6-.5 6-2.7 6-6v-4L8 1.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 8l1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          BlackPoint / CompassOne
-        </h2>
-        <p class="field-hint" style="margin-top:6px">API key is managed centrally in Azure Key Vault (<code>BLACKPOINT-API-KEY</code>). No configuration needed here.</p>
-      </div>
 
       <div class="settings-actions">
         <button class="btn btn-primary" id="btn-save-creds">Save Credentials</button>
@@ -1988,7 +1970,6 @@ const CRED_MAP = {
   'at-api-key':          'autotask_api_key',
   'at-integration-code': 'autotask_integration_code',
   'at-url':              'autotask_url',
-  'claude-api-key':      'claude_api_key',
 };
 
 async function loadCredentials() {
@@ -6333,8 +6314,8 @@ function renderHelp() {
           <li>
             <span class="help-step-num">6</span>
             <div>
-              <strong>(Optional) Add your Claude API key</strong>
-              <p>Required only for the AI analysis feature in Pax8 Invoice Comparison. Add it under Settings → API &amp; Accounts → Claude.</p>
+              <strong>(Optional) Configure AI analysis</strong>
+              <p>AI-powered analysis in Pax8 Invoice Comparison uses Hatz.ai. The key is managed in Azure Key Vault — no action needed unless you're setting up a new vault.</p>
             </div>
           </li>
         </ol>`
