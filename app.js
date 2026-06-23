@@ -491,6 +491,17 @@ function renderHome() {
           <div id="start-tickets-body"><div class="start-widget-loading">Loading…</div></div>
         </div>
       </div>
+
+      <div class="start-footer">
+        <span id="start-version" class="start-version-text"></span>
+        <button class="btn btn-ghost btn-xs start-update-btn" id="start-check-updates">
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+            <path d="M13 7A6 6 0 1 1 7 1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            <path d="M9 1h4v4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Check for updates
+        </button>
+      </div>
     </div>`;
 
   // Load all data in parallel
@@ -498,6 +509,35 @@ function renderHome() {
   _loadQuickLinks();
   _loadCalendar();
   _loadTickets();
+
+  // Version + update check
+  if (window.api.getAppVersion) {
+    window.api.getAppVersion().then(v => {
+      const el = document.getElementById('start-version');
+      if (el && v) el.textContent = `Anchor Hub v${v}`;
+    });
+  }
+  const updateBtn = document.getElementById('start-check-updates');
+  if (updateBtn) {
+    updateBtn.addEventListener('click', async () => {
+      updateBtn.disabled = true;
+      const origHtml = updateBtn.innerHTML;
+      updateBtn.textContent = 'Checking…';
+      try {
+        const res = await window.api.checkForUpdates();
+        if (res.checked) {
+          updateBtn.textContent = res.updateAvailable ? '⬇ Update available!' : '✓ Up to date';
+        } else {
+          updateBtn.textContent = res.reason === 'dev' ? '(dev build)' : `Error: ${res.reason}`;
+        }
+      } catch {
+        updateBtn.textContent = 'Check failed';
+      }
+      setTimeout(() => {
+        if (updateBtn) { updateBtn.disabled = false; updateBtn.innerHTML = origHtml; }
+      }, 4000);
+    });
+  }
 
   // Add link form toggle
   document.getElementById('start-add-link-btn').addEventListener('click', () => {
@@ -645,9 +685,9 @@ async function _loadTickets() {
   try {
     const result = await window.api.homeGetAtTickets(_currentUser?.email || '');
     if (result?.error) {
-      el.innerHTML = result.error.includes('credentials')
+      el.innerHTML = (result.error.includes('credentials') || result.error.includes('not configured'))
         ? `<div class="start-widget-empty">Configure Autotask in <a href="#" class="start-link-inline" onclick="navigate('settings');return false">Settings</a>.</div>`
-        : `<div class="start-widget-empty">Autotask unavailable.</div>`;
+        : `<div class="start-widget-empty">Autotask unavailable.<br><span style="font-size:11px;opacity:0.6">${escHtml(result.error)}</span></div>`;
       return;
     }
     const priColor = p => p <= 1 ? 'var(--error)' : p === 2 ? 'var(--warn)' : 'var(--success)';
@@ -688,10 +728,7 @@ async function _loadTickets() {
 async function renderTools() {
   content.innerHTML = `<div style="padding:32px;color:var(--text-muted);font-size:13px">Loading…</div>`;
 
-  const [vis, version] = await Promise.all([
-    window.api.getToolVisibility(),
-    window.api.getAppVersion ? window.api.getAppVersion() : Promise.resolve(''),
-  ]);
+  const vis = await window.api.getToolVisibility();
 
   const visibleCards = HOME_CARDS.filter(c => vis[c.key] !== false);
 
@@ -717,19 +754,6 @@ async function renderTools() {
 
   content.innerHTML = `
     <div class="home-wrap">
-      <div class="home-header">
-        <div class="home-title-block">
-          <div class="home-app-name">Anchor Hub</div>
-          ${version ? `<div class="home-version">v${version}</div>` : ''}
-        </div>
-        <button class="btn btn-ghost btn-sm home-update-btn" id="home-check-updates">
-          <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-            <path d="M13 7A6 6 0 1 1 7 1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-            <path d="M9 1h4v4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          Check for Updates
-        </button>
-      </div>
       ${visibleCards.length === 0
         ? `<div class="home-empty">All tools are hidden. <a href="#" id="home-go-settings" style="color:var(--accent)">Open Settings</a> to enable some.</div>`
         : `<div class="home-grid">${cardHtml}</div>`}
@@ -741,29 +765,6 @@ async function renderTools() {
     card.addEventListener('click', go);
     card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') go(); });
   });
-
-  // Manual update check
-  const updateBtn = document.getElementById('home-check-updates');
-  if (updateBtn) {
-    updateBtn.addEventListener('click', async () => {
-      updateBtn.disabled = true;
-      const origHtml = updateBtn.innerHTML;
-      updateBtn.textContent = 'Checking…';
-      try {
-        const res = await window.api.checkForUpdates();
-        if (res.checked) {
-          updateBtn.textContent = res.updateAvailable ? '⬇ Update available!' : '✓ Up to date';
-        } else {
-          updateBtn.textContent = res.reason === 'dev' ? '(dev build)' : `Error: ${res.reason}`;
-        }
-      } catch (e) {
-        updateBtn.textContent = 'Check failed';
-      }
-      setTimeout(() => {
-        if (updateBtn) { updateBtn.disabled = false; updateBtn.innerHTML = origHtml; }
-      }, 4000);
-    });
-  }
 
   const goSettings = document.getElementById('home-go-settings');
   if (goSettings) goSettings.addEventListener('click', e => { e.preventDefault(); navigate('settings'); });

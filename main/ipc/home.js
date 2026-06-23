@@ -138,13 +138,15 @@ module.exports = function registerHome(ipcMain) {
       if (!email) return { error: 'no_email' };
 
       // Look up this user's AT resource ID once per session
+      // AT stores login email in the 'userName' field on the Resources entity
       if (!_atResourceId) {
         const res = await atFetch('/Resources/query', {
           method: 'POST',
-          body: JSON.stringify({ filter: [{ op: 'eq', field: 'emailAddress', value: email }] }),
+          body: JSON.stringify({ filter: [{ op: 'eq', field: 'userName', value: email }] }),
         });
         const resource = (res.items || [])[0];
         if (resource) _atResourceId = resource.id;
+        console.log('[home] AT resource lookup for', email, '→ id:', resource?.id ?? 'not found');
       }
 
       const [assignedRes, totalRes] = await Promise.all([
@@ -164,13 +166,13 @@ module.exports = function registerHome(ipcMain) {
           method: 'POST',
           body: JSON.stringify({
             filter: [{ op: 'noteq', field: 'status', value: 5 }],
-            MaxRecords: 500,
+            MaxRecords: 1,
           }),
-        }).catch(() => ({ items: [] })),
+        }).catch(() => ({ items: [], pageDetails: null })),
       ]);
 
-      const assigned   = assignedRes.items  || [];
-      const totalOpen  = (totalRes.pageDetails?.count) ?? (totalRes.items || []).length;
+      const assigned  = assignedRes.items || [];
+      const totalOpen = (totalRes.pageDetails?.count) ?? (totalRes.items || []).length;
 
       // Fetch company names for top 5 assigned tickets
       const top5 = assigned.slice(0, 5);

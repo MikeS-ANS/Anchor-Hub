@@ -34,11 +34,18 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   -webkit-app-region: drag;
   flex-shrink: 0;
   user-select: none;
+  position: relative;
 }
 .titlebar-drag { display: flex; align-items: center; flex: 1; }
 .app-brand { display: flex; align-items: center; gap: 8px; }
 .app-name { font-weight: 700; font-size: 13px; letter-spacing: 0.02em; color: var(--text); }
 .titlebar-controls { display: flex; -webkit-app-region: no-drag; }
+.titlebar-app-name {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  font-size: 12px; font-weight: 600; letter-spacing: 0.04em;
+  color: var(--text-muted); pointer-events: none; user-select: none;
+  font-family: var(--font-sans);
+}
 
 .win-btn {
   width: 46px; height: 38px;
@@ -1565,7 +1572,13 @@ code.ph {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-bottom: 4px;
+  padding: 22px 32px;
+  margin: -28px -32px 0;
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--accent) 18%, var(--surface-1)) 0%,
+    color-mix(in srgb, var(--accent) 6%, var(--surface-1)) 50%,
+    var(--surface-1) 100%);
+  border-bottom: 1px solid var(--border);
 }
 .start-greeting-left {
   display: flex;
@@ -1748,4 +1761,17 @@ code.ph {
   align-items: center; gap: 4px; font-size: 12px;
 }
 .start-link-inline:hover { text-decoration: underline; }
+/* Footer */
+.start-footer {
+  display: flex; align-items: center; justify-content: flex-end; gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.start-version-text {
+  font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);
+}
+.start-update-btn {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 11px;
+}
 
