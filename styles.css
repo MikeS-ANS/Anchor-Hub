@@ -1,25 +1,27 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:          #0B111D;
-  --surface:     #151922;
-  --surface-1:   #131B2A;
-  --surface-2:   #1a2236;
-  --surface-3:   #20283600;
-  --border:      rgba(38, 50, 68, 0.65);
-  --border-2:    rgba(38, 50, 68, 0.90);
-  --accent:      #C27637;
-  --accent-dim:  #C2763722;
-  --accent-blue: #3B82A0;
-  --text:        #E5E7EB;
-  --text-muted:  #9CA3AF;
-  --text-dim:    #9CA3AF;
-  --success:     #34d399;
-  --warn:        #fbbf24;
-  --error:       #f87171;
-  --radius:      8px;
-  --font-sans:   'Syne', system-ui, sans-serif;
-  --font-mono:   'DM Mono', 'Consolas', monospace;
+  --bg:               #0B111D;
+  --surface:          #151922;
+  --surface-1:        #131B2A;
+  --surface-2:        #1a2236;
+  --surface-3:        #20283600;
+  --border:           rgba(148, 163, 184, 0.14);
+  --border-2:         rgba(148, 163, 184, 0.22);
+  --accent:           #C27637;
+  --accent-dim:       rgba(194, 118, 55, 0.18);
+  --accent-orange-soft: rgba(194, 118, 55, 0.18);
+  --accent-blue:      #3B82A0;
+  --accent-blue-soft: rgba(59, 130, 160, 0.20);
+  --text:             #E5E7EB;
+  --text-muted:       #9CA3AF;
+  --text-dim:         #9CA3AF;
+  --success:          #34d399;
+  --warn:             #fbbf24;
+  --error:            #f87171;
+  --radius:           8px;
+  --font-sans:        'Syne', system-ui, sans-serif;
+  --font-mono:        'DM Mono', 'Consolas', monospace;
 }
 
 html, body {
@@ -119,8 +121,8 @@ html, body {
 /* ─── Sidebar ──────────────────────────────────────────────────────────────── */
 .sidebar {
   width: 200px;
-  background: var(--surface);
-  border-right: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(21, 25, 34, 0.99), rgba(10, 16, 28, 0.99));
+  border-right: 1px solid rgba(148, 163, 184, 0.12);
   display: flex; flex-direction: column;
   padding: 16px 0 12px;
   flex-shrink: 0;
@@ -141,9 +143,10 @@ html, body {
   color: var(--text-dim); font-size: 13px; font-weight: 400;
   position: relative;
 }
-.nav-item:hover:not(.coming-soon) { background: var(--surface-2); color: var(--text); }
+.nav-item:hover:not(.coming-soon) { background: rgba(59, 130, 160, 0.08); color: var(--text); }
 .nav-item.active {
-  background: var(--accent-dim); color: var(--accent);
+  background: linear-gradient(90deg, rgba(194, 118, 55, 0.22), rgba(59, 130, 160, 0.08));
+  color: var(--accent);
   font-weight: 600;
 }
 .nav-item.active::before {
@@ -233,10 +236,42 @@ html, body {
 /* ─── Content area ─────────────────────────────────────────────────────────── */
 .content {
   flex: 1; overflow-y: auto; padding: 28px 32px;
+  position: relative;
   background:
-    linear-gradient(180deg, rgba(17, 24, 39, 0.55) 0%, transparent 50%),
-    radial-gradient(circle at 75% 15%, rgba(59, 130, 160, 0.10), transparent 40%);
+    radial-gradient(circle at 8% 95%, rgba(194, 118, 55, 0.18), transparent 32%),
+    radial-gradient(circle at 88% 8%, rgba(59, 130, 160, 0.20), transparent 34%),
+    linear-gradient(180deg, #101827 0%, #0B111D 48%, #070B12 100%);
 }
+/* Faint grid texture — fades in toward top-right where the blue glow is */
+.content::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.09;
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.14) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.14) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: radial-gradient(circle at 80% 15%, black, transparent 55%);
+}
+/* Oversized anchor watermark — barely visible, upper-right */
+.content::after {
+  content: "⚓";
+  position: absolute;
+  top: 24px;
+  right: 56px;
+  font-size: 180px;
+  line-height: 1;
+  color: rgba(148, 163, 184, 0.055);
+  pointer-events: none;
+  z-index: 0;
+  transform: rotate(-4deg);
+  user-select: none;
+}
+/* Keep all real content above the pseudo-element layers */
+.content > * { position: relative; z-index: 1; }
 
 .view-header { margin-bottom: 24px; }
 .view-title { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 6px; }
@@ -1627,9 +1662,10 @@ code.ph {
 /* Announcement banner */
 .start-announce {
   display: flex; align-items: flex-start; gap: 12px;
-  background: color-mix(in srgb, #f59e0b 12%, transparent);
-  border: 1px solid color-mix(in srgb, #f59e0b 40%, transparent);
-  border-radius: 8px; padding: 12px 14px;
+  background: linear-gradient(90deg, rgba(194, 118, 55, 0.16), rgba(19, 27, 42, 0.86));
+  border: 1px solid rgba(194, 118, 55, 0.42);
+  border-radius: 10px; padding: 12px 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.20);
   color: var(--text);
 }
 .start-announce svg { flex-shrink: 0; margin-top: 2px; color: #f59e0b; }
