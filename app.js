@@ -226,6 +226,7 @@ function navigate(view) {
   if (mappingLogUnsubscribe) { mappingLogUnsubscribe(); mappingLogUnsubscribe = null; }
 
   if (view === 'home') renderHome();
+  else if (view === 'tools') renderTools();
   else if (view === 'subscription-audit')  renderSubscriptionAudit();
   else if (view === 'invoice-monitor')     renderInvoiceMonitor();
   else if (view === 'margin-analyzer')     renderMarginAnalyzer();
@@ -428,7 +429,263 @@ const HOME_CARDS = [
   },
 ];
 
-async function renderHome() {
+// ─── Start Page ───────────────────────────────────────────────────────────────
+function renderHome() {
+  const u     = _currentUser || {};
+  const first = (u.name || 'there').split(' ')[0];
+  const h     = new Date().getHours();
+  const greet = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+  const initials = (u.name || '?').split(' ').map(p => p[0]).join('').slice(0, 2).toUpperCase();
+  const avatar = u.photo
+    ? `<img src="${u.photo}" class="start-avatar" />`
+    : `<div class="start-avatar start-avatar-init">${escHtml(initials)}</div>`;
+  const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+
+  content.innerHTML = `
+    <div class="start-wrap">
+      <div class="start-greeting-bar">
+        <div class="start-greeting-left">
+          ${avatar}
+          <div>
+            <div class="start-greeting">${escHtml(greet)}, ${escHtml(first)}</div>
+            <div class="start-date">${escHtml(dateStr)}</div>
+          </div>
+        </div>
+      </div>
+
+      <div id="start-announce" style="display:none"></div>
+
+      <div class="start-section">
+        <div class="start-section-header">
+          <span class="start-section-title">Quick links</span>
+          <button class="start-add-btn" id="start-add-link-btn">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            Add link
+          </button>
+        </div>
+        <div id="start-links-row" class="start-links">
+          <div class="start-link-loading">Loading…</div>
+        </div>
+        <div id="start-add-link-form" class="start-add-form" style="display:none">
+          <input id="sal-title" class="start-input" placeholder="Label" style="width:120px" />
+          <input id="sal-url"   class="start-input" placeholder="https://…" style="flex:1;min-width:180px" />
+          <input id="sal-icon"  class="start-input" placeholder="🔗" style="width:52px;text-align:center" />
+          <button class="btn btn-sm btn-primary" id="sal-save">Add</button>
+          <button class="btn btn-sm btn-ghost" id="sal-cancel">Cancel</button>
+        </div>
+      </div>
+
+      <div class="start-widgets">
+        <div class="start-widget">
+          <div class="start-widget-title">
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><rect x="1" y="2" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M1 5h12M4 1v2M10 1v2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            Today's calendar
+          </div>
+          <div id="start-cal-body"><div class="start-widget-loading">Loading…</div></div>
+        </div>
+        <div class="start-widget">
+          <div class="start-widget-title">
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M2 2h10a1 1 0 011 1v8a1 1 0 01-1 1H2a1 1 0 01-1-1V3a1 1 0 011-1z" stroke="currentColor" stroke-width="1.3"/><path d="M4 5h6M4 7.5h4M4 10h2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            Autotask tickets
+          </div>
+          <div id="start-tickets-body"><div class="start-widget-loading">Loading…</div></div>
+        </div>
+      </div>
+    </div>`;
+
+  // Load all data in parallel
+  _loadAnnouncements();
+  _loadQuickLinks();
+  _loadCalendar();
+  _loadTickets();
+
+  // Add link form toggle
+  document.getElementById('start-add-link-btn').addEventListener('click', () => {
+    document.getElementById('start-add-link-form').style.display = 'flex';
+    document.getElementById('start-add-link-btn').style.display  = 'none';
+    document.getElementById('sal-title').focus();
+  });
+  document.getElementById('sal-cancel').addEventListener('click', _hideAddForm);
+  document.getElementById('sal-save').addEventListener('click', _savePersonalLink);
+  document.getElementById('sal-url').addEventListener('keydown', e => { if (e.key === 'Enter') _savePersonalLink(); });
+}
+
+function _hideAddForm() {
+  const form = document.getElementById('start-add-link-form');
+  const btn  = document.getElementById('start-add-link-btn');
+  if (form) form.style.display = 'none';
+  if (btn)  btn.style.display  = '';
+  ['sal-title','sal-url','sal-icon'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+}
+
+function _savePersonalLink() {
+  const title = (document.getElementById('sal-title')?.value || '').trim();
+  const url   = (document.getElementById('sal-url')?.value   || '').trim();
+  const icon  = (document.getElementById('sal-icon')?.value  || '').trim() || '🔗';
+  if (!title || !url) return;
+  try {
+    const links = JSON.parse(localStorage.getItem('hub_personal_links') || '[]');
+    links.push({ title, url, icon, personal: true });
+    localStorage.setItem('hub_personal_links', JSON.stringify(links));
+  } catch {}
+  _hideAddForm();
+  _loadQuickLinks();
+}
+
+function _removePersonalLink(idx) {
+  try {
+    const links = JSON.parse(localStorage.getItem('hub_personal_links') || '[]');
+    links.splice(idx, 1);
+    localStorage.setItem('hub_personal_links', JSON.stringify(links));
+  } catch {}
+  _loadQuickLinks();
+}
+
+async function _loadAnnouncements() {
+  try {
+    const items = await window.api.homeGetAnnouncements();
+    const el = document.getElementById('start-announce');
+    if (!el || !items.length) return;
+    const item = items[0];
+    const key  = `announce_dismissed_${item.title}`;
+    if (sessionStorage.getItem(key)) return;
+    el.innerHTML = `
+      <div class="start-announce">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 10.5L7 1l6 9.5H1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M7 5.5v2M7 9.5v.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        <div class="start-announce-body">
+          <div class="start-announce-title">${escHtml(item.title)}</div>
+          ${item.message ? `<div class="start-announce-msg">${escHtml(item.message)}</div>` : ''}
+        </div>
+        <button class="start-announce-close" aria-label="Dismiss">
+          <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M1 1l9 9M10 1l-9 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        </button>
+      </div>`;
+    el.style.display = '';
+    el.querySelector('.start-announce-close').addEventListener('click', () => {
+      sessionStorage.setItem(key, '1');
+      el.style.display = 'none';
+    });
+  } catch {}
+}
+
+async function _loadQuickLinks() {
+  const row = document.getElementById('start-links-row');
+  if (!row) return;
+  try {
+    const [adminLinks, personalLinks] = await Promise.all([
+      window.api.homeGetQuickLinks().catch(() => []),
+      Promise.resolve(JSON.parse(localStorage.getItem('hub_personal_links') || '[]')),
+    ]);
+    const all = [...adminLinks, ...personalLinks.map((l, i) => ({ ...l, _personalIdx: i }))];
+    if (!all.length) {
+      row.innerHTML = `<div class="start-links-empty">No quick links yet — add one with the button above.</div>`;
+      return;
+    }
+    row.innerHTML = all.map(l => `
+      <div class="start-link-tile" data-url="${escHtml(l.url)}" tabindex="0" role="button" aria-label="Open ${escHtml(l.title)}">
+        <div class="start-link-icon">${escHtml(l.icon || '🔗')}</div>
+        <div class="start-link-label">${escHtml(l.title)}</div>
+        ${l._personalIdx !== undefined
+          ? `<button class="start-link-remove" data-pidx="${l._personalIdx}" aria-label="Remove ${escHtml(l.title)}">×</button>`
+          : ''}
+      </div>`).join('');
+    row.querySelectorAll('.start-link-tile').forEach(tile => {
+      const go = () => window.api.homeOpenUrl(tile.dataset.url);
+      tile.addEventListener('click', e => { if (!e.target.closest('.start-link-remove')) go(); });
+      tile.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') go(); });
+    });
+    row.querySelectorAll('.start-link-remove').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        _removePersonalLink(parseInt(btn.dataset.pidx));
+      });
+    });
+  } catch (e) {
+    if (row) row.innerHTML = `<div class="start-links-empty">Could not load links.</div>`;
+  }
+}
+
+async function _loadCalendar() {
+  const el = document.getElementById('start-cal-body');
+  if (!el) return;
+  try {
+    const result = await window.api.homeGetCalendar();
+    if (!Array.isArray(result)) {
+      el.innerHTML = result?.error === 'no_token'
+        ? `<div class="start-widget-empty">Sign out and back in to connect your calendar.</div>`
+        : `<div class="start-widget-empty">Calendar unavailable.</div>`;
+      return;
+    }
+    if (!result.length) {
+      el.innerHTML = `<div class="start-widget-empty">No meetings today.</div>`;
+      return;
+    }
+    const fmtTime = dt => {
+      if (!dt) return '';
+      const d = new Date(dt);
+      return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }).replace(' ', '').toLowerCase();
+    };
+    el.innerHTML = result.slice(0, 6).map(e => `
+      <div class="start-cal-event">
+        <div class="start-cal-time">${e.isAllDay ? 'all day' : fmtTime(e.startDt)}</div>
+        <div class="start-cal-dot"></div>
+        <div class="start-cal-info">
+          <div class="start-cal-subject">${escHtml(e.subject)}</div>
+          ${e.location ? `<div class="start-cal-loc">${escHtml(e.location)}</div>` : ''}
+        </div>
+      </div>`).join('');
+  } catch {
+    if (el) el.innerHTML = `<div class="start-widget-empty">Calendar unavailable.</div>`;
+  }
+}
+
+async function _loadTickets() {
+  const el = document.getElementById('start-tickets-body');
+  if (!el) return;
+  try {
+    const result = await window.api.homeGetAtTickets(_currentUser?.email || '');
+    if (result?.error) {
+      el.innerHTML = result.error.includes('credentials')
+        ? `<div class="start-widget-empty">Configure Autotask in <a href="#" class="start-link-inline" onclick="navigate('settings');return false">Settings</a>.</div>`
+        : `<div class="start-widget-empty">Autotask unavailable.</div>`;
+      return;
+    }
+    const priColor = p => p <= 1 ? 'var(--error)' : p === 2 ? 'var(--warn)' : 'var(--success)';
+    const priLabel = p => p <= 1 ? 'Critical' : p === 2 ? 'High' : p === 3 ? 'Medium' : 'Low';
+    const atUrl = 'https://www.autotask.net/';
+    el.innerHTML = `
+      <div class="start-ticket-stats">
+        <div class="start-ticket-stat">
+          <span class="start-ticket-label">Assigned to me</span>
+          <span class="start-ticket-count">${result.assignedCount}</span>
+        </div>
+        <div class="start-ticket-stat">
+          <span class="start-ticket-label">Total open</span>
+          <span class="start-ticket-count${result.totalOpen > 20 ? ' start-ticket-warn' : ''}">${result.totalOpen}</span>
+        </div>
+      </div>
+      ${result.tickets.length ? `
+        <div class="start-ticket-list">
+          ${result.tickets.map(t => `
+            <div class="start-ticket-row">
+              <span class="start-pri-dot" style="background:${priColor(t.priority)}" title="${priLabel(t.priority)}"></span>
+              <span class="start-ticket-name" title="${escHtml(t.title)}">${escHtml(t.title)}</span>
+            </div>`).join('')}
+        </div>` : ''}
+      <div class="start-open-at">
+        <a href="#" class="start-link-inline" id="start-open-at-link">Open Autotask
+          <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 10L10 2M10 2H5M10 2v5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+      </div>`;
+    const atLink = document.getElementById('start-open-at-link');
+    if (atLink) atLink.addEventListener('click', e => { e.preventDefault(); window.api.homeOpenUrl(atUrl); });
+  } catch {
+    if (el) el.innerHTML = `<div class="start-widget-empty">Autotask unavailable.</div>`;
+  }
+}
+
+// ─── Tools (formerly Home) ────────────────────────────────────────────────────
+async function renderTools() {
   content.innerHTML = `<div style="padding:32px;color:var(--text-muted);font-size:13px">Loading…</div>`;
 
   const [vis, version] = await Promise.all([

@@ -160,3 +160,6 @@ require('./main/ipc/projectTimeSummary')(ipcMain);
 
 // ── Project Profitability ───────────────────────────────────────────────────
 require('./main/ipc/projectProfitability')(ipcMain);
+
+// ── Home Screen ─────────────────────────────────────────────────────────────
+require('./main/ipc/home')(ipcMain);

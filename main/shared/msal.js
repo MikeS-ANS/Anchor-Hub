@@ -6,7 +6,7 @@ const fs                          = require('fs');
 const MSAL_CACHE_FILE = path.join(app.getPath('userData'), 'anchor-msal-cache.json');
 const MSAL_CLIENT_ID  = '77dedc7f-7fe0-4814-b243-1a0ed8a5bb7e';
 const MSAL_TENANT_ID  = '56946bea-f25a-4d9c-ab2e-0cc6945e4daa';
-const MSAL_SCOPES     = ['openid', 'profile', 'email', 'User.Read', 'Files.ReadWrite.All'];
+const MSAL_SCOPES     = ['openid', 'profile', 'email', 'User.Read', 'Files.ReadWrite.All', 'Calendars.Read'];
 
 const msalCachePlugin = {
   beforeCacheAccess: async (ctx) => {

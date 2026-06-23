@@ -107,7 +107,11 @@ async function createList(token, siteId, displayName) {
 }
 
 async function addColumn(token, siteId, listId, name, type = 'boolean') {
-  const body = type === 'text' ? { name, text: {} } : { name, boolean: {} };
+  let body;
+  if (type === 'text')     body = { name, text: {} };
+  else if (type === 'number') body = { name, number: {} };
+  else if (type === 'dateTime') body = { name, dateTime: {} };
+  else                     body = { name, boolean: {} };
   await gFetch(token, `/sites/${siteId}/lists/${listId}/columns`, {
     method: 'POST',
     body: JSON.stringify(body),
@@ -186,6 +190,45 @@ async function listExists(token, siteId, displayName) {
       const overridesListId = await createList(token, siteId, 'Hub User Overrides');
       await addColumn(token, siteId, overridesListId, 'ToolKey', 'text');
       console.log('✓ Hub User Overrides created (empty — add rows to grant per-user tool access)\n');
+    }
+
+    // ── Hub Announcements ────────────────────────────────────────────────────
+    const existingAnnounce = await listExists(token, siteId, 'Hub Announcements');
+    if (existingAnnounce) {
+      console.log(`  Hub Announcements already exists — skipping creation`);
+    } else {
+      const announceListId = await createList(token, siteId, 'Hub Announcements');
+      await addColumn(token, siteId, announceListId, 'Message',   'text');
+      await addColumn(token, siteId, announceListId, 'StartsAt',  'dateTime');
+      await addColumn(token, siteId, announceListId, 'ExpiresAt', 'dateTime');
+      await addColumn(token, siteId, announceListId, 'IsActive',  'boolean');
+      console.log('✓ Hub Announcements created\n');
+      console.log('  Columns: Title (subject), Message (body text), StartsAt, ExpiresAt, IsActive\n');
+    }
+
+    // ── Hub Quick Links ──────────────────────────────────────────────────────
+    const existingLinks = await listExists(token, siteId, 'Hub Quick Links');
+    if (existingLinks) {
+      console.log(`  Hub Quick Links already exists — skipping creation`);
+    } else {
+      const linksListId = await createList(token, siteId, 'Hub Quick Links');
+      await addColumn(token, siteId, linksListId, 'URL',       'text');
+      await addColumn(token, siteId, linksListId, 'Icon',      'text');
+      await addColumn(token, siteId, linksListId, 'SortOrder', 'number');
+      // Seed 5 starter links
+      const SEED_LINKS = [
+        { Title: 'Autotask',       URL: 'https://www.autotask.net/',                              Icon: '🎫', SortOrder: 1 },
+        { Title: 'IT Glue',        URL: 'https://app.itglue.com/',                                Icon: '📓', SortOrder: 2 },
+        { Title: 'Datto RMM',      URL: 'https://portal.centrastage.net/',                        Icon: '🖥️',  SortOrder: 3 },
+        { Title: 'M365 Admin',     URL: 'https://admin.microsoft.com/',                           Icon: '☁️',  SortOrder: 4 },
+        { Title: 'Pax8',           URL: 'https://app.pax8.com/',                                  Icon: '📦', SortOrder: 5 },
+      ];
+      console.log('  Seeding starter quick links...');
+      for (const link of SEED_LINKS) {
+        await addItem(token, siteId, linksListId, link);
+        process.stdout.write('.');
+      }
+      console.log(`\n✓ Hub Quick Links created with ${SEED_LINKS.length} starter links\n`);
     }
 
     console.log('Setup complete.');

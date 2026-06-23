@@ -176,6 +176,13 @@ contextBridge.exposeInMainWorld('api', {
   dattoListSiteServers: (opts) => ipcRenderer.invoke('datto-list-site-servers', opts),
   dattoRunDuoQuickjob:  (opts) => ipcRenderer.invoke('datto-run-duo-quickjob', opts),
 
+  // Home screen
+  homeOpenUrl:         (url)  => ipcRenderer.invoke('home-open-url', url),
+  homeGetAnnouncements: ()    => ipcRenderer.invoke('home-get-announcements'),
+  homeGetQuickLinks:   ()     => ipcRenderer.invoke('home-get-quick-links'),
+  homeGetCalendar:     ()     => ipcRenderer.invoke('home-get-calendar'),
+  homeGetAtTickets:    (email) => ipcRenderer.invoke('home-get-at-tickets', email),
+
   // Auto-updater
   restartAndInstall:  ()    => ipcRenderer.send('restart-and-install'),
   checkForUpdates:    ()    => ipcRenderer.invoke('check-for-updates'),
