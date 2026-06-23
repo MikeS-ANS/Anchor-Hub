@@ -25,7 +25,11 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 /* ─── Titlebar ─────────────────────────────────────────────────────────────── */
 .titlebar {
   height: 38px;
-  background: var(--surface);
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--accent) 10%, var(--surface)) 0%,
+    var(--surface) 40%,
+    var(--surface) 100%);
+  border-top: 2px solid var(--accent);
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -42,8 +46,10 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .titlebar-controls { display: flex; -webkit-app-region: no-drag; }
 .titlebar-app-name {
   position: absolute; left: 50%; transform: translateX(-50%);
-  font-size: 12px; font-weight: 600; letter-spacing: 0.04em;
-  color: var(--text-muted); pointer-events: none; user-select: none;
+  font-size: 12px; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--accent) 60%, var(--text));
+  pointer-events: none; user-select: none;
   font-family: var(--font-sans);
 }
 
@@ -216,7 +222,14 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .sidebar-action:hover { background: var(--surface-2); color: var(--text); }
 
 /* ─── Content area ─────────────────────────────────────────────────────────── */
-.content { flex: 1; overflow-y: auto; padding: 28px 32px; background: var(--bg); }
+.content {
+  flex: 1; overflow-y: auto; padding: 28px 32px;
+  background:
+    radial-gradient(ellipse 80% 40% at 50% 0%,
+      color-mix(in srgb, var(--accent) 5%, transparent) 0%,
+      transparent 70%),
+    var(--bg);
+}
 
 .view-header { margin-bottom: 24px; }
 .view-title { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 6px; }
