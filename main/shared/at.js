@@ -34,19 +34,29 @@ async function atFetch(path, opts = {}) {
   if (!username || !apiKey) throw new Error('Autotask credentials not configured. Add your personal key in Settings or contact your admin.');
   if (!integrationCode) throw new Error('Autotask Integration Code not configured.');
   const baseUrl = await getAtBaseUrl(username);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30000);
-  try {
-    const res = await fetch(`${baseUrl}${path}`, {
-      ...opts,
-      signal: controller.signal,
-      headers: { 'ApiIntegrationCode': integrationCode, 'UserName': username, 'Secret': apiKey, 'Content-Type': 'application/json', ...(opts.headers || {}) }
-    });
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30000);
+    let res;
+    try {
+      res = await fetch(`${baseUrl}${path}`, {
+        ...opts,
+        signal: controller.signal,
+        headers: { 'ApiIntegrationCode': integrationCode, 'UserName': username, 'Secret': apiKey, 'Content-Type': 'application/json', ...(opts.headers || {}) }
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (res.status === 429) {
+      const wait = parseInt(res.headers.get('retry-after') || '10', 10);
+      await new Promise(r => setTimeout(r, wait * 1000));
+      continue;
+    }
     if (!res.ok) throw new Error(`Autotask ${res.status}: ${await res.text()}`);
     return res.json();
-  } finally {
-    clearTimeout(timer);
   }
+  throw new Error('Autotask rate limit: too many retries (429). Try again in a moment.');
 }
 
 async function atQuery(entityPath, filters = []) {
