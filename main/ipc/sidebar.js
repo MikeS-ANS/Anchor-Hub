@@ -3,6 +3,7 @@ const path    = require('path');
 const keytar  = require('keytar');
 const { app, Notification } = require('electron');
 const { SERVICE_NAME, USER_DATA, readState, getMainWindow } = require('../shared/state');
+const { getAllowedToolKeys } = require('../shared/roleMatrix');
 
 const SIDEBAR_CONFIG_FILE = path.join(USER_DATA, 'sidebar-config.json');
 const TOOL_VIS_KEY        = 'tool_visibility'; // kept for migration from old keytar store
@@ -51,22 +52,47 @@ function mergeSidebarConfig(saved) {
 
 module.exports = function registerSidebar(ipcMain) {
   ipcMain.handle('get-sidebar-config', async () => {
+    let config;
     try {
       const raw = JSON.parse(fs.readFileSync(SIDEBAR_CONFIG_FILE, 'utf8'));
-      return mergeSidebarConfig(raw);
+      config = mergeSidebarConfig(raw);
     } catch {
       // No config file yet — try to migrate existing keytar visibility for existing users
       try {
         const raw    = await keytar.getPassword(SERVICE_NAME, TOOL_VIS_KEY);
         const oldVis = raw ? JSON.parse(raw) : null;
-        const config = getDefaultSidebarConfig();
+        config = getDefaultSidebarConfig();
         if (oldVis) ALL_TOOL_KEYS.forEach(k => { if (k in oldVis) config.visibility[k] = oldVis[k]; });
         fs.writeFileSync(SIDEBAR_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
-        return config;
       } catch {
-        return getDefaultSidebarConfig();
+        config = getDefaultSidebarConfig();
       }
     }
+
+    // Apply role-based filtering — tools the user's role can't access are hidden entirely.
+    // If the matrix isn't set up yet (getAllowedToolKeys returns null), all tools are shown.
+    try {
+      const allowed = await getAllowedToolKeys();
+      if (allowed) {
+        const vis = {};
+        for (const [k, v] of Object.entries(config.visibility)) {
+          if (allowed.has(k)) vis[k] = v;
+        }
+        config.visibility = vis;
+        config.layout = config.layout.map(item => {
+          if (item.type === 'tool')   return allowed.has(item.key) ? item : null;
+          if (item.type === 'bucket') {
+            const items = (item.items || []).filter(k => allowed.has(k));
+            return items.length ? { ...item, items } : null;
+          }
+          return item;
+        }).filter(Boolean);
+      }
+    } catch (e) {
+      console.error('[sidebar] role filter error:', e.message);
+    }
+
+    return config;
   });
 
   ipcMain.handle('save-sidebar-config', (_, config) => {

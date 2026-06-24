@@ -1,10 +1,125 @@
-﻿window.onerror = (msg, src, line, col, err) => console.error('[app.js uncaught]', msg, `${src}:${line}:${col}`, err);
+window.onerror = (msg, src, line, col, err) => console.error('[app.js uncaught]', msg, `${src}:${line}:${col}`, err);
 window.onunhandledrejection = (e) => console.error('[app.js unhandled rejection]', e.reason);
 
 // Window controls
 document.getElementById('btn-min').addEventListener('click', () => window.api.minimize());
 document.getElementById('btn-max').addEventListener('click', () => window.api.maximize());
 document.getElementById('btn-close').addEventListener('click', () => window.api.close());
+
+// ─── Background visual layers: constellation anchor (upper-right) + orange webbing (lower-left) ──
+(function injectBgLayers() {
+  if (document.getElementById('hub-bg')) return;
+
+  // Orange network webbing — computed ray + arc intersection SVG
+  const VW = 700, VH = 540;
+  const ox = 0, oy = VH;
+  const rayEnds = [
+    [0, 0], [90, 0], [210, 0], [370, 0], [545, 0],
+    [700, 0], [700, 130], [700, 300], [700, 460]
+  ];
+  const rings = [165, 320, 462];
+
+  const arcPts = rings.map(d =>
+    rayEnds.map(([ex, ey]) => {
+      const dx = ex - ox, dy = ey - oy;
+      const L = Math.hypot(dx, dy);
+      return [+(ox + d * dx / L).toFixed(1), +(oy + d * dy / L).toFixed(1)];
+    })
+  );
+
+  const rayLines = rayEnds.map(([ex, ey]) =>
+    `<line x1="${ox}" y1="${oy}" x2="${ex}" y2="${ey}"/>`
+  ).join('');
+
+  const crossLines = arcPts.map(ring => {
+    let s = '';
+    for (let i = 0; i < ring.length - 1; i++)
+      s += `<line x1="${ring[i][0]}" y1="${ring[i][1]}" x2="${ring[i+1][0]}" y2="${ring[i+1][1]}"/>`;
+    return s;
+  }).join('');
+
+  const nodeDots = arcPts.flat()
+    .filter(([x, y]) => x >= 0 && x <= VW && y >= 0 && y <= VH)
+    .map(([x, y]) => `<circle cx="${x}" cy="${y}" r="2.2"/>`)
+    .join('');
+
+  const wsvg = `<svg id="bg-webbing" viewBox="0 0 ${VW} ${VH}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMinYMax meet">
+    <g stroke="rgba(194,118,55,0.22)" stroke-width="0.9" fill="none">${rayLines}${crossLines}</g>
+    <g fill="rgba(194,118,55,0.50)">${nodeDots}<circle cx="0" cy="${VH}" r="3.5"/></g>
+  </svg>`;
+
+  // Constellation anchor — subtle anchor outline + star field + connecting lines
+  const asvg = `<svg id="bg-anchor" viewBox="0 0 300 360" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMaxYMin meet">
+    <defs>
+      <radialGradient id="anchorGlow" cx="50%" cy="44%" r="52%">
+        <stop offset="0%" stop-color="rgba(59,130,160,0.14)"/>
+        <stop offset="100%" stop-color="rgba(59,130,160,0)"/>
+      </radialGradient>
+    </defs>
+    <ellipse cx="152" cy="165" rx="118" ry="138" fill="url(#anchorGlow)"/>
+    <g stroke="rgba(148,163,184,0.22)" stroke-width="1.6" fill="none" stroke-linecap="round">
+      <circle cx="152" cy="52" r="24"/>
+      <line x1="152" y1="28" x2="152" y2="278"/>
+      <line x1="80" y1="96" x2="224" y2="96"/>
+      <path d="M 152 278 C 120 278 74 258 52 228"/>
+      <path d="M 52 228 C 38 210 44 194 58 190"/>
+      <path d="M 152 278 C 184 278 230 258 252 228"/>
+      <path d="M 252 228 C 266 210 260 194 246 190"/>
+    </g>
+    <g fill="rgba(148,163,184,0.52)">
+      <circle cx="152" cy="28" r="2.8"/>
+      <circle cx="152" cy="52" r="3.2"/>
+      <circle cx="80" cy="96" r="2.8"/>
+      <circle cx="224" cy="96" r="2.8"/>
+      <circle cx="152" cy="187" r="2.2"/>
+      <circle cx="152" cy="278" r="2.8"/>
+      <circle cx="52" cy="228" r="2.8"/>
+      <circle cx="252" cy="228" r="2.8"/>
+      <circle cx="58" cy="190" r="2.2"/>
+      <circle cx="246" cy="190" r="2.2"/>
+    </g>
+    <g fill="rgba(148,163,184,0.70)">
+      <circle cx="26" cy="32" r="1.8"/>
+      <circle cx="278" cy="18" r="1.4"/>
+      <circle cx="10" cy="150" r="1.2"/>
+      <circle cx="290" cy="120" r="1.8"/>
+      <circle cx="28" cy="258" r="1.4"/>
+      <circle cx="274" cy="274" r="1.2"/>
+      <circle cx="62" cy="14" r="1.2"/>
+      <circle cx="240" cy="12" r="1.5"/>
+      <circle cx="8" cy="310" r="1.8"/>
+      <circle cx="292" cy="340" r="1.2"/>
+      <circle cx="110" cy="350" r="1.2"/>
+      <circle cx="200" cy="352" r="1.5"/>
+      <circle cx="168" cy="6" r="1.2"/>
+      <circle cx="140" cy="345" r="1.0"/>
+    </g>
+    <g stroke="rgba(148,163,184,0.11)" stroke-width="0.75" fill="none">
+      <line x1="26" y1="32" x2="80" y2="96"/>
+      <line x1="278" y1="18" x2="224" y2="96"/>
+      <line x1="26" y1="32" x2="152" y2="28"/>
+      <line x1="278" y1="18" x2="152" y2="28"/>
+      <line x1="10" y1="150" x2="80" y2="96"/>
+      <line x1="290" y1="120" x2="224" y2="96"/>
+      <line x1="28" y1="258" x2="52" y2="228"/>
+      <line x1="274" y1="274" x2="252" y2="228"/>
+      <line x1="8" y1="310" x2="52" y2="228"/>
+      <line x1="292" y1="340" x2="252" y2="228"/>
+      <line x1="62" y1="14" x2="80" y2="96"/>
+      <line x1="240" y1="12" x2="224" y2="96"/>
+      <line x1="168" y1="6" x2="152" y2="28"/>
+      <line x1="110" y1="350" x2="52" y2="228"/>
+      <line x1="200" y1="352" x2="252" y2="228"/>
+      <line x1="140" y1="345" x2="152" y2="278"/>
+    </g>
+  </svg>`;
+
+  const bg = document.createElement('div');
+  bg.id = 'hub-bg';
+  bg.setAttribute('aria-hidden', 'true');
+  bg.innerHTML = wsvg + asvg;
+  document.body.insertBefore(bg, document.body.firstChild);
+}());
 
 // ─── Auth / SSO ───────────────────────────────────────────────────────────────
 let _currentUser = null;
@@ -68,15 +183,15 @@ function renderUserChip(user) {
   el.innerHTML = `
     <div id="user-chip" style="display:flex;align-items:center;gap:7px;cursor:pointer;
          padding:3px 8px 3px 3px;border-radius:20px;transition:background .15s"
-         onmouseenter="this.style.background='var(--hover)'"
+         onmouseenter="this.style.background='rgba(255,255,255,0.07)'"
          onmouseleave="this.style.background='transparent'">
       ${avatarSmall}
       <span style="font-size:11px;color:var(--text-muted);max-width:120px;
             overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(user.name)}</span>
     </div>
     <div id="user-menu" style="display:none;position:absolute;top:36px;right:8px;
-         background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;
-         padding:6px;min-width:200px;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,.4)">
+         background:#131B2A;border:1px solid var(--border-2);border-radius:8px;
+         padding:6px;min-width:200px;z-index:9999;box-shadow:0 8px 24px rgba(0,0,0,.6)">
       <div style="padding:10px;border-bottom:1px solid var(--border);margin-bottom:4px;display:flex;align-items:center;gap:10px">
         ${avatarLarge}
         <div style="min-width:0">
@@ -87,7 +202,7 @@ function renderUserChip(user) {
       </div>
       <div id="user-signout-btn" style="padding:6px 10px;font-size:12px;color:var(--text);
            cursor:pointer;border-radius:5px;transition:background .15s"
-           onmouseenter="this.style.background='var(--hover)'"
+           onmouseenter="this.style.background='rgba(255,255,255,0.07)'"
            onmouseleave="this.style.background='transparent'">Sign out</div>
     </div>`;
   el.style.position = 'relative';
@@ -662,8 +777,11 @@ async function _loadCalendar() {
     }
     const fmtTime = dt => {
       if (!dt) return '';
-      const d = new Date(dt);
-      return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }).replace(' ', '').toLowerCase();
+      // Graph returns tz-naive UTC strings — append Z so Date() parses as UTC,
+      // then display in the user's local system timezone (set correctly in Windows).
+      const d = new Date(dt.includes('Z') || dt.includes('+') ? dt : dt + 'Z');
+      return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+        .replace(/\s(AM|PM)$/i, m => m.trim().toLowerCase());
     };
     el.innerHTML = result.slice(0, 6).map(e => `
       <div class="start-cal-event">
@@ -692,24 +810,32 @@ async function _loadTickets() {
     }
     const priColor = p => p <= 1 ? 'var(--error)' : p === 2 ? 'var(--warn)' : 'var(--success)';
     const priLabel = p => p <= 1 ? 'Critical' : p === 2 ? 'High' : p === 3 ? 'Medium' : 'Low';
-    const atUrl = 'https://www.autotask.net/';
+    const atUrl = 'https://ww5.autotask.net/';
+
+    const buckets = [
+      { label: 'Critical & High', count: result.critHighCount  ?? 0, hot: (result.critHighCount  ?? 0) > 0 },
+      { label: 'Due Today',       count: result.dueTodayCount  ?? 0, hot: (result.dueTodayCount  ?? 0) > 0 },
+      { label: 'Overdue',         count: result.overdueCount   ?? 0, hot: (result.overdueCount   ?? 0) > 0 },
+      { label: 'Total Assigned',  count: result.assignedCount  ?? 0, hot: false },
+    ];
+
     el.innerHTML = `
-      <div class="start-ticket-stats">
-        <div class="start-ticket-stat">
-          <span class="start-ticket-label">Assigned to me</span>
-          <span class="start-ticket-count">${result.assignedCount}</span>
-        </div>
-        <div class="start-ticket-stat">
-          <span class="start-ticket-label">Total open</span>
-          <span class="start-ticket-count${result.totalOpen > 20 ? ' start-ticket-warn' : ''}">${result.totalOpen}</span>
-        </div>
+      <div class="start-ticket-buckets">
+        ${buckets.map(b => `
+          <div class="start-ticket-bucket">
+            <span class="start-bucket-label">${escHtml(b.label)}</span>
+            <span class="start-bucket-count${b.hot ? ' start-bucket-hot' : ''}">${b.count}</span>
+          </div>`).join('')}
       </div>
       ${result.tickets.length ? `
         <div class="start-ticket-list">
           ${result.tickets.map(t => `
             <div class="start-ticket-row">
               <span class="start-pri-dot" style="background:${priColor(t.priority)}" title="${priLabel(t.priority)}"></span>
-              <span class="start-ticket-name" title="${escHtml(t.title)}">${escHtml(t.title)}</span>
+              <div class="start-ticket-meta">
+                <span class="start-ticket-name" title="${escHtml(t.title)}">${escHtml(t.title)}</span>
+                ${t.companyName ? `<span class="start-ticket-company">${escHtml(t.companyName)}</span>` : ''}
+              </div>
             </div>`).join('')}
         </div>` : ''}
       <div class="start-open-at">
@@ -6523,411 +6649,263 @@ async function bpExportReport() {
   }
 }
 
+// ─── Support request modal ────────────────────────────────────────────────────
+function showSupportModal() {
+  const existing = document.getElementById('support-modal-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'support-modal-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:10000;display:flex;align-items:center;justify-content:center';
+
+  overlay.innerHTML = `
+    <div style="background:#131B2A;border:1px solid rgba(148,163,184,0.28);border-radius:12px;
+                padding:24px;width:460px;max-width:90vw;box-shadow:0 12px 40px rgba(0,0,0,.7)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <div style="font-size:14px;font-weight:700;color:#E5E7EB">Request Support</div>
+        <button id="sm-close" style="background:none;border:none;cursor:pointer;color:#9CA3AF;
+                font-size:20px;line-height:1;padding:2px 6px;border-radius:4px"
+                onmouseenter="this.style.background='rgba(255,255,255,0.08)'"
+                onmouseleave="this.style.background='none'">×</button>
+      </div>
+      <p style="font-size:12px;color:#9CA3AF;margin:0 0 18px">Describe your issue and it will be sent directly to Mike.</p>
+      <div style="margin-bottom:12px">
+        <label style="font-size:11px;font-weight:600;color:#9CA3AF;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.05em">Subject</label>
+        <input id="sm-subject" type="text" placeholder="Brief summary of the issue"
+               style="width:100%;box-sizing:border-box;background:#0B111D;
+                      border:1px solid rgba(148,163,184,0.16);border-radius:6px;
+                      padding:8px 11px;font-size:12px;color:#E5E7EB;outline:none;
+                      font-family:inherit;transition:border-color .15s"
+               onfocus="this.style.borderColor='rgba(148,163,184,0.32)'"
+               onblur="this.style.borderColor='rgba(148,163,184,0.16)'" />
+      </div>
+      <div style="margin-bottom:18px">
+        <label style="font-size:11px;font-weight:600;color:#9CA3AF;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.05em">Description</label>
+        <textarea id="sm-body" rows="5" placeholder="What happened? What were you trying to do? Any error messages?"
+                  style="width:100%;box-sizing:border-box;background:#0B111D;
+                         border:1px solid rgba(148,163,184,0.16);border-radius:6px;
+                         padding:8px 11px;font-size:12px;color:#E5E7EB;outline:none;
+                         font-family:inherit;resize:vertical;transition:border-color .15s"
+                  onfocus="this.style.borderColor='rgba(148,163,184,0.32)'"
+                  onblur="this.style.borderColor='rgba(148,163,184,0.16)'"></textarea>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <div id="sm-status" style="font-size:12px;flex:1"></div>
+        <div style="display:flex;gap:8px;flex-shrink:0">
+          <button id="sm-cancel" class="help-btn">Cancel</button>
+          <button id="sm-send" style="display:inline-flex;align-items:center;gap:6px;
+                  padding:7px 16px;font-size:12px;font-weight:600;background:#C27637;
+                  border:none;border-radius:6px;color:#fff;cursor:pointer;font-family:inherit;
+                  transition:background .15s"
+                  onmouseenter="this.style.background='#D4834A'"
+                  onmouseleave="this.style.background='#C27637'">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M2 4l6 4 6-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><rect x="1" y="3" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.3"/></svg>
+            Send
+          </button>
+        </div>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  document.getElementById('sm-close').onclick  = close;
+  document.getElementById('sm-cancel').onclick = close;
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+  document.getElementById('sm-send').onclick = async () => {
+    const subject  = document.getElementById('sm-subject').value.trim();
+    const bodyText = document.getElementById('sm-body').value.trim();
+    const sendBtn  = document.getElementById('sm-send');
+    const status   = document.getElementById('sm-status');
+
+    if (!subject || !bodyText) {
+      status.style.color = 'var(--error)';
+      status.textContent = 'Please fill in both fields.';
+      return;
+    }
+
+    sendBtn.disabled    = true;
+    sendBtn.textContent = 'Sending…';
+    status.textContent  = '';
+
+    const fromName  = _currentUser?.name  || 'Unknown';
+    const fromEmail = _currentUser?.email || '';
+    const htmlBody  = `<p><strong>From:</strong> ${escHtml(fromName)}${fromEmail ? ` &lt;${escHtml(fromEmail)}&gt;` : ''}</p>
+<hr style="border:none;border-top:1px solid #333;margin:10px 0">
+<p><strong>Subject:</strong> ${escHtml(subject)}</p>
+<p>${escHtml(bodyText).replace(/\n/g, '<br>')}</p>
+<p style="color:#888;font-size:11px;margin-top:20px">Sent from Anchor Hub</p>`;
+
+    const result = await window.api.homeSendSupportEmail({
+      subject: `[Anchor Hub] ${subject}`,
+      body:    htmlBody,
+    });
+
+    if (result?.ok) {
+      status.style.color = 'var(--success)';
+      status.textContent = 'Support request sent!';
+      sendBtn.innerHTML  = '✓ Sent';
+      setTimeout(close, 1800);
+    } else {
+      const msg = result?.error === 'no_token'
+        ? 'Mail permission not granted — please sign out and sign back in.'
+        : (result?.error || 'Failed to send. Please try again.');
+      status.style.color = 'var(--error)';
+      status.textContent = msg;
+      sendBtn.disabled    = false;
+      sendBtn.innerHTML   = `<svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M2 4l6 4 6-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><rect x="1" y="3" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.3"/></svg> Send`;
+    }
+  };
+
+  setTimeout(() => document.getElementById('sm-subject')?.focus(), 60);
+}
+
 // ─── Help ─────────────────────────────────────────────────────────────────────
 function renderHelp() {
-  const SECTIONS = [
-    {
-      id: 'getting-started',
-      icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1l1.8 3.6L14 5.6l-3 2.9.7 4.1L8 10.5l-3.7 2.1.7-4.1-3-2.9 4.2-.9L8 1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>`,
-      title: 'Getting Started',
-      open: true,
-      body: `
-        <p class="help-intro">Follow these steps to get Anchor Hub fully configured. The whole process takes about 5 minutes.</p>
-        <ol class="help-steps">
-          <li>
-            <span class="help-step-num">1</span>
-            <div>
-              <strong>Open Settings → API &amp; Accounts</strong>
-              <p>Click the Settings button at the bottom of the sidebar, then select the <em>API &amp; Accounts</em> tab.</p>
-            </div>
-          </li>
-          <li>
-            <span class="help-step-num">2</span>
-            <div>
-              <strong>Enter your Pax8 credentials</strong>
-              <p>Add your Pax8 OAuth2 Client ID and Client Secret. See the <em>API Keys</em> section below for where to find these.</p>
-            </div>
-          </li>
-          <li>
-            <span class="help-step-num">3</span>
-            <div>
-              <strong>Enter your Autotask credentials</strong>
-              <p>Add your API Username, API Key, and Integration Code. Click <strong>Detect</strong> to auto-detect your Autotask data center zone — this only needs to be done once.</p>
-            </div>
-          </li>
-          <li>
-            <span class="help-step-num">4</span>
-            <div>
-              <strong>Save your credentials</strong>
-              <p>Click <strong>Save Credentials</strong>. All credentials are stored securely in Windows Credential Manager — never in plain text on disk.</p>
-            </div>
-          </li>
-          <li>
-            <span class="help-step-num">5</span>
-            <div>
-              <strong>Run Company Mapping</strong>
-              <p>Navigate to <em>Company Mapping</em> and run a sync. This links your Pax8 companies to their matching Autotask accounts and is required for most tools to work correctly.</p>
-            </div>
-          </li>
-          <li>
-            <span class="help-step-num">6</span>
-            <div>
-              <strong>(Optional) Configure AI analysis</strong>
-              <p>AI-powered analysis in Pax8 Invoice Comparison uses Hatz.ai. The key is managed in Azure Key Vault — no action needed unless you're setting up a new vault.</p>
-            </div>
-          </li>
-        </ol>`
-    },
-    {
-      id: 'api-keys',
-      icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="6" cy="10" r="3.5" stroke="currentColor" stroke-width="1.3"/><path d="M8.5 7.5L13 3M13 3h-2.5M13 3v2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
-      title: 'Where to Find Your API Keys',
-      body: `
-        <div class="help-api-block">
-          <div class="help-api-header">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="1" y="3" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M1 6h14" stroke="currentColor" stroke-width="1.3"/></svg>
-            Pax8
-          </div>
-          <ol class="help-api-steps">
-            <li>Log in to <strong>partner.pax8.com</strong></li>
-            <li>Click your profile icon (top right) → <strong>Profile</strong></li>
-            <li>Scroll to <strong>Client Credentials</strong> → click <strong>Generate Credentials</strong></li>
-            <li>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong> — the secret is only shown once</li>
-          </ol>
-        </div>
+  const GITBOOK = 'https://anchor-network-solutions-1.gitbook.io/anchor-hub-help-center';
 
-        <div class="help-api-block">
-          <div class="help-api-header">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2C5.79 2 4 3.79 4 6v1H3a1 1 0 00-1 1v5a1 1 0 001 1h10a1 1 0 001-1V8a1 1 0 00-1-1h-1V6c0-2.21-1.79-4-4-4z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
-            Autotask PSA — API Username &amp; Key
-          </div>
-          <ol class="help-api-steps">
-            <li>Go to <strong>Admin → Resources (Users)</strong></li>
-            <li>Create a new resource (or use an existing one) — set the <strong>Security Level</strong> to <em>API User (System)</em></li>
-            <li>The <strong>email address</strong> of that resource is your API Username</li>
-            <li>On the resource record, go to the <strong>API Tracking Identifier</strong> tab → <strong>Generate Key</strong></li>
-            <li>Copy the generated key — this is your API Key</li>
-          </ol>
-        </div>
+  const TOOLS = [
+    { name: 'M365 Subscription Comparison',  desc: 'Compares Microsoft 365 subscriptions between Pax8 and Autotask to surface billing discrepancies — seats that exist in one system but not the other.',           path: '/tool-guides/subscription-audit' },
+    { name: 'Pax8 Invoice Processor',         desc: 'Downloads and processes Pax8 invoices into a structured per-client breakdown and generates Autotask contract update prompts.',                               path: '/tool-guides/invoice-processor' },
+    { name: 'Pax8 Invoice Comparison',        desc: 'Compares Pax8 invoices month over month — current vs. last month or across the last 2–3 invoices — to see what changed per client.',                        path: '/tool-guides/pax8-invoice-comparison' },
+    { name: 'M365 Margin Analyzer',           desc: 'Shows your margin per client by comparing Autotask contract service pricing against current Pax8 costs. Identifies underpriced services.',                   path: '/tool-guides/margin-analyzer' },
+    { name: 'Company Mapping',                desc: 'Syncs and manages the link between Pax8 company names and their matching Autotask accounts. Required for most other tools to work correctly.',               path: '/tool-guides/company-mapping' },
+    { name: 'Kaseya Invoice Processor',       desc: 'Imports Kaseya/Datto invoices and splits costs across QuickBooks accounts and classes. Generates an Autotask update prompt.',                               path: '/tool-guides/kaseya-invoice-processor' },
+    { name: 'Project Time Summary',           desc: 'Pulls time entries from Autotask for all active projects and summarizes hours per project. Supports notes, export, and emailing reports.',                   path: '/tool-guides/project-time-summary' },
+    { name: 'Autotask Contract Changes',      desc: 'Audits recent changes made to Autotask contracts — showing who changed what field and when. Useful for tracking modifications and renewals.',                path: '/tool-guides/contract-changes' },
+    { name: 'Autotask Contract Renewals',     desc: 'Finds active contracts expiring within your configured look-ahead window so you can proactively reach out to clients before agreements lapse.',              path: '/tool-guides/contract-renewals' },
+    { name: 'BlackPoint Usage',               desc: 'Fetches protected endpoint counts from BlackPoint CompassOne, compares against Autotask contract quantities, and lets you push updates directly.',           path: '/tool-guides/blackpoint' },
+    { name: 'MSC Agreements',                 desc: 'Revenue overview for managed service clients — MSA value, lifetime projected revenue, contract end dates, last signed year, and annual uplift percentage.',  path: '/tool-guides/msc-agreements' },
+    { name: 'Duo Management',                 desc: 'Connects to the Duo Admin API to manage users, devices, and enrollment across all clients. Access level varies by your Hub role.',                          path: '/tool-guides/duo-management' },
+    { name: 'Project Profitability',          desc: 'Compares budgeted vs. actual hours on Autotask projects to calculate labor cost, revenue, and margin. Helps catch over-budget projects early.',             path: '/tool-guides/project-profitability' },
+  ];
 
-        <div class="help-api-block">
-          <div class="help-api-header">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2C5.79 2 4 3.79 4 6v1H3a1 1 0 00-1 1v5a1 1 0 001 1h10a1 1 0 001-1V8a1 1 0 00-1-1h-1V6c0-2.21-1.79-4-4-4z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
-            Autotask PSA — Integration Code
-          </div>
-          <ol class="help-api-steps">
-            <li>Go to <strong>Admin → Extensions &amp; Integrations → Other Extensions &amp; Tools → Web Services API</strong></li>
-            <li>Click <strong>New</strong> to create a tracking identifier</li>
-            <li>Give it a name (e.g. <em>Anchor Hub</em>) and save</li>
-            <li>Copy the generated <strong>GUID</strong> — this is your Integration Code</li>
-          </ol>
-        </div>
-
-        <div class="help-api-block">
-          <div class="help-api-header">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-            Claude (Anthropic) — Optional
-          </div>
-          <ol class="help-api-steps">
-            <li>Go to <strong>console.anthropic.com</strong> and sign in</li>
-            <li>Click <strong>API Keys</strong> in the left sidebar → <strong>Create Key</strong></li>
-            <li>Copy the key — it starts with <code>sk-ant-</code></li>
-            <li>This is only required for the AI analysis feature in <em>Pax8 Invoice Comparison</em></li>
-          </ol>
-        </div>`
-    },
-    {
-      id: 'tools',
-      icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="2" width="14" height="12" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M5 8h6M5 5h3M5 11h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>`,
-      title: 'Tools Overview',
-      body: `
-        <div class="help-tool-grid">
-          <div class="help-tool-card">
-            <div class="help-tool-name">M365 Subscription Comparison</div>
-            <p>Compares your Microsoft 365 subscriptions between Pax8 and Autotask contract services to surface billing discrepancies — seats that exist in one system but not the other. Run this monthly before invoicing clients.</p>
-          </div>
-          <div class="help-tool-card">
-            <div class="help-tool-name">Pax8 Invoice Comparison</div>
-            <p>Pulls a Pax8 invoice and compares line items against Autotask contract services to detect price changes, new charges, and removed items. Optionally uses AI to summarize what changed and why.</p>
-          </div>
-          <div class="help-tool-card">
-            <div class="help-tool-name">M365 Margin Analyzer</div>
-            <p>Pulls Autotask contract service pricing and compares it against current Pax8 costs to show your margin per client. Identifies underpriced services and helps you stay ahead of cost increases.</p>
-          </div>
-          <div class="help-tool-card">
-            <div class="help-tool-name">Company Mapping</div>
-            <p>Syncs and manages the link between your Pax8 company names and their matching Autotask accounts. Run this first during setup and again whenever you add new clients. Most other tools depend on accurate mappings.</p>
-          </div>
-          <div class="help-tool-card">
-            <div class="help-tool-name">Pax8 Invoice Processor</div>
-            <p>Downloads and processes Pax8 invoices into a structured breakdown by client. Generates Claude MCP prompts to update Autotask contract service quantities and Azure costs automatically.</p>
-          </div>
-          <div class="help-tool-card">
-            <div class="help-tool-name">Kaseya Invoice Processor</div>
-            <p>Imports Kaseya/Datto invoices and splits costs across QuickBooks Online accounts and classes based on your configured percentages (PSA, RMM, IT Glue, bundled products). Generates an Autotask update prompt.</p>
-          </div>
-          <div class="help-tool-card">
-            <div class="help-tool-name">Project Time Summary</div>
-            <p>Pulls time entries from Autotask for a selected project and summarizes hours by role, phase, and team member. Helps project managers track burn rate and identify where time is being spent.</p>
-          </div>
-          <div class="help-tool-card">
-            <div class="help-tool-name">Autotask Contract Changes</div>
-            <p>Audits recent changes made to Autotask contracts — showing who changed what field and when. Useful for tracking unexpected modifications, auditing renewals, and seeing what the AI updated after running a prompt.</p>
-          </div>
-          <div class="help-tool-card">
-            <div class="help-tool-name">Autotask Contract Renewals</div>
-            <p>Finds active contracts expiring within your chosen window (30/60/90 days) that don't have a renewal on record. Review services, adjust pricing, and generate a Claude MCP prompt to create the renewal contract — individually or as a batch for multiple clients at once.</p>
-          </div>
-          <div class="help-tool-card">
-            <div class="help-tool-name">BlackPoint Usage</div>
-            <p>Fetches current protected endpoint counts from BlackPoint CompassOne, compares against Autotask contract service quantities, and surfaces deltas. Push updates directly to Autotask contract services from within the tool.</p>
-          </div>
-          <div class="help-tool-card">
-            <div class="help-tool-name">MSC Agreements</div>
-            <p>Reviews and manages Managed Services Contracts — surfaces agreement discrepancies and helps keep contract service quantities in sync across clients.</p>
-          </div>
-          <div class="help-tool-card">
-            <div class="help-tool-name">Duo Management</div>
-            <p>Connects to the Duo Admin API to manage users, devices, and enrollment across your clients. Access level varies by role — Service Delivery gets full access; TAM and Strategic see a client-focused view.</p>
-          </div>
-          <div class="help-tool-card">
-            <div class="help-tool-name">Project Profitability</div>
-            <p>Compares budgeted vs. actual hours for Autotask projects to calculate labor cost, revenue, and margin. Helps identify projects that are going over budget before they become a problem.</p>
-          </div>
-        </div>`
-    },
-    {
-      id: 'roles',
-      icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="6" cy="5" r="2.5" stroke="currentColor" stroke-width="1.3"/><path d="M1.5 13c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M11 7.5l1.5 1.5L15 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
-      title: 'Roles &amp; Permissions',
-      body: `
-        <p class="help-intro">Anchor Hub uses Azure AD App Roles to control which tools each person can see. The sidebar is filtered automatically at sign-in — users only see the tools their role allows.</p>
-
-        <div class="help-api-block">
-          <div class="help-api-header">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 1l1.8 3.6L14 5.6l-3 2.9.7 4.1L8 10.5l-3.7 2.1.7-4.1-3-2.9 4.2-.9L8 1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
-            How it works
-          </div>
-          <p style="margin:0 0 8px">When someone signs into Anchor Hub, their Azure AD App Roles are read from their login token. Those roles are matched against the <strong>Hub Role Matrix</strong> list in SharePoint to determine which tools they can see. Role changes take effect the next time the app is restarted.</p>
-          <p style="margin:0">Roles are assigned automatically based on job title via Azure AD Dynamic Groups — when someone's title changes in M365, their Hub role updates within a few minutes without any manual steps.</p>
-        </div>
-
-        <div class="help-api-block">
-          <div class="help-api-header">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h8M2 12h5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-            Hub Roles — who has access to what
-          </div>
-          <table class="help-role-table">
-            <thead>
-              <tr>
-                <th>Role</th>
-                <th>Job titles</th>
-                <th>Tools</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><code>hub.admin</code></td>
-                <td>Directors</td>
-                <td>All tools</td>
-              </tr>
-              <tr>
-                <td><code>hub.manager</code></td>
-                <td>Managers of Service Delivery &amp; Professional Services</td>
-                <td>M365 Subscription Comparison, Project Time Summary, Duo Management, Project Profitability</td>
-              </tr>
-              <tr>
-                <td><code>hub.delivery</code></td>
-                <td>Service Desk Engineers &amp; Leads, Co-Managed Tech Lead, CTS, Cybersecurity Admin, Office Admin</td>
-                <td>Duo Management</td>
-              </tr>
-              <tr>
-                <td><code>hub.tam</code></td>
-                <td>Technical Account Manager</td>
-                <td>Duo Management</td>
-              </tr>
-              <tr>
-                <td><code>hub.strategic</code></td>
-                <td>Account Manager, Client Experience Manager, Technology Strategist</td>
-                <td>M365 Subscription Comparison, BlackPoint Usage, MSC Agreements, Duo Management</td>
-              </tr>
-              <tr>
-                <td><code>hub.projects</code></td>
-                <td>Technical Project Engineer, Project Engineer</td>
-                <td>Project Time Summary, Project Profitability</td>
-              </tr>
-              <tr>
-                <td><code>hub.finance</code></td>
-                <td>Accountant, Accounting Assistant</td>
-                <td>M365 Subscription Comparison, Pax8 Invoice Processor, M365 Margin Analyzer, Pax8 Invoice Comparison, Kaseya Invoice Processor, Autotask Contract Changes, Autotask Contract Renewals, BlackPoint Usage, MSC Agreements</td>
-              </tr>
-              <tr>
-                <td><code>hub.sales</code></td>
-                <td>Business Development</td>
-                <td>None currently assigned</td>
-              </tr>
-              <tr>
-                <td><code>hub.wsd</code></td>
-                <td>Workstation Deployment Specialist</td>
-                <td>None currently assigned</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div class="help-api-block">
-          <div class="help-api-header">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M5 8h6M8 5v6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-            Update which roles can see a tool
-          </div>
-          <p style="margin:0 0 8px">The <strong>Hub Role Matrix</strong> SharePoint list controls tool access. Each row is one tool; each boolean column is a role. Toggling a column to <em>Yes</em> for a role grants that role access to the tool.</p>
-          <ol class="help-api-steps">
-            <li>Go to <strong>SharePoint Intranet → Lists → Hub Role Matrix</strong></li>
-            <li>Find the row for the tool you want to change (e.g. <em>BlackPoint Usage</em>)</li>
-            <li>Click the row to edit it</li>
-            <li>Toggle the role column (e.g. <em>RoleManager</em>) to <strong>Yes</strong> or <strong>No</strong></li>
-            <li>Save — the change takes effect the next time affected users restart the app</li>
-          </ol>
-          <p style="margin:8px 0 0;color:var(--text-muted);font-size:12px;">Column names: RoleAdmin, RoleManager, RoleDelivery, RoleTam, RoleStrategic, RoleProjects, RoleFinance, RoleSales, RoleWsd</p>
-        </div>
-
-        <div class="help-api-block">
-          <div class="help-api-header">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M5 8h6M8 5v6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-            Add a new tool to the matrix
-          </div>
-          <p style="margin:0 0 8px">When a new tool is added to Anchor Hub, it won't appear for anyone until it's added to the Hub Role Matrix.</p>
-          <ol class="help-api-steps">
-            <li>Go to <strong>SharePoint Intranet → Lists → Hub Role Matrix</strong></li>
-            <li>Click <strong>+ New</strong></li>
-            <li>Set <strong>Title</strong> to the tool's display name (e.g. <em>New Tool Name</em>)</li>
-            <li>Set <strong>ToolKey</strong> to the exact key used in the app (this will be in the release notes for the new tool)</li>
-            <li>Toggle each role column to <strong>Yes</strong> for the roles that should see the tool</li>
-            <li>Save — users with matching roles will see the tool on their next restart</li>
-          </ol>
-        </div>
-
-        <div class="help-api-block">
-          <div class="help-api-header">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="6" cy="5" r="2.5" stroke="currentColor" stroke-width="1.3"/><path d="M1.5 13c0-2.5 2-4 4.5-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="12" cy="11" r="3" stroke="currentColor" stroke-width="1.3"/><path d="M11 11h2M12 10v2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-            Grant one person access to a specific tool (overrides)
-          </div>
-          <p style="margin:0 0 8px">If someone needs access to a tool that isn't part of their role — without giving them a whole new role — use the <strong>Hub User Overrides</strong> SharePoint list. Each row grants one person access to one tool.</p>
-          <ol class="help-api-steps">
-            <li>Go to <strong>SharePoint Intranet → Lists → Hub User Overrides</strong></li>
-            <li>Click <strong>+ New</strong></li>
-            <li>Set <strong>Title</strong> to the person's M365 email address (e.g. <code>patm@anchornetworksolutions.com</code>)</li>
-            <li>Set <strong>ToolKey</strong> to the exact tool key (see the table below)</li>
-            <li>Save — the person will see the tool the next time they restart the app</li>
-          </ol>
-          <p style="margin:8px 0 4px">To grant multiple tools to the same person, add one row per tool. To remove access, delete the row.</p>
-          <p style="margin:8px 0 4px"><strong>Tool keys:</strong></p>
-          <table class="help-role-table">
-            <thead><tr><th>Tool key</th><th>Tool name</th></tr></thead>
-            <tbody>
-              <tr><td><code>subscription-audit</code></td><td>M365 Subscription Comparison</td></tr>
-              <tr><td><code>invoice-monitor</code></td><td>Pax8 Invoice Processor (AI)</td></tr>
-              <tr><td><code>margin-analyzer</code></td><td>M365 Margin Analyzer</td></tr>
-              <tr><td><code>company-mapping</code></td><td>Company Mapping</td></tr>
-              <tr><td><code>invoice-processor</code></td><td>Pax8 Invoice Comparison</td></tr>
-              <tr><td><code>kaseya-processor</code></td><td>Kaseya Invoice Processor</td></tr>
-              <tr><td><code>project-time-summary</code></td><td>Project Time Summary</td></tr>
-              <tr><td><code>contract-changes</code></td><td>Autotask Contract Changes</td></tr>
-              <tr><td><code>contract-renewals</code></td><td>Autotask Contract Renewals</td></tr>
-              <tr><td><code>blackpoint-processor</code></td><td>BlackPoint Usage</td></tr>
-              <tr><td><code>msc-agreements</code></td><td>MSC Agreements</td></tr>
-              <tr><td><code>duo-management</code></td><td>Duo Management</td></tr>
-              <tr><td><code>project-profitability</code></td><td>Project Profitability</td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div class="help-api-block">
-          <div class="help-api-header">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3"/><path d="M8 5v3.5l2 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            When do changes take effect?
-          </div>
-          <p style="margin:0">All permission changes — whether to the Hub Role Matrix, Hub User Overrides, or Azure AD role assignments — take effect the next time the user <strong>restarts Anchor Hub</strong>. Role data is cached for the session to keep the app fast.</p>
-        </div>`
-    },
-    {
-      id: 'troubleshooting',
-      icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3"/><path d="M8 4.5v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11" r="0.8" fill="currentColor"/></svg>`,
-      title: 'Troubleshooting',
-      body: `
-        <div class="help-faq">
-          <div class="help-faq-item">
-            <div class="help-faq-q">The app says my credentials are invalid</div>
-            <p>Go to <strong>Settings → API &amp; Accounts</strong> and re-enter your credentials. Make sure there are no leading or trailing spaces — especially in copied API keys. Click Save, then try the tool again.</p>
-          </div>
-          <div class="help-faq-item">
-            <div class="help-faq-q">Autotask zone detection isn't working</div>
-            <p>Make sure your API <strong>Username</strong> is filled in first — the zone is derived from your username's associated data center. Then click <strong>Detect</strong>. If it still fails, your zone can be found in the Autotask URL when you're logged in (e.g. <code>ww14</code> in <code>ww14.autotask.net</code>).</p>
-          </div>
-          <div class="help-faq-item">
-            <div class="help-faq-q">Contract Renewals is still showing project contracts</div>
-            <p>The tool filters by <strong>Contract Category</strong> (not Contract Type). If your Autotask instance uses a non-standard category name for projects, they may still appear. You can identify them by the contract name and ignore them — this will be configurable in a future update.</p>
-          </div>
-          <div class="help-faq-item">
-            <div class="help-faq-q">Company Mapping shows no matches</div>
-            <p>Make sure both Pax8 and Autotask credentials are saved, then run a fresh sync from the <em>Company Mapping</em> tool. The matching is fuzzy but requires reasonably similar company names in both systems.</p>
-          </div>
-          <div class="help-faq-item">
-            <div class="help-faq-q">No contracts or subscriptions are loading</div>
-            <p>Check that your Autotask API user has sufficient permissions — it needs read access to Contracts, ContractServices, and Companies at minimum. The API user's Security Level should be <em>API User (System)</em>.</p>
-          </div>
-          <div class="help-faq-item">
-            <div class="help-faq-q">An update is available but won't download</div>
-            <p>Click <strong>Check for Updates</strong> on the Home page to trigger a manual check. Make sure you're connected to the internet. If it still fails, you can download the latest installer directly from the <a href="https://github.com/MikeS-ANS/Anchor-Hub/releases" target="_blank" class="help-link">GitHub Releases page</a>.</p>
-          </div>
-          <div class="help-faq-item">
-            <div class="help-faq-q">The app won't open after an update</div>
-            <p>Download and run the latest installer from the <a href="https://github.com/MikeS-ANS/Anchor-Hub/releases" target="_blank" class="help-link">GitHub Releases page</a>. A fresh install over the top will fix most post-update issues without affecting your saved settings.</p>
-          </div>
-          <div class="help-faq-item">
-            <div class="help-faq-q">A Claude prompt ran but nothing changed in Autotask</div>
-            <p>Claude uses the Autotask MCP tools to make changes — make sure you're running Claude with the Autotask MCP server connected and authenticated before pasting a generated prompt. You can verify the connection with the test tool in the Autotask MCP server.</p>
-          </div>
-        </div>`
-    }
+  const FAQS = [
+    { q: 'A tool won\'t load or shows an error',
+      a: 'Restart Anchor Hub — most auth errors clear on the next sign-in. If the problem persists, go to Settings and confirm your API credentials are saved correctly.' },
+    { q: 'I can\'t see a tool in the sidebar',
+      a: 'Tool visibility is controlled by your role. If you believe you should have access, ask an admin to check the Hub Role Matrix in SharePoint or add a User Override for your account.' },
+    { q: 'Contract Renewals is showing project contracts',
+      a: 'The tool filters by Contract Category. If your Autotask instance uses a non-standard category name for projects, they may still appear — you can ignore them. This will be configurable in a future update.' },
+    { q: 'An update is available but won\'t install',
+      a: 'Click Check for Updates on the Home page to retry. If it still fails, download the latest installer from GitHub Releases and run it over your existing installation.' },
+    { q: 'A Claude prompt ran but nothing changed in Autotask',
+      a: 'Make sure you\'re running Claude with the Autotask MCP server connected before pasting the generated prompt. You can verify the connection with the test tool in the MCP server.' },
   ];
 
   content.innerHTML = `
     <div class="view-header">
       <div>
         <h1 class="view-title">Help</h1>
-        <p class="view-subtitle">Setup guide, API key locations, tool descriptions, and troubleshooting</p>
+        <p class="view-subtitle">Browse tools, get support, and troubleshoot issues.</p>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
+        <button class="help-btn" id="help-btn-support">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M2 4l6 4 6-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><rect x="1" y="3" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.3"/></svg>
+          Request Support
+        </button>
+        <button class="help-btn" id="help-btn-bug">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3"/><path d="M8 5.5v3l1.5 1.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Report a Bug
+        </button>
+        <button class="help-btn" id="help-gitbook-link" style="white-space:nowrap">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M7 2H3a1 1 0 00-1 1v10a1 1 0 001 1h10a1 1 0 001-1V9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M10 2h4v4M14 2L8 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Open Docs
+        </button>
       </div>
     </div>
     <div class="view-body help-body">
-      ${SECTIONS.map(s => `
-        <div class="help-section ${s.open ? 'help-open' : ''}" data-id="${s.id}">
-          <div class="help-section-header">
-            <span class="help-icon">${s.icon}</span>
-            <span class="help-section-title">${s.title}</span>
-            <span class="help-chevron">${s.open ? '▼' : '▶'}</span>
+
+      <!-- Tools Overview — open by default -->
+      <div class="help-section help-open" data-id="tools">
+        <div class="help-section-header">
+          <span class="help-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="2" width="14" height="12" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M5 8h6M5 5h3M5 11h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></span>
+          <span class="help-section-title">Tools Overview</span>
+          <span class="help-chevron">▼</span>
+        </div>
+        <div class="help-section-body">
+          <input id="help-tool-search" type="text" placeholder="Search tools…" class="help-search-input" autocomplete="off" />
+          <div class="help-tool-grid" id="help-tool-grid">
+            ${TOOLS.map(t => `
+              <div class="help-tool-card help-tool-clickable"
+                   data-name="${escHtml(t.name.toLowerCase())}"
+                   data-desc="${escHtml(t.desc.toLowerCase())}">
+                <div class="help-tool-name">${escHtml(t.name)}</div>
+                <p>${escHtml(t.desc)}</p>
+                <span class="help-tool-docs-link">View in Docs →</span>
+              </div>`).join('')}
           </div>
-          <div class="help-section-body" ${s.open ? '' : 'style="display:none"'}>
-            ${s.body}
+          <p id="help-tool-noresult" style="display:none;color:var(--text-muted);font-size:13px;padding:8px 0">No tools match your search.</p>
+        </div>
+      </div>
+
+      <!-- Troubleshooting — collapsed -->
+      <div class="help-section" data-id="troubleshooting">
+        <div class="help-section-header">
+          <span class="help-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3"/><path d="M8 4.5v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11" r="0.8" fill="currentColor"/></svg></span>
+          <span class="help-section-title">Troubleshooting</span>
+          <span class="help-chevron">▶</span>
+        </div>
+        <div class="help-section-body" style="display:none">
+          <div class="help-faq">
+            ${FAQS.map(f => `
+              <div class="help-faq-item">
+                <div class="help-faq-q">${escHtml(f.q)}</div>
+                <p>${escHtml(f.a)}</p>
+              </div>`).join('')}
           </div>
-        </div>`).join('')}
+        </div>
+      </div>
+
       <div class="help-footer">
         <span>Anchor Hub · v<span id="help-version">…</span></span>
-        <a href="https://github.com/MikeS-ANS/Anchor-Hub/releases" target="_blank" class="help-link">GitHub Releases</a>
-        <a href="https://github.com/MikeS-ANS/Anchor-Hub/issues" target="_blank" class="help-link">Report an Issue</a>
+        <a href="#" id="help-footer-releases" class="help-link">GitHub Releases</a>
+        <a href="#" id="help-footer-gitbook" class="help-link">Full Documentation</a>
       </div>
     </div>`;
 
   // Accordion toggle
   content.querySelectorAll('.help-section-header').forEach(header => {
     header.addEventListener('click', () => {
-      const sec   = header.closest('.help-section');
-      const body  = sec.querySelector('.help-section-body');
-      const chev  = header.querySelector('.help-chevron');
-      const open  = sec.classList.toggle('help-open');
+      const sec  = header.closest('.help-section');
+      const body = sec.querySelector('.help-section-body');
+      const chev = header.querySelector('.help-chevron');
+      const open = sec.classList.toggle('help-open');
       body.style.display = open ? '' : 'none';
       chev.textContent   = open ? '▼' : '▶';
     });
+  });
+
+  // Tool search filter
+  document.getElementById('help-tool-search').addEventListener('input', function () {
+    const q = this.value.trim().toLowerCase();
+    const cards = content.querySelectorAll('#help-tool-grid .help-tool-card');
+    let visible = 0;
+    cards.forEach(card => {
+      const hit = !q || card.dataset.name.includes(q) || card.dataset.desc.includes(q);
+      card.style.display = hit ? '' : 'none';
+      if (hit) visible++;
+    });
+    document.getElementById('help-tool-noresult').style.display = visible === 0 ? '' : 'none';
+  });
+
+  // Tool card clicks — open GitBook page
+  const toolList = TOOLS;
+  content.querySelectorAll('#help-tool-grid .help-tool-card').forEach((card, i) => {
+    card.addEventListener('click', () => {
+      const t = toolList[i];
+      window.api.homeOpenUrl(GITBOOK + (t.path || ''));
+    });
+  });
+
+  // Header / footer / support links
+  document.getElementById('help-gitbook-link').addEventListener('click', () => window.api.homeOpenUrl(GITBOOK));
+  document.getElementById('help-footer-releases').addEventListener('click', e => { e.preventDefault(); window.api.homeOpenUrl('https://github.com/MikeS-ANS/Anchor-Hub/releases'); });
+  document.getElementById('help-footer-gitbook').addEventListener('click', e => { e.preventDefault(); window.api.homeOpenUrl(GITBOOK); });
+  document.getElementById('help-btn-support').addEventListener('click', () => showSupportModal());
+  document.getElementById('help-btn-bug').addEventListener('click', () => {
+    window.api.homeOpenUrl('https://github.com/MikeS-ANS/Anchor-Hub/issues/new?labels=bug&template=bug_report.md');
   });
 
   // Show version

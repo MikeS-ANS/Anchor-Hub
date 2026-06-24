@@ -208,6 +208,42 @@ Drop ideas here. Nothing too small or too big.
 - [ ] New employee onboarding checklist tool
 - [ ] In-app bug / feedback reporter
 
+- [ ] **New Client Onboarding Wizard**
+  A guided, multi-step form that walks an employee through provisioning a brand-new client across Autotask end-to-end — no portal-hopping, no copy-pasting, no risk of creating a duplicate. Everything happens inside the Hub.
+
+  **The problem it solves:** Right now, onboarding a new client means opening Autotask, manually searching to make sure they don't already exist, creating the Company record from scratch, navigating to Contracts to build a T&M and a Managed Services contract, then creating the primary contact — all in separate screens. Easy to miss a field, easy to create a near-duplicate, and hard to train someone new on.
+
+  **How it works:**
+
+  1. **Duplicate check (before anything is created)**
+     The employee types the company name. The wizard immediately queries Autotask `/Companies/query` with a fuzzy search and surfaces any similar-sounding matches with confidence scores. If a strong match exists, they're warned with a "Did you mean…?" prompt before proceeding. No duplicates get created by accident.
+
+  2. **Company record creation**
+     A clean form collects the fields Autotask needs: legal name, primary phone, billing address, website, SIC code / industry, assigned account manager, and any internal notes. Required vs. optional fields are clearly marked. On submit, the wizard calls Autotask to create the Company and captures the new company ID for the steps that follow.
+
+  3. **Contract creation — T&M**
+     Pre-fills sensible defaults (contract name derived from company name, start date = today) and lets the employee confirm or adjust billing rates and the contract effective period. Calls Autotask to create the Time & Materials contract linked to the new Company.
+
+  4. **Contract creation — Managed Services (S&P)**
+     Same flow for the recurring Managed Services contract. Contract type, service tier, recurring amount, and billing cycle are configurable. Creates the contract in Autotask, linked to the same Company.
+
+  5. **Primary contact creation**
+     Collects first name, last name, title, email, and phone for the client's main point of contact. Creates the Contact record in Autotask and associates it with the new Company. Optionally flags them as the billing contact.
+
+  6. **Discovery Call ticket (optional)**
+     A toggle on the summary step: "This client needs a discovery call." When enabled, the wizard creates a T&M ticket in Autotask under the new Company — pre-titled "Discovery Call — [Company Name]", assigned to the employee who ran the wizard, with a configurable charge line for the call fee. The ticket is created with a "New" status so it flows into the normal service board immediately. The charge amount and billing code default to a configurable preset (so it's consistent across reps) but can be adjusted before confirming.
+
+  7. **Summary & confirmation**
+     A final review screen shows everything that was created — Company record link, both contract links, the new contact, and the discovery call ticket if one was created — with direct "Open in Autotask →" deep links for each. One-click copy of the AT Company ID for pasting into other systems.
+
+  **Nice-to-haves (future iterations):**
+  - Cross-check against Pax8 to catch if the client already exists there before creating a second billing record
+  - "Also create in Pax8" toggle — provisions the customer account in Pax8 in the same flow
+  - Send a welcome email to the new primary contact via Microsoft Graph (`Mail.Send`) once provisioning is complete
+  - Pre-populated contract templates (e.g., "Standard SMB", "Enterprise") so the employee picks a tier and all the contract fields fill in automatically
+
+  **Dependencies:** Autotask write API key (personal keytar key — same model already in place). Optional Pax8 API for cross-check. `Mail.Send` Graph scope for welcome email (Sprint 2.5).
+
 - [ ] **Hub Home / Quick-Access Intranet Page**
   Replace or supplement the current home screen with a proper internal portal — something that functions like a lightweight company intranet. Core ideas:
   - **Quick-launch tiles** for frequently used external websites and internal tools (Autotask, Pax8, Duo Admin, Datto, Microsoft 365 Admin, etc.) — one click, no hunting for bookmarks

@@ -180,8 +180,9 @@ contextBridge.exposeInMainWorld('api', {
   homeOpenUrl:         (url)  => ipcRenderer.invoke('home-open-url', url),
   homeGetAnnouncements: ()    => ipcRenderer.invoke('home-get-announcements'),
   homeGetQuickLinks:   ()     => ipcRenderer.invoke('home-get-quick-links'),
-  homeGetCalendar:     ()     => ipcRenderer.invoke('home-get-calendar'),
-  homeGetAtTickets:    (email) => ipcRenderer.invoke('home-get-at-tickets', email),
+  homeGetCalendar:       ()        => ipcRenderer.invoke('home-get-calendar'),
+  homeGetAtTickets:      (email)   => ipcRenderer.invoke('home-get-at-tickets', email),
+  homeSendSupportEmail:  (payload) => ipcRenderer.invoke('home-send-support-email', payload),
 
   // Auto-updater
   restartAndInstall:  ()    => ipcRenderer.send('restart-and-install'),

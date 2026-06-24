@@ -3,11 +3,13 @@ const fetch     = require('node-fetch');
 const { msalApp } = require('../shared/msal');
 const { atFetch } = require('../shared/at');
 
-const GRAPH    = 'https://graph.microsoft.com/v1.0';
-const SP_HOST  = 'anchornetworksolutions.sharepoint.com';
-const SP_PATH  = '/sites/Intranet';
+const GRAPH      = 'https://graph.microsoft.com/v1.0';
+const SP_HOST    = 'anchornetworksolutions.sharepoint.com';
+const SP_PATH    = '/sites/Intranet';
 const SP_SCOPES  = ['https://graph.microsoft.com/Sites.Manage.All'];
 const CAL_SCOPES = ['https://graph.microsoft.com/Calendars.Read'];
+const MAIL_SCOPE = ['https://graph.microsoft.com/Mail.Send'];
+const SUPPORT_TO = 'mikes@anchornetworksolutions.com';
 
 let _siteId        = null;
 let _listIds       = {};
@@ -116,7 +118,7 @@ module.exports = function registerHome(ipcMain) {
       const end   = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
       const r = await fetch(
         `${GRAPH}/me/calendarView?startDateTime=${encodeURIComponent(start)}&endDateTime=${encodeURIComponent(end)}&$select=subject,start,end,isAllDay,location&$orderby=start/dateTime&$top=20`,
-        { headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.timezone="America/New_York"' } }
+        { headers: { Authorization: `Bearer ${token}` } }
       );
       if (!r.ok) { console.error('[home] calendar', r.status); return { error: 'api_error' }; }
       const data = await r.json();
@@ -137,17 +139,29 @@ module.exports = function registerHome(ipcMain) {
     try {
       if (!email) return { error: 'no_email' };
 
-      // Look up this user's AT resource ID once per session
-      // AT stores login email in the 'userName' field on the Resources entity
+      // Look up this user's AT resource ID once per session.
+      // AT logins use @anchorns.com but M365 email is @anchornetworksolutions.com —
+      // try both so staff without a separate AT API account still get their tickets.
       if (!_atResourceId) {
-        const res = await atFetch('/Resources/query', {
-          method: 'POST',
-          body: JSON.stringify({ filter: [{ op: 'eq', field: 'userName', value: email }] }),
-        });
-        const resource = (res.items || [])[0];
-        if (resource) _atResourceId = resource.id;
-        console.log('[home] AT resource lookup for', email, '→ id:', resource?.id ?? 'not found');
+        const emailsToTry = [email];
+        if (email.toLowerCase().includes('@anchornetworksolutions.com')) {
+          emailsToTry.push(email.replace(/@anchornetworksolutions\.com$/i, '@anchorns.com'));
+        }
+        for (const tryEmail of emailsToTry) {
+          const res = await atFetch('/Resources/query', {
+            method: 'POST',
+            body: JSON.stringify({ filter: [{ op: 'eq', field: 'userName', value: tryEmail }] }),
+          });
+          const resource = (res.items || [])[0];
+          if (resource) { _atResourceId = resource.id; break; }
+          console.log('[home] AT resource lookup for', tryEmail, '→ not found');
+        }
+        console.log('[home] AT resource id resolved:', _atResourceId ?? 'none');
       }
+
+      const now           = new Date();
+      const todayStartTs  = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+      const todayEndTs    = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
 
       const [assignedRes, totalRes] = await Promise.all([
         _atResourceId
@@ -158,7 +172,7 @@ module.exports = function registerHome(ipcMain) {
                   { op: 'eq',    field: 'assignedResourceID', value: _atResourceId },
                   { op: 'noteq', field: 'status',             value: 5 },
                 ],
-                MaxRecords: 50,
+                MaxRecords: 200,
               }),
             })
           : Promise.resolve({ items: [] }),
@@ -174,8 +188,25 @@ module.exports = function registerHome(ipcMain) {
       const assigned  = assignedRes.items || [];
       const totalOpen = (totalRes.pageDetails?.count) ?? (totalRes.items || []).length;
 
-      // Fetch company names for top 5 assigned tickets
-      const top5 = assigned.slice(0, 5);
+      // Priority buckets
+      const critHigh = assigned.filter(t => t.priority <= 2);
+      const overdue  = assigned.filter(t => {
+        if (!t.dueDateTime) return false;
+        return new Date(t.dueDateTime).getTime() < todayStartTs;
+      });
+      const dueToday = assigned.filter(t => {
+        if (!t.dueDateTime) return false;
+        const ts = new Date(t.dueDateTime).getTime();
+        return ts >= todayStartTs && ts <= todayEndTs;
+      });
+
+      console.log('[home] AT tickets — assigned:', assigned.length, 'critHigh:', critHigh.length, 'overdue:', overdue.length, 'dueToday:', dueToday.length);
+
+      // Show top 5 assigned tickets sorted by priority (most urgent first)
+      const top5 = [...assigned]
+        .sort((a, b) => (a.priority || 99) - (b.priority || 99))
+        .slice(0, 5);
+
       const companyIds = [...new Set(top5.map(t => t.companyID).filter(Boolean))];
       const companyMap = {};
       if (companyIds.length) {
@@ -189,7 +220,10 @@ module.exports = function registerHome(ipcMain) {
       }
 
       return {
-        assignedCount: assigned.length,
+        assignedCount:  assigned.length,
+        critHighCount:  critHigh.length,
+        overdueCount:   overdue.length,
+        dueTodayCount:  dueToday.length,
         totalOpen,
         tickets: top5.map(t => ({
           id:          t.id,
@@ -200,6 +234,34 @@ module.exports = function registerHome(ipcMain) {
       };
     } catch (e) {
       console.error('[home] at-tickets error:', e.message);
+      return { error: e.message };
+    }
+  });
+
+  ipcMain.handle('home-send-support-email', async (_, { subject, body }) => {
+    try {
+      const token = await getGraphToken(MAIL_SCOPE);
+      if (!token) return { error: 'no_token' };
+      const r = await fetch(`${GRAPH}/me/sendMail`, {
+        method:  'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: {
+            subject,
+            body: { contentType: 'HTML', content: body },
+            toRecipients: [{ emailAddress: { address: SUPPORT_TO } }],
+          },
+          saveToSentItems: false,
+        }),
+      });
+      if (!r.ok) {
+        const txt = await r.text().catch(() => r.status);
+        console.error('[home] sendMail error:', r.status, txt);
+        return { error: `Send failed (${r.status})` };
+      }
+      return { ok: true };
+    } catch (e) {
+      console.error('[home] sendMail exception:', e.message);
       return { error: e.message };
     }
   });

@@ -50,6 +50,7 @@ html, body {
   flex-shrink: 0;
   user-select: none;
   position: relative;
+  z-index: 2;
 }
 .titlebar-drag { display: flex; align-items: center; flex: 1; }
 .app-brand { display: flex; align-items: center; gap: 8px; }
@@ -116,7 +117,7 @@ html, body {
 .update-btn-later:hover { color: #e0eaff; border-color: rgba(148,180,224,0.6); }
 
 /* ─── App shell ────────────────────────────────────────────────────────────── */
-.app-shell { display: flex; height: calc(100vh - 38px); overflow: hidden; }
+.app-shell { display: flex; height: calc(100vh - 38px); overflow: hidden; position: relative; z-index: 1; }
 
 /* ─── Sidebar ──────────────────────────────────────────────────────────────── */
 .sidebar {
@@ -256,22 +257,32 @@ html, body {
   background-size: 42px 42px;
   mask-image: radial-gradient(circle at 80% 15%, black, transparent 55%);
 }
-/* Oversized anchor watermark — barely visible, upper-right */
-.content::after {
-  content: "⚓";
-  position: absolute;
-  top: 24px;
-  right: 56px;
-  font-size: 180px;
-  line-height: 1;
-  color: rgba(148, 163, 184, 0.055);
-  pointer-events: none;
-  z-index: 0;
-  transform: rotate(-4deg);
-  user-select: none;
-}
 /* Keep all real content above the pseudo-element layers */
 .content > * { position: relative; z-index: 1; }
+
+/* ─── Fixed background visual layers (constellation anchor + orange webbing) ── */
+#hub-bg {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+#bg-webbing {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: clamp(300px, 50vw, 680px);
+  height: auto;
+}
+#bg-anchor {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: clamp(190px, 26vw, 310px);
+  height: auto;
+}
+#update-banner { position: relative; z-index: 2; }
 
 .view-header { margin-bottom: 24px; }
 .view-title { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 6px; }
@@ -1245,7 +1256,7 @@ code.ph {
 }
 
 /* ─── Help page ──────────────────────────────────────────────────────────────── */
-.help-body { max-width: 680px; }
+.help-body { max-width: 760px; }
 
 .help-section {
   border: 1px solid var(--border);
@@ -1434,6 +1445,80 @@ code.ph {
   font-size: 11px;
 }
 .help-link:hover { text-decoration: underline; }
+
+/* Search input */
+.help-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  font-size: 12px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  outline: none;
+  margin-bottom: 12px;
+  font-family: var(--font-sans);
+}
+.help-search-input::placeholder { color: var(--text-muted); opacity: 1; }
+.help-search-input:focus { border-color: var(--border-2); }
+
+/* Clickable tool card */
+.help-tool-clickable {
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  display: flex;
+  flex-direction: column;
+}
+.help-tool-clickable:hover {
+  border-color: var(--accent);
+  background: rgba(194,118,55,0.06);
+}
+.help-tool-docs-link {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--accent);
+  margin-top: auto;
+  padding-top: 10px;
+  font-weight: 600;
+}
+
+/* Support bar */
+.help-support-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.help-support-label { font-size: 12px; color: var(--text-muted); }
+.help-support-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Small action button (help page + view headers) */
+.help-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  font-family: var(--font-sans);
+}
+.help-btn:hover {
+  background: rgba(255,255,255,0.06);
+  border-color: var(--border-2);
+}
 
 /* ─── BlackPoint Endpoint Usage ──────────────────────────────────────────────── */
 .bp-status-area { margin-bottom: 16px; }
@@ -1789,34 +1874,43 @@ code.ph {
 .start-cal-loc { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 .start-cal-info { min-width: 0; }
 /* Tickets */
-.start-ticket-stats {
-  display: flex; gap: 20px;
+.start-ticket-buckets {
+  display: flex; flex-direction: column; gap: 0;
 }
-.start-ticket-stat {
-  display: flex; flex-direction: column; gap: 2px;
+.start-ticket-bucket {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 0; border-bottom: 1px solid var(--border-2);
 }
-.start-ticket-label {
-  font-size: 11px; color: var(--text-muted);
+.start-ticket-bucket:last-child { border-bottom: none; }
+.start-bucket-label {
+  font-size: 12px; color: var(--text-muted);
 }
-.start-ticket-count {
-  font-size: 28px; font-weight: 700; color: var(--text); line-height: 1;
-  font-family: var(--font-sans);
+.start-bucket-count {
+  font-size: 18px; font-weight: 700; color: var(--text-muted);
+  font-family: var(--font-sans); line-height: 1;
 }
-.start-ticket-warn { color: var(--error); }
+.start-bucket-hot { color: var(--error); }
 .start-ticket-list {
-  display: flex; flex-direction: column; gap: 4px;
-  border-top: 1px solid var(--border); padding-top: 10px;
+  display: flex; flex-direction: column; gap: 3px;
+  border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px;
 }
 .start-ticket-row {
   display: flex; align-items: center; gap: 8px;
-  padding: 3px 0;
+  padding: 2px 0;
 }
 .start-pri-dot {
   width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
 }
+.start-ticket-meta {
+  display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1;
+}
 .start-ticket-name {
   font-size: 12px; color: var(--text); white-space: nowrap;
-  overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.start-ticket-company {
+  font-size: 10px; color: var(--text-muted); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
 }
 .start-open-at {
   font-size: 12px; padding-top: 6px;
