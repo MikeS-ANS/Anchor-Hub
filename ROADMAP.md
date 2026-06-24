@@ -62,6 +62,22 @@ Do these in order. The Azure backend work unlocks everything below it.
 - [ ] **Intune / MDM deployment**
   Package as Win32 app and push via Intune. Solves Windows SmartScreen for all managed employee machines immediately — no cert required for internal distribution.
 
+- [ ] **Datto RMM Quick Job — Install / Update Anchor Hub**
+  PowerShell script that downloads the latest installer from the GitHub release and runs it silently. Can be targeted to specific sites or devices from the RMM console for on-demand installs without having to walk someone through it manually.
+  - Download URL pulled from `latest.yml` on the GitHub release so it always gets the current version
+  - Silent install: `Anchor-Hub-Setup-x.x.x.exe /S`
+  - Works alongside auto-update — use this for first installs or forced re-installs; the app handles its own updates from there
+  - Once repo is private, script will need a PAT with `Contents: read` to download the asset
+
+- [ ] **Make GitHub repo private + extract sensitive config**
+  The public repo currently contains ANS's Azure AD Tenant ID, Client ID, SharePoint hostname, and internal email addresses in plain text. Plan:
+  1. Extract `MSAL_CLIENT_ID`, `MSAL_TENANT_ID`, `SP_HOST`, and `SUPPORT_TO` into a `config.js` file
+  2. Add `config.js` to `.gitignore`
+  3. Rewrite git history to remove the values from past commits (or accept the exposure is historical and just go private — past commits aren't searchable once private)
+  4. Flip repo to private in GitHub settings
+  5. Configure electron-updater with a read-only fine-grained PAT for update checks
+  No end-user impact — config is baked into the installer at build time.
+
 ---
 
 ### Sprint 2 — Azure Backend
