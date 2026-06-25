@@ -3,6 +3,90 @@ const path = require('path');
 const { dialog, shell } = require('electron');
 const { USER_DATA, getMainWindow } = require('../shared/state');
 const { loadPromptTemplates, DEFAULT_KASEYA_PROMPT_HEADER, firstOfCurrentMonth, lastOfCurrentMonth } = require('../shared/promptTemplates');
+const { loadHubDirectory, saveHubDirectory, buildPlatformLookup, upsertPlatformEntry, upsertKaseyaEntry, setPlatformExcluded,
+        getGraphToken, getSpDriveBase, spDownload } = require('../shared/hubDirectory');
+const fetch = require('node-fetch');
+const { atQuery, atFetch } = require('../shared/at');
+
+// SharePoint: ANSVendors library, /Kaseya/Invoices/{year}/*.xls
+const SP_VENDORS_LIB       = 'ANSVendors';
+const KASEYA_SP_BASE_PATH  = '/Kaseya/Invoices';
+
+async function spGraphFetch(spPath, opts = {}) {
+  const tokenRes  = await getGraphToken();
+  const base      = await getSpDriveBase(tokenRes, SP_VENDORS_LIB);
+  const fetchOpts = {
+    method: opts.method || 'GET',
+    headers: { Authorization: `Bearer ${tokenRes.accessToken}`, ...opts.headers },
+  };
+  if (opts.body !== undefined) fetchOpts.body = opts.body;
+  const res = await fetch(`${base}${spPath}`, fetchOpts);
+  if (!res.ok) {
+    if (res.status === 404) return null;
+    const body = await res.text().catch(() => '');
+    throw new Error(`SP ${res.status}: ${body.slice(0, 200)}`);
+  }
+  return res.json();
+}
+
+// List year subfolders under /Kaseya/Invoices
+async function spListYears() {
+  const result = await spGraphFetch(`${KASEYA_SP_BASE_PATH}:/children`);
+  return (result?.value || [])
+    .filter(i => i.folder && /^\d{4}$/.test(i.name))
+    .map(i => i.name)
+    .sort((a, b) => b.localeCompare(a));
+}
+
+// List .xls/.xlsx files inside a year folder
+async function spListFiles(year) {
+  const result = await spGraphFetch(`${KASEYA_SP_BASE_PATH}/${year}:/children`);
+  return (result?.value || [])
+    .filter(i => i.file && /\.xls$/i.test(i.name))
+    .map(i => ({
+      name:          i.name,
+      downloadUrl:   i['@microsoft.graph.downloadUrl'] || null,
+      driveItemId:   i.id,
+      size:          i.size,
+      lastModified:  i.lastModifiedDateTime,
+    }))
+    .sort((a, b) => {
+      const da = (a.name.match(/_(\d{8})/) || [])[1] || '';
+      const db = (b.name.match(/_(\d{8})/) || [])[1] || '';
+      return db.localeCompare(da) || (b.lastModified || '').localeCompare(a.lastModified || '');
+    });
+}
+
+// Download a file by driveItemId and return a Buffer
+async function spDownloadFile(driveItemId) {
+  const tokenRes  = await getGraphToken();
+  const base      = await getSpDriveBase(tokenRes, SP_VENDORS_LIB);
+
+  // Step 1: fetch item metadata to get a pre-authenticated download URL (no auth on redirect)
+  const itemUrl = `${base.replace('/root:', `/items/${driveItemId}`)}`;
+  const metaRes = await fetch(itemUrl, {
+    headers: { Authorization: `Bearer ${tokenRes.accessToken}` },
+  });
+  if (!metaRes.ok) throw new Error(`SP file lookup failed: ${metaRes.status}`);
+  const meta   = await metaRes.json();
+  const dlUrl  = meta['@microsoft.graph.downloadUrl'];
+  if (!dlUrl) throw new Error('SharePoint did not return a download URL for this file');
+
+  // Step 2: download binary with retry up to ~31 s to handle intermittent ECONNRESET
+  const MAX_ATTEMPTS = 6;
+  let lastErr;
+  for (let i = 0; i < MAX_ATTEMPTS; i++) {
+    try {
+      const res = await fetch(dlUrl);
+      if (!res.ok) throw new Error(`SP download ${res.status}`);
+      return Buffer.from(await res.arrayBuffer());
+    } catch (e) {
+      lastErr = e;
+      if (i < MAX_ATTEMPTS - 1) await new Promise(r => setTimeout(r, 1000 * Math.pow(2, i)));
+    }
+  }
+  throw lastErr;
+}
 
 // Kaseya settings live in app directory (not userData) — same as original main.js
 const KASEYA_SETTINGS_FILE  = path.join(path.resolve(__dirname, '../..'), 'pax8hub-kaseya-settings.json');
@@ -19,8 +103,7 @@ const DEFAULT_KASEYA_SETTINGS = {
   psa:    { strategic: 35, serviceDelivery: 25, admin: 15, coManaged: 25 },
   rmm:    { strategic: 50, serviceDelivery: 50 },
   itGlue: { strategic: 50, serviceDelivery: 35, admin: 15 },
-  saas:   { bundledPct: 36 },
-  dwp:    { bundledPct: 7 },
+  workplaceBundles: [],
 };
 
 const KASEYA_QBO = {
@@ -43,29 +126,31 @@ function loadKaseyaSettings() {
       psa:    { ...DEFAULT_KASEYA_SETTINGS.psa,    ...(s.psa    || {}) },
       rmm:    { ...DEFAULT_KASEYA_SETTINGS.rmm,    ...(s.rmm    || {}) },
       itGlue: { ...DEFAULT_KASEYA_SETTINGS.itGlue, ...(s.itGlue || {}) },
-      saas:   { ...DEFAULT_KASEYA_SETTINGS.saas,   ...(s.saas   || {}) },
-      dwp:    { ...DEFAULT_KASEYA_SETTINGS.dwp,    ...(s.dwp    || {}) },
+      workplaceBundles: Array.isArray(s.workplaceBundles) ? s.workplaceBundles : [],
     };
   } catch { return JSON.parse(JSON.stringify(DEFAULT_KASEYA_SETTINGS)); }
 }
 
-function buildKaseyaQboEntries(modules, settings) {
+// bundledAmounts: { saas: $, dwp: $ } — actual dollar amounts from bundle overrides/flags.
+// saas is 0 at processing time (requires async Revenue file); updated later from renderer.
+// dwp is computed from workplaceBundles seat counts × per-seat rate.
+function buildKaseyaQboEntries(modules, settings, bundledAmounts = {}) {
   const entries = [];
   const r2 = (v) => Math.round(v * 100) / 100;
 
   const saas = modules['SaaS Protection']?.total || 0;
   if (saas !== 0) {
-    const bundled = r2(saas * settings.saas.bundledPct / 100);
-    entries.push({ description: `Datto SaaS – Standalone (${100 - settings.saas.bundledPct}%)`, amount: r2(saas - bundled), account: KASEYA_QBO.saasStandalone, class: '' });
-    if (bundled !== 0) entries.push({ description: `Datto SaaS – Bundled (${settings.saas.bundledPct}%)`, amount: bundled, account: KASEYA_QBO.saasBundled, class: '' });
+    const bundled = r2(bundledAmounts.saas || 0);
+    entries.push({ description: 'Datto SaaS – Standalone', amount: r2(saas - bundled), account: KASEYA_QBO.saasStandalone, class: '' });
+    if (bundled !== 0) entries.push({ description: 'Datto SaaS – Bundled', amount: bundled, account: KASEYA_QBO.saasBundled, class: '' });
   }
 
   const dwp = modules['DWP']?.total || 0;
   const dfp = modules['DFP']?.total || 0;
   if (dwp !== 0 || dfp !== 0) {
-    const dwpBundled = r2(dwp * settings.dwp.bundledPct / 100);
-    entries.push({ description: `DWP + DFP – Standalone (${100 - settings.dwp.bundledPct}%)`, amount: r2((dwp - dwpBundled) + dfp), account: KASEYA_QBO.dwpStandalone, class: '' });
-    if (dwpBundled !== 0) entries.push({ description: `DWP – Bundled (${settings.dwp.bundledPct}%)`, amount: dwpBundled, account: KASEYA_QBO.dwpBundled, class: '' });
+    const dwpBundled = r2(bundledAmounts.dwp || 0);
+    entries.push({ description: 'DWP + DFP – Standalone', amount: r2((dwp - dwpBundled) + dfp), account: KASEYA_QBO.dwpStandalone, class: '' });
+    if (dwpBundled !== 0) entries.push({ description: 'DWP – Bundled', amount: dwpBundled, account: KASEYA_QBO.dwpBundled, class: '' });
   }
 
   const psa = modules['PSA']?.total || 0;
@@ -96,10 +181,10 @@ function buildKaseyaQboEntries(modules, settings) {
   if (continuity !== 0) entries.push({ description: 'Datto Cloud Continuity', amount: continuity, account: KASEYA_QBO.bdr, class: '' });
 
   const bcdr = (modules['BCDR']?.total || 0) + (modules['Azure Cloud Siris']?.total || 0);
-  if (bcdr !== 0) entries.push({ description: 'Datto BCDR (reconcile separately)', amount: bcdr, account: KASEYA_QBO.bdr, class: '', manual: true });
+  if (bcdr !== 0) entries.push({ description: 'Datto BCDR', amount: bcdr, account: KASEYA_QBO.bdr, class: '' });
 
   const networking = modules['Networking']?.total || 0;
-  if (networking !== 0) entries.push({ description: 'Networking (reconcile separately)', amount: networking, account: KASEYA_QBO.networking, class: '', manual: true });
+  if (networking !== 0) entries.push({ description: 'Networking', amount: networking, account: KASEYA_QBO.networking, class: '' });
 
   const av = modules['Antivirus']?.total || 0;
   if (av !== 0) entries.push({ description: 'BitDefender Antivirus', amount: av, account: KASEYA_QBO.antivirus, class: '' });
@@ -123,6 +208,44 @@ function buildKaseyaQboEntries(modules, settings) {
   return entries;
 }
 
+// ─── Revenue file (ANS-Finance › Managed Service Clients) ────────────────────
+const REVENUE_LIB  = 'ANS-Finance';
+const REVENUE_PATH = '/Managed%20Service%20Clients/Managed%20Service%20Client%20MSC.xlsx:';
+let _revenueCache = null;
+
+async function loadRevenueData() {
+  if (_revenueCache) return _revenueCache;
+  const tokenRes = await getGraphToken();
+  const base = await getSpDriveBase(tokenRes, REVENUE_LIB);
+
+  const metaRes = await fetch(`${base}${REVENUE_PATH}`, {
+    headers: { Authorization: `Bearer ${tokenRes.accessToken}` },
+  });
+  if (!metaRes.ok) throw new Error(`Revenue file not found in ANS-Finance library (${metaRes.status})`);
+  const meta = await metaRes.json();
+  const dlUrl = meta['@microsoft.graph.downloadUrl'];
+  if (!dlUrl) throw new Error('No pre-auth download URL for Revenue file');
+
+  const fileRes = await fetch(dlUrl);
+  if (!fileRes.ok) throw new Error(`Revenue file download failed: ${fileRes.status}`);
+  const buffer = Buffer.from(await fileRes.arrayBuffer());
+
+  const XLSX = require('xlsx');
+  const wb = XLSX.read(buffer, { type: 'buffer' });
+  const ws = wb.Sheets['Revenue'];
+  if (!ws) throw new Error(`Revenue tab not found (available: ${wb.SheetNames.join(', ')})`);
+
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  const result = [];
+  for (let i = 1; i < rows.length; i++) {
+    const client = String(rows[i][1] || '').trim();
+    const seats  = parseInt(rows[i][2], 10);
+    if (client && !isNaN(seats) && seats > 0) result.push({ client, includedSeats: seats });
+  }
+  _revenueCache = result;
+  return result;
+}
+
 module.exports = function registerKaseyaProcessor(ipcMain) {
   ipcMain.handle('get-kaseya-settings', () => loadKaseyaSettings());
 
@@ -131,20 +254,37 @@ module.exports = function registerKaseyaProcessor(ipcMain) {
     return { success: true };
   });
 
-  ipcMain.handle('browse-kaseya-xls', async () => {
-    const result = await dialog.showOpenDialog(getMainWindow(), {
-      title: 'Select Kaseya Invoice',
-      filters: [{ name: 'Excel Files', extensions: ['xls', 'xlsx'] }],
-      properties: ['openFile'],
-    });
-    if (result.canceled || !result.filePaths.length) return { canceled: true };
-    return { filePath: result.filePaths[0] };
+  // ── SharePoint invoice listing ──────────────────────────────────────────────
+
+  // Returns { ok, years: ['2026','2025',...] }
+  ipcMain.handle('kaseya-sp-list-years', async () => {
+    try {
+      const years = await spListYears();
+      return { ok: true, years };
+    } catch (e) { return { ok: false, error: e.message, years: [] }; }
   });
 
-  ipcMain.handle('process-kaseya-xls', (_, { filePath }) => {
+  // Returns { ok, files: [{ name, driveItemId, lastModified, size }] }
+  ipcMain.handle('kaseya-sp-list-files', async (_, { year }) => {
     try {
+      const files = await spListFiles(year);
+      return { ok: true, files };
+    } catch (e) { return { ok: false, error: e.message, files: [] }; }
+  });
+
+  // Download a file from SP by driveItemId and process it — same parsing logic as process-kaseya-xls
+  ipcMain.handle('kaseya-sp-process-file', async (_, { driveItemId, fileName }) => {
+    try {
+      const buf = await spDownloadFile(driveItemId);
+      return await processKaseyaBuffer(buf, fileName || 'invoice.xls');
+    } catch (e) { return { success: false, error: e.message }; }
+  });
+
+// ── Core XLS parser (shared by local file + SP download) ─────────────────────
+async function processKaseyaBuffer(buf, fileName) {
+  try {
       const XLSX = require('xlsx');
-      const wb   = XLSX.readFile(filePath, { cellDates: false, raw: false });
+      const wb   = XLSX.read(buf, { cellDates: false, raw: false });
 
       const sheetName = wb.SheetNames.find(n => n === 'Details')
                      || wb.SheetNames.find(n => n === 'Details2')
@@ -188,10 +328,11 @@ module.exports = function registerKaseyaProcessor(ipcMain) {
       const parseNum = v => parseFloat(String(v ?? '').replace(/[$,\s\r\n]/g, '')) || 0;
       const cleanCompany = raw => {
         if (!raw) return '';
-        return raw.split(/\s+/).map(w => w.replace(/^[.,\-'"]+|[.,\-'"]+$/g, '')).filter(Boolean).join(' ');
+        let s = raw.replace(/\s*-\s*evergreen\s*$/i, '').trim();
+        return s.split(/\s+/).map(w => w.replace(/^[.,\-'"]+|[.,\-'"]+$/g, '')).filter(Boolean).join(' ');
       };
 
-      const fname       = path.basename(filePath, path.extname(filePath));
+      const fname       = path.basename(fileName, path.extname(fileName));
       const dateMatch   = fname.match(/_(\d{8})_/);
       const invoiceDate = dateMatch ? `${dateMatch[1].slice(0,4)}-${dateMatch[1].slice(4,6)}-${dateMatch[1].slice(6,8)}` : '';
       const billingStart = firstOfCurrentMonth(invoiceDate);
@@ -210,18 +351,34 @@ module.exports = function registerKaseyaProcessor(ipcMain) {
       const netProductMap = new Map();
       const bcdrClientMap = new Map();
       const saasClientMap = new Map();
+      const blankModuleRows  = [];
+      let   blankCategoryCount = 0;
 
       for (const row of rows) {
         const company  = cleanCompany(companyCol ? String(row[companyCol] ?? '') : '');
-        const module   = String(row[moduleCol] ?? '').trim();
-        const category = categoryCol ? String(row[categoryCol] ?? '').trim() : '';
-        const product  = productCol  ? String(row[productCol]  ?? '').trim() : '';
+        let   module   = String(row[moduleCol] ?? '').trim().replace(/\s*-\s*evergreen\s*$/i, '');
+        const category = categoryCol ? String(row[categoryCol] ?? '').trim().replace(/\s*-\s*evergreen\s*$/i, '') : '';
+        const product  = productCol  ? String(row[productCol]  ?? '').trim().replace(/\s*-\s*evergreen\s*$/i, '') : '';
+        const desc     = descCol     ? String(row[descCol]     ?? '').trim() : '';
         const qty        = parseNum(row[qtyCol]);
         const licenseQty = licenseUsageCol ? parseNum(row[licenseUsageCol]) : 0;
         const rate       = parseNum(row[rateCol]);
         const total    = parseNum(row[totalCol]);
 
-        if (!module) continue;
+        // Hard-coded fallbacks for rows where Kaseya leaves Module blank
+        if (!module) {
+          const sig = (desc + ' ' + product).toLowerCase();
+          if (/connectbooster/.test(sig))              module = 'Payment';
+          else if (/shipping/.test(sig))               module = 'Shipping';
+          else if (/bitdefender|antivirus/.test(sig))  module = 'Antivirus';
+        }
+
+        if (!module) {
+          blankModuleRows.push({ company: company || '(no company)', desc: desc || product || '(unknown)', total });
+          continue;
+        }
+
+        if (!category) blankCategoryCount++;
 
         if (!moduleMap.has(module)) moduleMap.set(module, { total: 0, qty: 0, lineCount: 0 });
         const mm = moduleMap.get(module);
@@ -230,12 +387,18 @@ module.exports = function registerKaseyaProcessor(ipcMain) {
         if (category) categoryMap.set(category, (categoryMap.get(category) || 0) + total);
 
         const clientKey = company || '(blank)';
-        if (!clientMap.has(clientKey)) clientMap.set(clientKey, { total: 0, totalQty: 0, totalLicQty: 0, modules: new Map() });
+        if (!clientMap.has(clientKey)) clientMap.set(clientKey, { total: 0, totalQty: 0, totalLicQty: 0, modules: new Map(), productItems: new Map() });
         const cm = clientMap.get(clientKey);
         cm.total += total; cm.totalQty += qty; cm.totalLicQty += licenseQty;
-        if (!cm.modules.has(module)) cm.modules.set(module, { total: 0, qty: 0 });
-        cm.modules.get(module).total += total;
-        cm.modules.get(module).qty   += qty;
+        if (!cm.modules.has(module)) cm.modules.set(module, { total: 0, qty: 0, licenseQty: 0 });
+        cm.modules.get(module).total      += total;
+        cm.modules.get(module).qty        += qty;
+        cm.modules.get(module).licenseQty += licenseQty;
+        const productKey = product || desc || module;
+        if (!cm.productItems.has(productKey)) cm.productItems.set(productKey, { total: 0, qty: 0, licenseQty: 0, module });
+        cm.productItems.get(productKey).total      += total;
+        cm.productItems.get(productKey).qty        += qty;
+        cm.productItems.get(productKey).licenseQty += licenseQty;
 
         if (workplaceModules.has(module)) {
           if (!wkProductMap.has(product)) wkProductMap.set(product, { qty: 0, rates: [], total: 0 });
@@ -244,7 +407,8 @@ module.exports = function registerKaseyaProcessor(ipcMain) {
           if (company) {
             if (!wkUsageMap.has(company)) wkUsageMap.set(company, new Map());
             const cu = wkUsageMap.get(company);
-            cu.set(product, (cu.get(product) || 0) + qty);
+            // DWP/DFP seat count is in Billed Quantity; License Usage is a fallback
+            cu.set(product, (cu.get(product) || 0) + (licenseQty || qty));
           }
         }
 
@@ -266,7 +430,7 @@ module.exports = function registerKaseyaProcessor(ipcMain) {
           if (module === 'BCDR' && company) bcdrClientMap.set(company, (bcdrClientMap.get(company) || 0) + total);
         }
 
-        if (module === 'SaaS Protection' && company) saasClientMap.set(company, (saasClientMap.get(company) || 0) + qty);
+        if (module === 'SaaS Protection' && company) saasClientMap.set(company, (saasClientMap.get(company) || 0) + licenseQty);
       }
 
       const r2      = v => parseFloat(v.toFixed(2));
@@ -285,10 +449,12 @@ module.exports = function registerKaseyaProcessor(ipcMain) {
 
       const clients = [];
       for (const [name, d] of clientMap) {
-        if (d.totalQty === 0 && d.totalLicQty === 0) continue;
+        if (d.total === 0 && d.totalQty === 0 && d.totalLicQty === 0) continue;
         const mods = {};
-        for (const [mName, mData] of d.modules) mods[mName] = { total: r2(mData.total), qty: mData.qty };
-        clients.push({ name, total: r2(d.total), modules: mods });
+        for (const [mName, mData] of d.modules) mods[mName] = { total: r2(mData.total), qty: mData.qty, licenseQty: mData.licenseQty || 0 };
+        const prods = {};
+        for (const [pName, pData] of d.productItems) prods[pName] = { total: r2(pData.total), qty: pData.qty, licenseQty: pData.licenseQty || 0, module: pData.module };
+        clients.push({ name, total: r2(d.total), modules: mods, productItems: prods });
       }
       sortByName(clients);
 
@@ -324,8 +490,17 @@ module.exports = function registerKaseyaProcessor(ipcMain) {
         .map(([name, qty]) => ({ name, qty }))
         .sort((a, b) => a.name.localeCompare(b.name));
 
-      const settings   = loadKaseyaSettings();
-      const qboEntries = buildKaseyaQboEntries(modules, settings);
+      const settings = loadKaseyaSettings();
+
+      // Compute DWP/DFP bundled amount: bundledSeats × avg rate per product from this invoice
+      const wpRateMap = new Map(workplaceProducts.map(p => [p.name, p.avgRate]));
+      const dwpBundledAmt = r2((settings.workplaceBundles || []).reduce((s, b) => {
+        const rate = wpRateMap.get(b.product) || 0;
+        return s + (b.bundledSeats || 0) * rate;
+      }, 0));
+
+      // saas bundled amount starts at 0 — renderer updates it after loading Revenue SP file
+      const qboEntries = buildKaseyaQboEntries(modules, settings, { saas: 0, dwp: dwpBundledAmt });
 
       const snapKey = invoiceDate ? invoiceDate.slice(0, 7) : new Date().toISOString().slice(0, 7);
       const columnsDetectedSnap = { company: companyCol || '(not found)', module: moduleCol, qty: qtyCol, rate: rateCol, total: totalCol };
@@ -335,11 +510,23 @@ module.exports = function registerKaseyaProcessor(ipcMain) {
         saveKaseyaSnapshots(snaps);
       } catch (_) { /* non-fatal */ }
 
-      return { success: true, fileName: fname, invoiceDate, billingStart, billingEnd, snapKey, modules, categories, grandTotal, totalLines: rows.length, sheetUsed: sheetName, columnsDetected: { company: companyCol || '(not found)', module: moduleCol, qty: qtyCol, rate: rateCol, total: totalCol }, clients, clientTotals: ctArray, qboEntries, workplaceProducts, workplaceProductNames, workplaceUsage, anchorTools, saasCosts, backupProducts, networkingProducts, bcdrCosts };
-    } catch (e) {
-      return { success: false, error: e.message };
-    }
-  });
+      // Enrich clients with AT company data from the central hub
+      try {
+        const hub = await loadHubDirectory();
+        if (hub) {
+          const lookup = buildPlatformLookup(hub, 'kaseya');
+          for (const c of clients) {
+            const match = lookup.get((c.name || '').toLowerCase().trim());
+            if (match) { c.atId = match.atId; c.atName = match.atName; }
+          }
+        }
+      } catch (_) { /* non-fatal — continue without AT enrichment */ }
+
+      return { success: true, fileName: fname, invoiceDate, billingStart, billingEnd, snapKey, modules, categories, grandTotal, totalLines: rows.length, sheetUsed: sheetName, columnsDetected: { company: companyCol || '(not found)', module: moduleCol, qty: qtyCol, rate: rateCol, total: totalCol }, clients, clientTotals: ctArray, qboEntries, workplaceProducts, workplaceProductNames, workplaceUsage, anchorTools, saasCosts, backupProducts, networkingProducts, bcdrCosts, blankModuleRows, blankCategoryCount };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
 
   ipcMain.handle('export-kaseya-report', async (_, data) => {
     try {
@@ -506,39 +693,66 @@ module.exports = function registerKaseyaProcessor(ipcMain) {
     }
   });
 
-  ipcMain.handle('generate-kaseya-at-prompt', (_, data) => {
+  // Download + process two SP files and diff them (no local snapshot required)
+  ipcMain.handle('compare-kaseya-sp-files', async (_, { idA, nameA, idB, nameB }) => {
     try {
-      const invoiceRef   = data.fileName || '';
-      const billingStart = data.billingStart || firstOfCurrentMonth('');
-      const billingEnd   = data.billingEnd   || lastOfCurrentMonth('');
-      const templates    = loadPromptTemplates();
-      let header = (templates.kaseyaPromptHeader ?? DEFAULT_KASEYA_PROMPT_HEADER)
-        .replace(/\{invoiceRef\}/g,    invoiceRef)
-        .replace(/\{billingStart\}/g,  billingStart)
-        .replace(/\{billingEnd\}/g,    billingEnd)
-        .replace(/\{\{BILLING_MONTH_START\}\}/g, billingStart)
-        .replace(/\{\{BILLING_MONTH_END\}\}/g,   billingEnd);
+      const [bufA, bufB] = await Promise.all([spDownloadFile(idA), spDownloadFile(idB)]);
+      const [resA, resB] = await Promise.all([
+        processKaseyaBuffer(bufA, nameA || 'invoice_a.xls'),
+        processKaseyaBuffer(bufB, nameB || 'invoice_b.xls'),
+      ]);
+      if (!resA.success) return { error: `File A: ${resA.error}` };
+      if (!resB.success) return { error: `File B: ${resB.error}` };
 
-      const lines = [header];
-      const mods = [
-        { key: 'SaaS Protection', label: 'SAAS PROTECTION' },
-        { key: 'BCDR',            label: 'BCDR' },
-        { key: 'DWP',             label: 'DATTO WORKPLACE (DWP)' },
-        { key: 'RMM',             label: 'DATTO RMM' },
-        { key: 'Antivirus',       label: 'ANTIVIRUS' },
-        { key: 'Cloud Continuity', label: 'CLOUD CONTINUITY' },
-      ];
-      for (const mod of mods) {
-        const clients = (data.clients || []).filter(c => (c.modules[mod.key]?.qty || 0) > 0);
-        if (!clients.length) continue;
-        lines.push(''); lines.push(`--- ${mod.label} ---`);
-        for (const c of clients) {
-          const m = c.modules[mod.key];
-          lines.push(`Company: ${c.name} — Qty: ${Math.ceil(m.qty)} | Cost: $${m.total.toFixed(2)}`);
-        }
-      }
-      return { prompt: lines.join('\n') };
-    } catch (e) { return { prompt: `Error: ${e.message}` }; }
+      const a = resA, b = resB;
+      const r2     = v => Math.round(v * 100) / 100;
+      const pct    = (av, bv) => av !== 0 ? Math.round((bv - av) / Math.abs(av) * 1000) / 10 : null;
+      const status = (av, bv) => av === 0 && bv > 0 ? 'new' : bv === 0 && av > 0 ? 'dropped' : bv > av ? 'up' : bv < av ? 'down' : 'same';
+
+      const grandTotal = { a: a.grandTotal, b: b.grandTotal, delta: r2(b.grandTotal - a.grandTotal), pct: pct(a.grandTotal, b.grandTotal) };
+
+      const allModKeys = [...new Set([...Object.keys(a.modules || {}), ...Object.keys(b.modules || {})])].sort();
+      const modules = allModKeys.map(name => {
+        const av = a.modules[name]?.total || 0, bv = b.modules[name]?.total || 0;
+        return { name, a: av, b: bv, delta: r2(bv - av), pct: pct(av, bv), status: status(av, bv) };
+      }).filter(m => m.delta !== 0);
+
+      const allCatKeys = [...new Set([...Object.keys(a.categories || {}), ...Object.keys(b.categories || {})])].sort();
+      const categories = allCatKeys.map(name => {
+        const av = a.categories[name] || 0, bv = b.categories[name] || 0;
+        return { name, a: av, b: bv, delta: r2(bv - av), pct: pct(av, bv), status: status(av, bv) };
+      }).filter(c => c.delta !== 0);
+
+      const aMap = Object.fromEntries((a.clients || []).map(c => [c.name, c]));
+      const bMap = Object.fromEntries((b.clients || []).map(c => [c.name, c]));
+      const allNames = [...new Set([...(a.clients || []).map(c => c.name), ...(b.clients || []).map(c => c.name)])]
+        .filter(n => n && n !== '(blank)').sort();
+      const clients = allNames.map(name => {
+        const ac = aMap[name], bc = bMap[name];
+        const av = ac?.total || 0, bv = bc?.total || 0;
+        const aProds = ac?.productItems || {}, bProds = bc?.productItems || {};
+        const allPNames = [...new Set([...Object.keys(aProds), ...Object.keys(bProds)])];
+        // Compute productDeltas first — includes usage-qty changes even when dollar total is unchanged
+        const productDeltas = allPNames.map(p => {
+          const apv  = aProds[p]?.total      || 0, bpv  = bProds[p]?.total      || 0;
+          const apq  = aProds[p]?.qty        || 0, bpq  = bProds[p]?.qty        || 0;
+          const aplq = aProds[p]?.licenseQty || 0, bplq = bProds[p]?.licenseQty || 0;
+          const mod  = bProds[p]?.module || aProds[p]?.module || '';
+          if (apv === bpv && apq === bpq && aplq === bplq) return null;
+          return { name: p, module: mod, aAmt: apv, bAmt: bpv, deltaAmt: r2(bpv - apv), aQty: apq, bQty: bpq, deltaQty: bpq - apq, aLicQty: aplq, bLicQty: bplq, deltaLicQty: bplq - aplq };
+        }).filter(Boolean).sort((x, y) => Math.abs(y.deltaAmt) - Math.abs(x.deltaAmt));
+        // Skip only if truly nothing changed
+        if (av === bv && !productDeltas.length) return null;
+        return { name, status: status(av, bv), productDeltas };
+      }).filter(Boolean).sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
+
+      // Use invoice dates as display labels (fall through to file name if absent)
+      const labelA = a.invoiceDate ? new Date(a.invoiceDate + 'T12:00:00').toLocaleDateString('en-US', { year: 'numeric', month: 'long' }) : (a.fileName || nameA);
+      const labelB = b.invoiceDate ? new Date(b.invoiceDate + 'T12:00:00').toLocaleDateString('en-US', { year: 'numeric', month: 'long' }) : (b.fileName || nameB);
+
+      // keyA/keyB are used by kpRenderDelta as display labels when snaps array is empty
+      return { keyA: labelA, keyB: labelB, grandTotal, modules, categories, clients };
+    } catch (e) { return { error: e.message }; }
   });
 
   ipcMain.handle('get-kaseya-snapshots', () => {
@@ -557,13 +771,25 @@ module.exports = function registerKaseyaProcessor(ipcMain) {
     } catch (e) { return { success: false, error: e.message }; }
   });
 
-  ipcMain.handle('load-kaseya-snapshot', (_, key) => {
+  ipcMain.handle('load-kaseya-snapshot', async (_, key) => {
     try {
       const snaps = loadKaseyaSnapshots();
       const s = snaps[key];
       if (!s) return { success: false, error: 'Snapshot not found' };
-      const clientsSorted = [...(s.clients || [])].sort((a, b) => b.total - a.total);
-      return { success: true, fileName: s.fileName || '', invoiceDate: s.invoiceDate || '', grandTotal: s.grandTotal || 0, modules: s.modules || {}, categories: s.categories || {}, clients: s.clients || [], clientTotals: clientsSorted, qboEntries: s.qboEntries || [], totalLines: s.totalLines || 0, sheetUsed: s.sheetUsed || '', columnsDetected: s.columnsDetected || {}, snapKey: key };
+      const clients = (s.clients || []).map(c => ({ ...c }));
+      // Re-enrich clients from hub on every load (mappings may have been confirmed after snapshot was saved)
+      try {
+        const hub = await loadHubDirectory();
+        if (hub) {
+          const lookup = buildPlatformLookup(hub, 'kaseya');
+          for (const c of clients) {
+            const match = lookup.get((c.name || '').toLowerCase().trim());
+            if (match) { c.atId = match.atId; c.atName = match.atName; }
+          }
+        }
+      } catch (_) { /* non-fatal */ }
+      const clientsSorted = [...clients].sort((a, b) => b.total - a.total);
+      return { success: true, fileName: s.fileName || '', invoiceDate: s.invoiceDate || '', grandTotal: s.grandTotal || 0, modules: s.modules || {}, categories: s.categories || {}, clients, clientTotals: clientsSorted, qboEntries: s.qboEntries || [], totalLines: s.totalLines || 0, sheetUsed: s.sheetUsed || '', columnsDetected: s.columnsDetected || {}, snapKey: key };
     } catch (e) { return { success: false, error: e.message }; }
   });
 
@@ -613,5 +839,416 @@ module.exports = function registerKaseyaProcessor(ipcMain) {
 
       return { keyA, keyB, grandTotal, modules, categories, clients };
     } catch (e) { return { error: e.message }; }
+  });
+
+  // ── Kaseya → AT company bulk matching ───────────────────────────────────────
+
+  // Cache to avoid hammering AT API on every re-render (30 min TTL)
+  let _atCompCache = null;
+  let _atCompCacheAt = 0;
+
+  async function getAllAtCompanies() {
+    if (_atCompCache && (Date.now() - _atCompCacheAt) < 30 * 60 * 1000) return _atCompCache;
+    const raw = await atQuery('/Companies', [{ field: 'isActive', op: 'eq', value: true }]);
+    _atCompCache = (raw || []).map(c => ({ atId: c.id, atName: c.companyName }));
+    _atCompCacheAt = Date.now();
+    return _atCompCache;
+  }
+
+  function normalizeOrgName(name) {
+    return (name || '')
+      .toLowerCase()
+      .replace(/\s*,?\s*(inc\.?|llc\.?|ltd\.?|corp\.?|corporation\.?|l\.p\.?|lp)\.?\s*$/i, '')
+      .replace(/^the\s+/i, '')
+      .replace(/&/g, 'and')
+      .replace(/[^\w\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function tokenJaccard(a, b) {
+    const ta = new Set(a.split(' ').filter(Boolean));
+    const tb = new Set(b.split(' ').filter(Boolean));
+    if (!ta.size && !tb.size) return 1;
+    let inter = 0;
+    for (const t of ta) if (tb.has(t)) inter++;
+    return inter / (ta.size + tb.size - inter);
+  }
+
+  function findBestAtMatch(kaseyaName, atCompanies) {
+    const normK = normalizeOrgName(kaseyaName);
+    let best = null, bestScore = 0;
+    for (const co of atCompanies) {
+      const normA = normalizeOrgName(co.atName);
+      if (normK === normA) return { ...co, score: 1.0 };
+      let score = tokenJaccard(normK, normA);
+      // Boost when one name fully contains the other (after normalization)
+      if (normK && normA && (normK.includes(normA) || normA.includes(normK))) {
+        score = Math.max(score, 0.80);
+      }
+      if (score > bestScore) { bestScore = score; best = { ...co, score }; }
+    }
+    return bestScore >= 0.55 ? best : null;
+  }
+
+  // Bulk-suggest AT matches for a list of Kaseya org names.
+  // Uses all active AT companies (cached). Returns { [kaseyaName]: { atId, atName, score } }.
+  ipcMain.handle('kaseya-bulk-suggest', async (_, { names }) => {
+    try {
+      const atCompanies = await getAllAtCompanies();
+      const suggestions = {};
+      for (const name of (names || [])) {
+        const match = findBestAtMatch(name, atCompanies);
+        if (match) suggestions[name] = { atId: match.atId, atName: match.atName, score: match.score };
+      }
+      return { ok: true, suggestions };
+    } catch (e) { return { ok: false, suggestions: {}, error: e.message }; }
+  });
+
+  // ── Kaseya → AT company mapping ──────────────────────────────────────────────
+
+  // Confirm a single Kaseya org → AT match.
+  ipcMain.handle('kaseya-confirm-match', async (_, { kaseyaName, atId, atName }) => {
+    try {
+      let hub = await loadHubDirectory();
+      if (!hub) hub = { _version: 2, _updated: new Date().toISOString(), companies: [] };
+      upsertKaseyaEntry(hub, atId, atName, kaseyaName, { name: kaseyaName, confidence: 1.0, confirmedAt: new Date().toISOString() });
+      await saveHubDirectory(hub);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  // Confirm multiple matches in a single read→modify all→write to avoid SP eventual-consistency races.
+  ipcMain.handle('kaseya-bulk-confirm-matches', async (_, { matches }) => {
+    try {
+      let hub = await loadHubDirectory();
+      if (!hub) hub = { _version: 2, _updated: new Date().toISOString(), companies: [] };
+      const now = new Date().toISOString();
+      for (const { kaseyaName, atId, atName } of (matches || [])) {
+        upsertKaseyaEntry(hub, atId, atName, kaseyaName, { name: kaseyaName, confidence: 1.0, confirmedAt: now });
+      }
+      await saveHubDirectory(hub);
+      return { ok: true, count: matches.length };
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  // Exclude a Kaseya org from matching (handles both array and legacy single formats).
+  ipcMain.handle('kaseya-set-excluded', async (_, { kaseyaName, excluded }) => {
+    try {
+      let hub = await loadHubDirectory();
+      if (!hub) hub = { _version: 2, _updated: new Date().toISOString(), companies: [] };
+      const norm = s => (s || '').toLowerCase().trim();
+      for (const entry of (hub.companies || [])) {
+        const k = entry.platforms?.kaseya;
+        if (!k) continue;
+        const items = Array.isArray(k) ? k : [k];
+        const item = items.find(i => norm(i.name) === norm(kaseyaName));
+        if (item) {
+          if (excluded) item.excluded = true;
+          else delete item.excluded;
+          hub._updated = new Date().toISOString();
+          break;
+        }
+      }
+      await saveHubDirectory(hub);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  // Search AT companies by name (for the match UI).
+  ipcMain.handle('kaseya-search-at-companies', async (_, { query }) => {
+    if (!query || query.trim().length < 3) return [];
+    try {
+      const companies = await atQuery('/Companies', [
+        { field: 'companyName', op: 'contains', value: query.trim().substring(0, 20) },
+        { field: 'isActive',    op: 'eq',       value: true },
+      ]);
+      return (companies || []).slice(0, 15).map(c => ({ atId: c.id, atName: c.companyName }));
+    } catch { return []; }
+  });
+
+  // Load all current Kaseya→AT mappings for admin display.
+  ipcMain.handle('kaseya-load-mappings', async () => {
+    try {
+      const hub = await loadHubDirectory();
+      if (!hub) return { mappings: {}, excluded: {} };
+      const mappings = {}, excluded = {};
+      for (const entry of (hub.companies || [])) {
+        if (entry.excluded) continue;
+        const k = entry.platforms?.kaseya;
+        if (!k) continue;
+        const items = Array.isArray(k) ? k : [k];
+        for (const item of items) {
+          if (!item?.name) continue;
+          if (item.excluded) excluded[item.name] = true;
+          else mappings[item.name] = { atId: entry.atId, atName: entry.atName, confidence: item.confidence, confirmedAt: item.confirmedAt };
+        }
+      }
+      return { mappings, excluded };
+    } catch (e) { return { mappings: {}, excluded: {}, error: e.message }; }
+  });
+
+  // ── AT Contract Push helpers ──────────────────────────────────────────────────
+
+  function kpFirstOfThisMonth() {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1).toISOString();
+  }
+  function kpFirstOfNextMonth() {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth() + 1, 1).toISOString();
+  }
+
+  // Find the most-recent active contract whose name contains contractKeyword
+  async function kpFindContract(companyId, contractKeyword) {
+    const all = await atQuery('/Contracts', [
+      { field: 'companyID', op: 'eq', value: parseInt(companyId, 10) },
+      { field: 'status',    op: 'eq', value: 1 },
+    ]);
+    const kw = (contractKeyword || '').toLowerCase().trim();
+    const eligible = all
+      .filter(c => !kw || (c.contractName || '').toLowerCase().includes(kw))
+      .sort((a, b) => new Date(b.startDate) - new Date(a.startDate));
+    return eligible[0] || null;
+  }
+
+  // Find a service ID by name (exact match, case-insensitive, cached per session)
+  const _kpServiceIdCache = new Map();
+  async function kpGetServiceId(serviceName) {
+    const key = serviceName.toLowerCase().trim();
+    if (_kpServiceIdCache.has(key)) return _kpServiceIdCache.get(key);
+    const results = await atQuery('/Services', [{ field: 'name', op: 'eq', value: serviceName }]);
+    const id = results[0]?.id ?? null;
+    _kpServiceIdCache.set(key, id);
+    return id;
+  }
+
+  async function kpFindContractService(contractId, serviceId) {
+    const rows = await atQuery('/ContractServices', [
+      { field: 'contractID', op: 'eq', value: contractId },
+      { field: 'serviceID',  op: 'eq', value: serviceId },
+    ]);
+    return rows[0] || null;
+  }
+
+  async function kpGetCurrentUnits(contractServiceId) {
+    const all = await atQuery('/ContractServiceUnits', [
+      { field: 'contractServiceID', op: 'eq', value: contractServiceId },
+    ]);
+    if (!all.length) return 0;
+    const now = new Date();
+    const current = all
+      .filter(u => new Date(u.startDate || 0) <= now)
+      .sort((a, b) => new Date(b.startDate || 0) - new Date(a.startDate || 0));
+    return current.length ? (current[0].units || 0) : 0;
+  }
+
+  // Hard-coded product item → AT service ID mapping (no user config needed)
+  const KASEYA_AT_MAP = {
+    'DWP Metered Plan - User License':     [{ serviceId: 58,  contracts: ['Managed Cloud Services'] }],
+    'DWP Metered Plan - Server License':   [{ serviceId: 111, contracts: ['Managed Cloud Services'] }],
+    'DWP Unlimited Plan - Server License': [{ serviceId: 126, contracts: ['Managed Cloud Services'] }],
+    'DWP Unlimited Plan - User License':   [{ serviceId: 125, contracts: ['Managed Cloud Services'] }],
+    'DFP Unlimited Plan - Server License': [{ serviceId: 253, contracts: ['Managed Cloud Services'] }],
+    'SaaS Protection Infinite Cloud Retention Monthly': [
+      { serviceId: 98, contracts: ['Managed Cloud Services', 'Managed Security Services'] },
+      { serviceId: 88, contracts: ['Managed Cloud Services', 'Managed Security Services'] },
+    ],
+  };
+
+  async function kpPushOneService(companyId, contractKeyword, serviceIdOrName, newQty) {
+    const contract = await kpFindContract(companyId, contractKeyword);
+    if (!contract) return { status: 'no_contract', detail: `No "${contractKeyword}" contract` };
+
+    const serviceId = typeof serviceIdOrName === 'number' ? serviceIdOrName : await kpGetServiceId(serviceIdOrName);
+    if (!serviceId) return { status: 'no_service', detail: `Service "${serviceIdOrName}" not found in AT catalog` };
+
+    let cs = await kpFindContractService(contract.id, serviceId);
+    if (!cs) {
+      // If pushing 0, no need to create a service line that doesn't exist
+      if (newQty === 0) return { status: 'no_change', detail: 'Service not on contract (already at 0)' };
+      try {
+        const svcRes = await atFetch(`/Services/${serviceId}`);
+        const svcData = svcRes.item || svcRes;
+        const body = { contractID: contract.id, serviceID: serviceId, startDate: contract.startDate, endDate: contract.endDate || null, unitPrice: svcData.unitPrice ?? 0, unitCost: 0 };
+        const r = await atFetch('/ContractServices', { method: 'POST', body: JSON.stringify(body) });
+        const newId = r.itemId ?? r.item?.id ?? r.id;
+        if (!newId) throw new Error('No ID returned');
+        cs = { id: newId, contractID: contract.id, serviceID: serviceId };
+      } catch (e) {
+        return { status: 'no_service', detail: `Could not create service line: ${e.message}` };
+      }
+    }
+
+    const currentQty = await kpGetCurrentUnits(cs.id);
+    const unitChange = newQty - currentQty;
+    if (unitChange === 0) return { status: 'no_change', detail: `Already at ${currentQty}` };
+
+    const effectiveDate = kpFirstOfThisMonth();
+    const payload = { contractID: contract.id, contractServiceID: cs.id, effectiveDate, unitChange };
+    try {
+      await atFetch('/ContractServiceAdjustments', { method: 'POST', body: JSON.stringify(payload) });
+      return { status: 'success', detail: `${unitChange > 0 ? '+' : ''}${unitChange} (${currentQty}→${newQty})` };
+    } catch (e) {
+      const msg = (e.message || '').toLowerCase();
+      if (msg.includes('effectivedate must be between') || msg.includes('effective date must be between')) {
+        const next = (await atQuery('/Contracts', [
+          { field: 'companyID', op: 'eq', value: parseInt(companyId, 10) },
+          { field: 'status', op: 'eq', value: 1 },
+        ])).filter(c => c.id !== contract.id && (c.contractName || '').toLowerCase().includes((contractKeyword || '').toLowerCase()) && new Date(c.startDate) > new Date(contract.startDate))
+           .sort((a, b) => new Date(a.startDate) - new Date(b.startDate))[0];
+        if (!next) throw new Error('Contract rollover: no next contract found');
+        const nextCs = await kpFindContractService(next.id, serviceId);
+        if (!nextCs) throw new Error('Contract rollover: service not on next contract');
+        await atFetch('/ContractServiceAdjustments', { method: 'POST', body: JSON.stringify({ ...payload, contractID: next.id, contractServiceID: nextCs.id }) });
+        return { status: 'success', detail: `Rolled to next contract · ${unitChange > 0 ? '+' : ''}${unitChange} (${currentQty}→${newQty})` };
+      }
+      if (msg.includes('negative')) return { status: 'negative_qty', detail: `Would go negative (current: ${currentQty}, change: ${unitChange})` };
+      throw e;
+    }
+  }
+
+  // Push Datto Workplace + DFP usage to AT contracts (hard-coded service IDs)
+  ipcMain.handle('kaseya-at-push-workplace', async (_, { rows }) => {
+    const mainWindow = getMainWindow();
+    const emit = (company, product, status, detail = '') => {
+      if (mainWindow) mainWindow.webContents.send('kaseya-push-progress', { company, product, status, detail });
+    };
+
+    const results = [];
+    for (const row of rows) {
+      if (!row.atId) continue;
+      for (const [product, qty] of Object.entries(row.products || {})) {
+        const mapping = KASEYA_AT_MAP[product];
+        if (!mapping) {
+          emit(row.name, product, 'no_service', `No AT mapping for "${product}"`);
+          results.push({ company: row.name, product, status: 'no_service', detail: `No AT mapping for "${product}"` });
+          continue;
+        }
+        emit(row.name, product, 'working');
+        try {
+          const { serviceId, contracts } = mapping[0];
+          const r = await kpPushOneService(row.atId, contracts[0], serviceId, qty);
+          emit(row.name, product, r.status, r.detail);
+          results.push({ company: row.name, product, ...r });
+        } catch (e) {
+          emit(row.name, product, 'error', e.message);
+          results.push({ company: row.name, product, status: 'error', detail: e.message });
+        }
+      }
+    }
+    const summary = {
+      updated: results.filter(r => r.status === 'success').length,
+      skipped: results.filter(r => ['no_change', 'no_contract', 'no_service', 'negative_qty'].includes(r.status)).length,
+      errors:  results.filter(r => r.status === 'error').length,
+    };
+    return { results, summary };
+  });
+
+  // Push Datto SaaS Protection license counts to AT contracts (hard-coded service IDs 98 + 88)
+  ipcMain.handle('kaseya-at-push-saas', async (_, { rows }) => {
+    const mainWindow = getMainWindow();
+    const emit = (company, product, status, detail = '') => {
+      if (mainWindow) mainWindow.webContents.send('kaseya-push-progress', { company, product, status, detail });
+    };
+
+    const saasEntries = KASEYA_AT_MAP['SaaS Protection Infinite Cloud Retention Monthly'];
+    const results = [];
+    for (const row of rows) {
+      if (!row.atId) continue;
+      emit(row.name, 'SaaS Protection', 'working');
+      let anyPushed = false;
+      for (const { serviceId, contracts } of saasEntries) {
+        for (const kw of contracts) {
+          try {
+            const r = await kpPushOneService(row.atId, kw, serviceId, row.qty);
+            if (r.status === 'no_contract') continue;
+            emit(row.name, `SaaS (svc ${serviceId})`, r.status, r.detail);
+            results.push({ company: row.name, product: `SaaS Protection (svc ${serviceId})`, ...r, contractKeyword: kw });
+            anyPushed = true;
+            break;
+          } catch (e) {
+            emit(row.name, `SaaS (svc ${serviceId})`, 'error', e.message);
+            results.push({ company: row.name, product: `SaaS Protection (svc ${serviceId})`, status: 'error', detail: e.message });
+            anyPushed = true;
+            break;
+          }
+        }
+      }
+      if (!anyPushed) {
+        emit(row.name, 'SaaS Protection', 'no_contract', 'No matching contract found');
+        results.push({ company: row.name, product: 'SaaS Protection', status: 'no_contract', detail: 'No Managed Cloud/Security Services contract found' });
+      }
+    }
+    const summary = {
+      updated: results.filter(r => r.status === 'success').length,
+      skipped: results.filter(r => ['no_change', 'no_contract', 'no_service', 'negative_qty'].includes(r.status)).length,
+      errors:  results.filter(r => r.status === 'error').length,
+    };
+    return { results, summary };
+  });
+
+  // Load Revenue SP file + SaaS bundled flags from hub directory
+  ipcMain.handle('kaseya-load-revenue-bundles', async () => {
+    const result = {};
+    // Hub directory (saasBundled flags) — fast, always attempt
+    try {
+      const hub = await loadHubDirectory();
+      const saasBundled = {};
+      const saasBundledQtyOverride = {};
+      for (const company of (hub?.companies || [])) {
+        if (company.saasBundled) saasBundled[company.atId] = true;
+        if (company.saasBundledQtyOverride != null) saasBundledQtyOverride[company.atId] = company.saasBundledQtyOverride;
+      }
+      result.saasBundled = saasBundled;
+      result.saasBundledQtyOverride = saasBundledQtyOverride;
+    } catch (e) {
+      result.saasBundled = {};
+      result.saasBundledQtyOverride = {};
+      result.saasBundledError = e.message;
+    }
+    // Revenue SP file — slow, optional (enables Bundled Qty / Billable columns)
+    try {
+      result.revenueBundles = await loadRevenueData();
+      result.ok = true;
+    } catch (e) {
+      result.ok = false;
+      result.error = e.message;
+    }
+    return result;
+  });
+
+  // Set/clear a manual override for SaaS bundled qty
+  ipcMain.handle('kaseya-set-saas-qty-override', async (_, { atId, qty }) => {
+    try {
+      const hub = await loadHubDirectory();
+      if (!hub) return { ok: false, error: 'Hub directory not available' };
+      const entry = (hub.companies || []).find(e => e.atId === atId);
+      if (!entry) return { ok: false, error: `Company atId ${atId} not found in hub directory` };
+      if (qty != null) entry.saasBundledQtyOverride = qty;
+      else delete entry.saasBundledQtyOverride;
+      hub._updated = new Date().toISOString();
+      await saveHubDirectory(hub);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  // Toggle SaaS bundled flag for a company in hub directory
+  ipcMain.handle('kaseya-set-saas-bundled', async (_, { atId, bundled }) => {
+    try {
+      const hub = await loadHubDirectory();
+      if (!hub) return { ok: false, error: 'Hub directory not available' };
+      const entry = (hub.companies || []).find(e => e.atId === atId);
+      if (!entry) return { ok: false, error: `Company atId ${atId} not found in hub directory` };
+      if (bundled) entry.saasBundled = true;
+      else delete entry.saasBundled;
+      hub._updated = new Date().toISOString();
+      await saveHubDirectory(hub);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
   });
 };

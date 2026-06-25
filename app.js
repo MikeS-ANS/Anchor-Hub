@@ -1447,110 +1447,323 @@ function renderMarginSummary(summary) {
   `;
 }
 
-// ─── Company Mapping ──────────────────────────────────────────────────────────
+// ─── Company Directory ────────────────────────────────────────────────────────
+let _cdCurrentData = null;
+let _cdActiveTab   = 'companies';
+let _cdSearchTimer = null;
+
 function renderCompanyMapping() {
+  const isAdmin = _currentUser?.isAdmin || _currentUser?.roles?.includes('hub.admin');
+
   content.innerHTML = `
     <div class="view-header">
       <div>
-        <h1 class="view-title">Company Mapping</h1>
-        <p class="view-desc">Sync Pax8 companies and products to Autotask IDs. Export the result as CSV, fill in any missing IDs in Excel, then re-import to activate.</p>
+        <h1 class="view-title">Company Directory</h1>
+        <p class="view-desc">Cross-platform company and service mappings. Shared via SharePoint — changes apply to all users instantly.</p>
       </div>
       <img class="view-header-deco" src="Anchor_Logo_Vertical_High.png" alt="" draggable="false" />
     </div>
 
-    <div class="settings-section" style="max-width:680px">
-      <h2 class="section-title">
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v2.5M7 10.5V13M1 7h2.5M10.5 7H13M2.93 2.93l1.77 1.77M9.3 9.3l1.77 1.77M2.93 11.07l1.77-1.77M9.3 4.7l1.77-1.77" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-        Step 1 — Sync from Pax8 &amp; Autotask
-      </h2>
-      <p class="field-hint" style="margin-bottom:14px">Pulls all Pax8 companies and active subscriptions, matches against Autotask. Companies already linked via the PSA integration are auto-accepted.</p>
-      <button class="btn btn-primary" id="btn-run-mapping">
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v2.5M7 10.5V13M1 7h2.5M10.5 7H13M2.93 2.93l1.77 1.77M9.3 9.3l1.77 1.77M2.93 11.07l1.77-1.77M9.3 4.7l1.77-1.77" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-        Sync Now
-      </button>
-      <span class="audit-status-text" id="mapping-status" style="margin-left:12px"></span>
+    <div class="cd-status-bar">
+      <span class="cd-sync-info" id="cd-sync-info">Loading…</span>
+      ${isAdmin ? `
+      <div class="cd-admin-bar">
+        <button class="btn btn-primary btn-sm" id="btn-run-mapping">
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 7a5 5 0 1 0 1.2-3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2 3v4h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Sync Now
+        </button>
+        <button class="btn btn-ghost btn-sm" id="btn-export-mapping-csv">↓ Unmapped CSV</button>
+        <button class="btn btn-ghost btn-sm" id="btn-export-full-mapping-csv">↓ Full Export</button>
+        <button class="btn btn-ghost btn-sm" id="btn-import-co-csv">↑ Import Companies</button>
+        <button class="btn btn-ghost btn-sm" id="btn-import-svc-csv">↑ Import Services</button>
+        <span class="save-status" id="cd-action-status"></span>
+      </div>` : ''}
     </div>
 
-    <div class="log-container" style="max-width:680px;margin-bottom:20px">
-      <div class="log-empty" id="mapping-log-empty">
-        <svg width="28" height="28" viewBox="0 0 28 28" fill="none" opacity="0.3"><circle cx="9" cy="14" r="5" stroke="currentColor" stroke-width="1.4"/><circle cx="19" cy="14" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M14 14h0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        <p>No sync run yet. Click "Sync Now" to start.</p>
-      </div>
+    <div class="log-container" style="max-width:860px;margin-bottom:16px;display:none" id="cd-log-wrap">
       <div class="log-output" id="mapping-log-output"></div>
     </div>
 
-    <div class="hidden" id="mapping-sync-stats"></div>
-
-    <div class="settings-section" style="max-width:680px">
-      <h2 class="section-title">
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v9M3.5 7l3.5 3.5L10.5 7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 12h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-        Step 2 — Export &amp; Fill In
-      </h2>
-      <p class="field-hint" style="margin-bottom:14px">Exports two CSV files to the app folder: one for companies, one for products. Products include vendor name and vendor SKU to help identify the correct AT service. Open in Excel, fill in any blank <code>at_company_id</code> or <code>at_service_id</code> columns, then save.</p>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <button class="btn btn-ghost" id="btn-export-mapping-csv">
-          ↓ Export Unmapped CSVs
-        </button>
-        <button class="btn btn-ghost" id="btn-export-full-mapping-csv">
-          ↓ Full Export (all + AT reference)
-        </button>
-      </div>
-      <span class="save-status" id="export-mapping-status" style="margin-top:8px;display:block"></span>
+    <div class="stab-nav" style="max-width:860px;margin-bottom:0">
+      <button class="stab ${_cdActiveTab==='companies'?'active':''}" data-cdtab="companies">
+        Companies <span class="cd-tab-badge" id="cd-co-badge"></span>
+      </button>
+      <button class="stab ${_cdActiveTab==='services'?'active':''}" data-cdtab="services">
+        Services <span class="cd-tab-badge" id="cd-svc-badge"></span>
+      </button>
     </div>
 
-    <div class="settings-section" style="max-width:680px">
-      <h2 class="section-title">
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 13V4M3.5 7L7 3.5 10.5 7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 12h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-        Step 3 — Import Back
-      </h2>
-      <p class="field-hint" style="margin-bottom:14px">Once you've filled in the CSVs, import each one. All tools (M365 Subscription Comparison, M365 Margin Analyzer) will immediately use the new mappings.</p>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-        <button class="btn btn-ghost" id="btn-import-co-csv">↑ Import Companies CSV</button>
-        <button class="btn btn-ghost" id="btn-import-svc-csv">↑ Import Services CSV</button>
-        <span class="save-status" id="import-mapping-status" style="margin-left:2px"></span>
+    <div class="cd-panel ${_cdActiveTab==='companies'?'':'hidden'}" id="cd-panel-companies">
+      <div class="report-stats" style="max-width:860px;margin-top:16px" id="cd-co-stats"></div>
+      <div id="cd-co-review"></div>
+      <div class="settings-section" style="max-width:860px;padding:0" id="cd-co-table-wrap">
+        <div class="cd-table-header">
+          <span class="section-title" style="font-size:11px">Confirmed Mappings</span>
+          <input type="text" class="cd-search" id="cd-co-search" placeholder="Search companies…">
+        </div>
+        <div class="cd-table-scroll">
+          <table class="cd-table">
+            <thead><tr>
+              <th>Pax8 Company</th>
+              <th>Autotask Company</th>
+              <th>Match Type</th>
+              ${isAdmin ? '<th></th>' : ''}
+            </tr></thead>
+            <tbody id="cd-co-tbody"></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
-    <div class="hidden" id="mapping-current-status"></div>
+    <div class="cd-panel ${_cdActiveTab==='services'?'':'hidden'}" id="cd-panel-services">
+      <div class="report-stats" style="max-width:860px;margin-top:16px" id="cd-svc-stats"></div>
+      <div id="cd-svc-review"></div>
+      <div class="settings-section" style="max-width:860px;padding:0" id="cd-svc-table-wrap">
+        <div class="cd-table-header">
+          <span class="section-title" style="font-size:11px">Confirmed Service Mappings</span>
+          <input type="text" class="cd-search" id="cd-svc-search" placeholder="Search services…">
+        </div>
+        <div class="cd-table-scroll">
+          <table class="cd-table">
+            <thead><tr>
+              <th>Pax8 Product</th>
+              <th>Term</th>
+              <th>Autotask Service</th>
+              <th>Match Type</th>
+            </tr></thead>
+            <tbody id="cd-svc-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   `;
 
-  document.getElementById('btn-run-mapping').addEventListener('click', runMappingSync);
-  document.getElementById('btn-export-mapping-csv').addEventListener('click', exportMappingCsv);
-  document.getElementById('btn-export-full-mapping-csv').addEventListener('click', exportFullMappingCsv);
-  document.getElementById('btn-import-co-csv').addEventListener('click', () => importMappingCsv('companies'));
-  document.getElementById('btn-import-svc-csv').addEventListener('click', () => importMappingCsv('services'));
+  // Tab switching
+  content.querySelectorAll('[data-cdtab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      _cdActiveTab = btn.dataset.cdtab;
+      content.querySelectorAll('[data-cdtab]').forEach(b => b.classList.toggle('active', b === btn));
+      content.querySelectorAll('.cd-panel').forEach(p => p.classList.toggle('hidden', p.id !== `cd-panel-${_cdActiveTab}`));
+    });
+  });
 
-  loadExistingMappingStatus();
+  // Admin buttons
+  if (isAdmin) {
+    document.getElementById('btn-run-mapping').addEventListener('click', cdRunSync);
+    document.getElementById('btn-export-mapping-csv').addEventListener('click', exportMappingCsv);
+    document.getElementById('btn-export-full-mapping-csv').addEventListener('click', exportFullMappingCsv);
+    document.getElementById('btn-import-co-csv').addEventListener('click', () => importMappingCsv('companies'));
+    document.getElementById('btn-import-svc-csv').addEventListener('click', () => importMappingCsv('services'));
+  }
+
+  // Live search
+  ['co', 'svc'].forEach(tab => {
+    const input = document.getElementById(`cd-${tab}-search`);
+    if (input) input.addEventListener('input', () => {
+      clearTimeout(_cdSearchTimer);
+      _cdSearchTimer = setTimeout(() => cdRenderTable(tab), 180);
+    });
+  });
+
+  cdLoadData();
 }
 
-async function loadExistingMappingStatus() {
+async function cdLoadData() {
   try {
     const data = await window.api.getMappings();
-    if (data?.lastSync) {
-      const statusEl = document.getElementById('mapping-status');
-      if (statusEl) statusEl.textContent = `Last sync: ${new Date(data.lastSync).toLocaleString()}`;
-      renderMappingSyncStats(data, data.companies || [], data.services || []);
-    }
-  } catch {}
+    _cdCurrentData = data;
+    cdRenderAll(data);
+  } catch (e) {
+    const el = document.getElementById('cd-sync-info');
+    if (el) el.textContent = `Error loading mappings: ${e.message}`;
+  }
 }
 
-async function runMappingSync() {
-  const btn       = document.getElementById('btn-run-mapping');
-  const logOutput = document.getElementById('mapping-log-output');
-  const logEmpty  = document.getElementById('mapping-log-empty');
-  const statusEl  = document.getElementById('mapping-status');
+function cdRenderAll(data) {
+  if (!data) return;
+  const isAdmin = _currentUser?.isAdmin || _currentUser?.roles?.includes('hub.admin');
+
+  // Status bar
+  const infoEl = document.getElementById('cd-sync-info');
+  if (infoEl) {
+    const synced = data.lastSync ? `Last synced: ${new Date(data.lastSync).toLocaleString()}` : 'Not yet synced';
+    const src    = data._storageSource === 'sharepoint'
+      ? '<span class="cd-sp-badge">SharePoint ✓</span>'
+      : '<span class="cd-sp-badge cd-sp-local">Local cache</span>';
+    infoEl.innerHTML = `${synced} ${src}`;
+  }
+
+  const companies = data.companies || [];
+  const services  = data.services  || [];
+
+  // Tab badges
+  const coReview  = companies.filter(c => !c.accepted && !c.excluded).length;
+  const svcReview = services.filter(s => !s.accepted && !s.excluded).length;
+  const coBadge  = document.getElementById('cd-co-badge');
+  const svcBadge = document.getElementById('cd-svc-badge');
+  if (coBadge)  coBadge.textContent  = coReview  > 0 ? coReview  : '';
+  if (svcBadge) svcBadge.textContent = svcReview > 0 ? svcReview : '';
+
+  // Company stats
+  const coMapped   = companies.filter(c => c.accepted && c.atId).length;
+  const coExcluded = companies.filter(c => c.excluded).length;
+  const coStatsEl  = document.getElementById('cd-co-stats');
+  if (coStatsEl) coStatsEl.innerHTML = `
+    <div class="report-stat clean"><span class="report-stat-num">${coMapped}</span><span class="report-stat-label">Mapped</span></div>
+    <div class="report-stat ${coReview > 0 ? 'warn' : 'clean'}"><span class="report-stat-num">${coReview}</span><span class="report-stat-label">Needs Review</span></div>
+    <div class="report-stat"><span class="report-stat-num">${coExcluded}</span><span class="report-stat-label">Excluded</span></div>`;
+
+  // Service stats
+  const svcMapped  = services.filter(s => s.accepted && s.atServiceId).length;
+  const svcStatsEl = document.getElementById('cd-svc-stats');
+  if (svcStatsEl) svcStatsEl.innerHTML = `
+    <div class="report-stat clean"><span class="report-stat-num">${svcMapped}</span><span class="report-stat-label">Mapped</span></div>
+    <div class="report-stat ${svcReview > 0 ? 'warn' : 'clean'}"><span class="report-stat-num">${svcReview}</span><span class="report-stat-label">Needs Review</span></div>`;
+
+  // Needs Review — Companies
+  cdRenderReview(companies, isAdmin);
+  cdRenderServiceReview(services);
+
+  // Confirmed tables
+  cdRenderTable('co');
+  cdRenderTable('svc');
+}
+
+function cdConfidenceHtml(c) {
+  const src = c.source || c.confidence || '';
+  if (src === 'pax8_api' || c.confidence === 'high')
+    return `<span class="cd-badge cd-badge-api">API</span>`;
+  if (src === 'manual')
+    return `<span class="cd-badge cd-badge-manual">Manual</span>`;
+  if (src === 'name_match' || c.confidence === 'low')
+    return `<span class="cd-badge cd-badge-name">Name Match</span>`;
+  if (src === 'psa_export' || src === 'csv')
+    return `<span class="cd-badge cd-badge-csv">CSV</span>`;
+  return `<span class="cd-badge cd-badge-none">—</span>`;
+}
+
+function cdRenderReview(companies, isAdmin) {
+  const needsReview = companies.filter(c => !c.accepted && !c.excluded);
+  const el = document.getElementById('cd-co-review');
+  if (!el) return;
+  if (!needsReview.length) { el.innerHTML = ''; return; }
+
+  el.innerHTML = `
+    <div class="settings-section" style="max-width:860px;margin-bottom:16px;padding:16px 20px">
+      <div class="cd-review-hdr">
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M7 1L1 13h12L7 1z" stroke="var(--warn)" stroke-width="1.3" stroke-linejoin="round"/><path d="M7 6v3M7 10.5v.5" stroke="var(--warn)" stroke-width="1.4" stroke-linecap="round"/></svg>
+        ${needsReview.length} ${needsReview.length === 1 ? 'company needs' : 'companies need'} review
+        <span class="cd-review-sub">${isAdmin ? 'Accept, find a match, or exclude each one.' : 'Contact an admin to resolve these.'}</span>
+      </div>
+      <div class="cd-review-list" id="cd-co-review-list">
+        ${needsReview.map(c => cdReviewRowHtml(c, isAdmin)).join('')}
+      </div>
+    </div>`;
+}
+
+function cdReviewRowHtml(c, isAdmin) {
+  const hasMatch = !!c.atId;
+  return `
+  <div class="cd-review-row" data-pax8id="${escHtml(c.pax8Id)}">
+    <span class="cd-review-name" title="${escHtml(c.pax8Name || c.pax8Id)}">${escHtml(c.pax8Name || c.pax8Id)}</span>
+    <span class="cd-review-match ${hasMatch ? '' : 'cd-review-none'}">
+      ${hasMatch ? `→ ${escHtml(c.atName)}` : 'No match found'}
+    </span>
+    ${hasMatch ? `<span class="cd-badge cd-badge-name" style="flex-shrink:0">Name Match</span>` : `<span class="cd-badge cd-badge-none" style="flex-shrink:0">Unmatched</span>`}
+    ${isAdmin ? `
+      ${hasMatch ? `<button class="btn btn-ghost btn-sm cd-accept-btn" data-pax8id="${escHtml(c.pax8Id)}" style="color:var(--success);border-color:var(--success)40">Accept</button>` : ''}
+      <button class="btn btn-ghost btn-sm cd-find-btn" data-pax8id="${escHtml(c.pax8Id)}" data-pax8name="${escHtml(c.pax8Name || '')}">Find Match</button>
+      <button class="btn btn-ghost btn-sm cd-exclude-btn" data-pax8id="${escHtml(c.pax8Id)}" style="color:var(--warn);border-color:var(--warn)30">Exclude</button>
+    ` : ''}
+  </div>
+  <div class="cd-find-wrap hidden" id="cd-find-${escHtml(c.pax8Id).replace(/[^a-z0-9]/gi,'_')}">
+    <input type="text" class="cd-find-input" placeholder="Search Autotask companies…" value="${escHtml(c.pax8Name || '')}">
+    <div class="cd-find-results"></div>
+  </div>`;
+}
+
+function cdRenderServiceReview(services) {
+  const needsReview = services.filter(s => !s.accepted && !s.excluded);
+  const el = document.getElementById('cd-svc-review');
+  if (!el) return;
+  if (!needsReview.length) { el.innerHTML = ''; return; }
+
+  const isAdmin = _currentUser?.isAdmin || _currentUser?.roles?.includes('hub.admin');
+  el.innerHTML = `
+    <div class="settings-section" style="max-width:860px;margin-bottom:16px;padding:16px 20px">
+      <div class="cd-review-hdr">
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M7 1L1 13h12L7 1z" stroke="var(--warn)" stroke-width="1.3" stroke-linejoin="round"/><path d="M7 6v3M7 10.5v.5" stroke="var(--warn)" stroke-width="1.4" stroke-linecap="round"/></svg>
+        ${needsReview.length} ${needsReview.length === 1 ? 'service needs' : 'services need'} review
+        ${isAdmin ? '<span class="cd-review-sub">Export the full CSV, fill in missing AT service IDs, then re-import.</span>' : ''}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:5px;margin-top:10px">
+        ${needsReview.map(s => `
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 10px;background:var(--bg);border-radius:6px;border:1px solid var(--border)">
+          <span style="font-size:12px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(s.pax8ProductName || s.pax8ProductId)}</span>
+          ${s.termLabel ? `<span style="font-size:11px;color:var(--text-muted);flex-shrink:0">${escHtml(s.termLabel)}</span>` : ''}
+          <span class="cd-badge cd-badge-none" style="flex-shrink:0">Unmatched</span>
+        </div>`).join('')}
+      </div>
+    </div>`;
+}
+
+function cdRenderTable(tab) {
+  if (!_cdCurrentData) return;
+  const isAdmin = _currentUser?.isAdmin || _currentUser?.roles?.includes('hub.admin');
+
+  if (tab === 'co') {
+    const query   = (document.getElementById('cd-co-search')?.value || '').toLowerCase();
+    const rows    = (_cdCurrentData.companies || []).filter(c => c.accepted && c.atId && !c.excluded);
+    const filtered = query ? rows.filter(c =>
+      (c.pax8Name || '').toLowerCase().includes(query) ||
+      (c.atName   || '').toLowerCase().includes(query)
+    ) : rows;
+    const tbody = document.getElementById('cd-co-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = filtered.length ? filtered.map(c => `
+      <tr>
+        <td>${escHtml(c.pax8Name || c.pax8Id)}</td>
+        <td>${escHtml(c.atName || `ID: ${c.atId}`)}</td>
+        <td>${cdConfidenceHtml(c)}</td>
+        ${isAdmin ? `<td><button class="btn btn-ghost btn-sm cd-exclude-btn" data-pax8id="${escHtml(c.pax8Id)}" style="font-size:10px;padding:2px 8px;color:var(--text-muted)">Exclude</button></td>` : ''}
+      </tr>`).join('')
+      : `<tr><td colspan="${isAdmin ? 4 : 3}" style="text-align:center;color:var(--text-muted);padding:24px;font-size:12px">${query ? 'No results for "' + escHtml(query) + '"' : 'No confirmed mappings yet — run a sync or import a CSV.'}</td></tr>`;
+  } else {
+    const query   = (document.getElementById('cd-svc-search')?.value || '').toLowerCase();
+    const rows    = (_cdCurrentData.services || []).filter(s => s.accepted && s.atServiceId);
+    const filtered = query ? rows.filter(s =>
+      (s.pax8ProductName || '').toLowerCase().includes(query) ||
+      (s.atServiceName   || '').toLowerCase().includes(query)
+    ) : rows;
+    const tbody = document.getElementById('cd-svc-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = filtered.length ? filtered.map(s => `
+      <tr>
+        <td>${escHtml(s.pax8ProductName || s.pax8ProductId)}</td>
+        <td style="color:var(--text-muted)">${escHtml(s.termLabel || '—')}</td>
+        <td>${escHtml(s.atServiceName || `ID: ${s.atServiceId}`)}</td>
+        <td>${cdConfidenceHtml(s)}</td>
+      </tr>`).join('')
+      : `<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:24px;font-size:12px">${query ? 'No results.' : 'No confirmed service mappings yet.'}</td></tr>`;
+  }
+}
+
+// ── Sync ─────────────────────────────────────────────────────────────────────
+async function cdRunSync() {
+  const btn     = document.getElementById('btn-run-mapping');
+  const logWrap = document.getElementById('cd-log-wrap');
+  const logOut  = document.getElementById('mapping-log-output');
 
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner"></span> Syncing…`;
-  logEmpty.classList.add('hidden');
-  logOutput.innerHTML = '';
-  statusEl.textContent = 'Sync in progress…';
+  logWrap.style.display = '';
+  logOut.innerHTML = '';
 
   if (mappingLogUnsubscribe) mappingLogUnsubscribe();
   mappingLogUnsubscribe = window.api.onMappingLog(({ msg, type }) => {
-    if (type === 'divider') logOutput.innerHTML += `<div class="log-divider"></div>`;
-    else logOutput.innerHTML += `<div class="log-line log-${type || 'info'}">${escHtml(msg)}</div>`;
-    logOutput.scrollTop = logOutput.scrollHeight;
+    if (type === 'divider') logOut.innerHTML += `<div class="log-divider"></div>`;
+    else logOut.innerHTML += `<div class="log-line log-${type || 'info'}">${escHtml(msg)}</div>`;
+    logOut.scrollTop = logOut.scrollHeight;
   });
 
   try {
@@ -1558,130 +1771,127 @@ async function runMappingSync() {
     if (r.success) {
       const coMapped  = r.stats.coHigh + r.stats.coLow;
       const svcMapped = r.stats.svcHigh + r.stats.svcLow;
-      statusEl.textContent = `Sync complete — ${coMapped} companies, ${svcMapped} services.`;
       saveToolStat('company-mapping', `${coMapped} companies · ${svcMapped} services mapped`, 'ok');
-      renderMappingSyncStats(r, r.companies || [], r.services || []);
-    } else {
-      statusEl.textContent = `Sync failed: ${r.error || 'Unknown error'}`;
+      _cdCurrentData = r;
+      cdRenderAll(r);
     }
-  } catch (e) {
-    statusEl.textContent = `Error: ${e.message}`;
-  }
+  } catch {}
 
   btn.disabled = false;
-  btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v2.5M7 10.5V13M1 7h2.5M10.5 7H13M2.93 2.93l1.77 1.77M9.3 9.3l1.77 1.77M2.93 11.07l1.77-1.77M9.3 4.7l1.77-1.77" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg> Sync Now`;
+  btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 7a5 5 0 1 0 1.2-3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2 3v4h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg> Sync Now`;
 }
 
-function renderMappingSyncStats(data, companies, services) {
-  const el = document.getElementById('mapping-sync-stats');
-  if (!el) return;
-
-  const coAccepted  = companies.filter(c => c.accepted && c.atId).length;
-  const coExcluded  = companies.filter(c => c.excluded).length;
-  const coUnfilled  = companies.filter(c => !c.accepted && !c.excluded && !c.atId).length;
-  const coNameMatch = companies.filter(c => !c.accepted && !c.excluded && c.atId).length;
-  const svcAccepted = services.filter(s => s.accepted && s.atServiceId).length;
-  const svcFlagged  = services.filter(s => !s.accepted || !s.atServiceId).length;
-
-  // Unmatched / unfilled companies to show with Exclude buttons
-  const needsAction = companies.filter(c => !c.accepted && !c.excluded);
-
-  el.classList.remove('hidden');
-  el.innerHTML = `
-    <div class="report-stats" style="margin-bottom:${needsAction.length ? 16 : 20}px">
-      <div class="report-stat clean"><span class="report-stat-num">${coAccepted}</span><span class="report-stat-label">Companies Mapped</span></div>
-      <div class="report-stat ${coUnfilled + coNameMatch > 0 ? 'warn' : 'clean'}"><span class="report-stat-num">${coUnfilled + coNameMatch}</span><span class="report-stat-label">Needs Review</span></div>
-      <div class="report-stat"><span class="report-stat-num">${coExcluded}</span><span class="report-stat-label">Excluded</span></div>
-      <div class="report-stat clean"><span class="report-stat-num">${svcAccepted}</span><span class="report-stat-label">Services Mapped</span></div>
-      <div class="report-stat ${svcFlagged > 0 ? 'warn' : 'clean'}"><span class="report-stat-num">${svcFlagged}</span><span class="report-stat-label">Services Unfilled</span></div>
-    </div>
-    ${needsAction.length ? `
-    <div class="settings-section" style="max-width:680px;margin-bottom:20px;padding:16px 20px">
-      <div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Companies needing action</div>
-      <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px">
-        Name-matched companies need your confirmation. Accept if the Autotask name is correct, or Exclude to skip this client in all tools.
-      </div>
-      <div style="display:flex;flex-direction:column;gap:6px">
-        ${needsAction.map(c => {
-          const hasMatch = !!c.atId;
-          return `
-          <div class="mapping-action-row" data-pax8id="${escHtml(c.pax8Id)}" style="display:flex;align-items:center;gap:10px;padding:7px 10px;background:var(--bg);border-radius:6px;border:1px solid var(--border)">
-            <span style="font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(c.pax8Name || c.pax8Id)}">${escHtml(c.pax8Name || c.pax8Id)}</span>
-            <span style="font-size:11px;color:${hasMatch ? 'var(--text-dim)' : 'var(--text-muted)'};flex-shrink:0;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-              ${hasMatch ? `→ ${escHtml(c.atName)}` : 'No Autotask match found'}
-            </span>
-            ${hasMatch ? `<button class="btn btn-ghost btn-sm accept-company-btn" style="flex-shrink:0;font-size:11px;padding:3px 10px;color:var(--success);border-color:var(--success)40"
-              data-pax8id="${escHtml(c.pax8Id)}">Accept</button>` : ''}
-            <button class="btn btn-ghost btn-sm exclude-company-btn" style="flex-shrink:0;font-size:11px;padding:3px 10px;color:var(--warn);border-color:var(--warn)30"
-              data-pax8id="${escHtml(c.pax8Id)}">Exclude</button>
-          </div>`;
-        }).join('')}
-      </div>
-    </div>` : ''}
-  `;
-}
-
-// Event delegation for Accept / Exclude buttons in Company Mapping
+// ── Event delegation — Accept / Exclude / Find Match ─────────────────────────
 content.addEventListener('click', async (e) => {
-  const acceptBtn  = e.target.closest('.accept-company-btn');
-  const excludeBtn = e.target.closest('.exclude-company-btn');
-  if (!acceptBtn && !excludeBtn) return;
-
-  const btn    = acceptBtn || excludeBtn;
-  const pax8Id = btn.dataset.pax8id;
-  if (!pax8Id) return;
-
-  btn.disabled = true;
-  btn.textContent = acceptBtn ? 'Accepting…' : 'Excluding…';
-
-  try {
-    if (acceptBtn) {
+  // Accept match (with optional manual AT ID)
+  const acceptBtn = e.target.closest('.cd-accept-btn');
+  if (acceptBtn) {
+    const pax8Id = acceptBtn.dataset.pax8id;
+    acceptBtn.disabled = true; acceptBtn.textContent = 'Saving…';
+    try {
       await window.api.acceptCompanyMatch({ pax8Id });
-    } else {
+      acceptBtn.closest('.cd-review-row')?.closest('.cd-review-row, [data-pax8id]')?.parentElement?.parentElement?.remove();
+      await cdLoadData();
+    } catch { acceptBtn.disabled = false; acceptBtn.textContent = 'Accept'; }
+    return;
+  }
+
+  // Exclude
+  const excludeBtn = e.target.closest('.cd-exclude-btn');
+  if (excludeBtn) {
+    const pax8Id = excludeBtn.dataset.pax8id;
+    excludeBtn.disabled = true; excludeBtn.textContent = '…';
+    try {
       await window.api.setCompanyExcluded({ pax8Id, excluded: true });
+      await cdLoadData();
+    } catch { excludeBtn.disabled = false; excludeBtn.textContent = 'Exclude'; }
+    return;
+  }
+
+  // Toggle inline Find Match box
+  const findBtn = e.target.closest('.cd-find-btn');
+  if (findBtn) {
+    const pax8Id  = findBtn.dataset.pax8id;
+    const safeId  = pax8Id.replace(/[^a-z0-9]/gi, '_');
+    const findWrap = document.getElementById(`cd-find-${safeId}`);
+    if (!findWrap) return;
+    const isOpen = !findWrap.classList.contains('hidden');
+    findWrap.classList.toggle('hidden', isOpen);
+    if (!isOpen) {
+      const input = findWrap.querySelector('.cd-find-input');
+      if (input) { input.focus(); input.select(); cdSearchAt(input, findWrap, pax8Id); }
     }
-    // Fade and update the whole row
-    const row = btn.closest('.mapping-action-row');
-    if (row) {
-      row.style.opacity = '0.4';
-      row.querySelectorAll('button').forEach(b => { b.disabled = true; });
-      btn.textContent = acceptBtn ? '✓ Accepted' : '✓ Excluded';
-    }
-    await loadExistingMappingStatus();
-  } catch (err) { btn.textContent = 'Error'; btn.disabled = false; }
+    return;
+  }
+
+  // Select a found AT company
+  const matchItem = e.target.closest('.cd-match-item');
+  if (matchItem) {
+    const pax8Id = matchItem.dataset.pax8id;
+    const atId   = parseInt(matchItem.dataset.atid, 10);
+    const atName = matchItem.dataset.atname;
+    matchItem.textContent = 'Saving…';
+    try {
+      await window.api.acceptCompanyMatch({ pax8Id, atId, atName });
+      await cdLoadData();
+    } catch { matchItem.textContent = atName; }
+    return;
+  }
 });
 
+// ── Inline AT search ─────────────────────────────────────────────────────────
+function cdSearchAt(input, wrap, pax8Id) {
+  let timer;
+  const resultsEl = wrap.querySelector('.cd-find-results');
+
+  async function doSearch() {
+    const q = input.value.trim();
+    if (!q) { resultsEl.innerHTML = ''; return; }
+    resultsEl.innerHTML = `<div style="padding:6px 10px;font-size:11px;color:var(--text-muted)">Searching…</div>`;
+    const results = await window.api.cmSearchAtCompanies(q).catch(() => []);
+    if (!results.length) {
+      resultsEl.innerHTML = `<div style="padding:6px 10px;font-size:11px;color:var(--text-muted)">No matches found</div>`;
+      return;
+    }
+    resultsEl.innerHTML = results.map(r => `
+      <div class="cd-match-item" data-pax8id="${escHtml(pax8Id)}" data-atid="${r.id}" data-atname="${escHtml(r.name)}">
+        ${escHtml(r.name)} <span style="color:var(--text-muted);font-size:10px">ID: ${r.id}</span>
+      </div>`).join('');
+  }
+
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(doSearch, 300); });
+  doSearch();
+}
+
+// ── CSV actions (admin) ───────────────────────────────────────────────────────
 async function exportMappingCsv() {
   const btn    = document.getElementById('btn-export-mapping-csv');
-  const status = document.getElementById('export-mapping-status');
+  const status = document.getElementById('cd-action-status');
   btn.disabled = true;
   try {
     const r = await window.api.exportMappingCsv();
     if (r.error) { status.textContent = `Error: ${r.error}`; status.className = 'save-status error'; }
-    else { status.textContent = `✓ Exported ${r.coCount} unmapped companies & ${r.svcCount} unmapped services — folder opened`; status.className = 'save-status success'; }
+    else { status.textContent = `✓ Exported ${r.coCount} unmapped companies & ${r.svcCount} services`; status.className = 'save-status success'; }
   } catch (e) { status.textContent = `Error: ${e.message}`; status.className = 'save-status error'; }
   btn.disabled = false;
+  setTimeout(() => { if (status) { status.textContent = ''; status.className = 'save-status'; } }, 5000);
 }
 
 async function exportFullMappingCsv() {
   const btn    = document.getElementById('btn-export-full-mapping-csv');
-  const status = document.getElementById('export-mapping-status');
-  btn.disabled = true; btn.textContent = 'Exporting…';
+  const status = document.getElementById('cd-action-status');
+  btn.disabled = true;
   try {
     const r = await window.api.exportFullMappingCsv();
     if (r.error) { status.textContent = `Error: ${r.error}`; status.className = 'save-status error'; }
-    else {
-      const refNote = r.hasRef ? ' + AT services reference' : '';
-      status.textContent = `✓ Full export: ${r.coCount} companies, ${r.svcCount} services${refNote} — folder opened`;
-      status.className = 'save-status success';
-    }
+    else { status.textContent = `✓ Full export: ${r.coCount} companies, ${r.svcCount} services${r.hasRef ? ' + AT ref' : ''}`; status.className = 'save-status success'; }
   } catch (e) { status.textContent = `Error: ${e.message}`; status.className = 'save-status error'; }
-  btn.disabled = false; btn.textContent = '↓ Full Export (all + AT reference)';
+  btn.disabled = false;
   setTimeout(() => { if (status) { status.textContent = ''; status.className = 'save-status'; } }, 5000);
 }
 
 async function importMappingCsv(type) {
-  const status = document.getElementById('import-mapping-status');
+  const status = document.getElementById('cd-action-status');
   try {
     const r = await window.api.importMappingCsv(type);
     if (r.cancelled) return;
@@ -1690,7 +1900,7 @@ async function importMappingCsv(type) {
       const label = r.isPsaExport ? `${r.count} products from Pax8 PSA export` : `${r.count} ${type}`;
       status.textContent = `✓ ${label} imported`;
       status.className = 'save-status success';
-      loadExistingMappingStatus();
+      cdLoadData();
     }
   } catch (e) { status.textContent = `Error: ${e.message}`; status.className = 'save-status error'; }
   setTimeout(() => { if (status) { status.textContent = ''; status.className = 'save-status'; } }, 4000);
@@ -1806,11 +2016,12 @@ function renderSettings(activeTab = 'general') {
             <div class="field-group"><label class="field-label" style="font-size:11px;color:var(--text-muted)">Service Delivery %</label><input class="field-input" id="ks-itGlue-serviceDelivery" type="number" min="0" max="100" style="width:80px" /></div>
             <div class="field-group"><label class="field-label" style="font-size:11px;color:var(--text-muted)">Admin %</label><input class="field-input" id="ks-itGlue-admin" type="number" min="0" max="100" style="width:80px" /></div>
           </div>
-          <div>
-            <div class="field-label" style="margin-bottom:8px">Bundled splits</div>
-            <div class="field-group"><label class="field-label" style="font-size:11px;color:var(--text-muted)">SaaS Protection — Bundled %</label><input class="field-input" id="ks-saas-bundledPct" type="number" min="0" max="100" style="width:80px" /><p class="field-hint">Remainder → Standalone (Cloud Email Mgmt)</p></div>
-            <div class="field-group" style="margin-top:8px"><label class="field-label" style="font-size:11px;color:var(--text-muted)">DWP — Bundled %</label><input class="field-input" id="ks-dwp-bundledPct" type="number" min="0" max="100" style="width:80px" /><p class="field-hint">Remainder → Standalone (Cloud File Sync). DFP always Standalone.</p></div>
-          </div>
+        </div>
+        <div style="margin-top:16px;border-top:1px solid rgba(255,255,255,.08);padding-top:16px">
+          <div class="field-label" style="margin-bottom:4px">Workplace Bundle Overrides</div>
+          <p class="field-hint" style="margin-bottom:10px">Clients with contracted bundled seats — deducted from billable count when pushing to AT.</p>
+          <div id="ks-workplace-bundles-list" style="margin-bottom:8px"></div>
+          <button class="btn btn-ghost btn-sm" id="ks-add-workplace-bundle" type="button">+ Add Client</button>
         </div>
         <div style="margin-top:16px">
           <button class="btn btn-primary btn-sm" id="btn-save-kaseya-settings">Save</button>
@@ -1873,25 +2084,6 @@ Total CommITment Core</textarea>
 
     <!-- ── Tab 2: AI Prompts ── -->
     <div class="stab-panel ${activeTab==='prompts'?'active':''}" data-panel="prompts">
-
-      <div class="settings-section">
-        <h2 class="section-title">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="1" width="12" height="14" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M5 4h6M5 7h6M5 10h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M9 11.5l1.5 1.5L13 10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Kaseya Invoice Processor — Prompt Template
-        </h2>
-        <p class="field-hint" style="margin-bottom:8px">
-          <strong>Placeholders:</strong>
-          <code class="ph">{invoiceRef}</code> <code class="ph">{billingStart}</code> <code class="ph">{billingEnd}</code>
-        </p>
-        <div class="field-group">
-          <textarea id="pt-kaseya-header" class="field-input pt-ta" rows="10" spellcheck="false"></textarea>
-        </div>
-        <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
-          <button class="btn btn-primary btn-sm" id="btn-save-kaseya-prompt">Save</button>
-          <button class="btn btn-ghost btn-sm" id="btn-reset-kaseya-prompt">Reset to Default</button>
-          <span class="save-status" id="kp-save-status"></span>
-        </div>
-      </div>
 
       <div class="settings-section">
         <h2 class="section-title">
@@ -1979,9 +2171,6 @@ Total CommITment Core</textarea>
   loadMarginSettings();
   document.getElementById('btn-save-margin-settings').addEventListener('click', saveMarginSettings);
   custInit();
-  // Kaseya prompt save/reset wired to new dedicated buttons on the prompts tab
-  document.getElementById('btn-save-kaseya-prompt').addEventListener('click', savePromptTemplateSettings);
-  document.getElementById('btn-reset-kaseya-prompt').addEventListener('click', resetPromptTemplateSettings);
   loadKaseyaSettings();
   document.getElementById('btn-save-kaseya-settings').addEventListener('click', saveKaseyaSettingsUI);
   loadRenewalSettingsUI();
@@ -2327,8 +2516,39 @@ async function loadKaseyaSettings() {
     set('ks-itGlue-strategic',     s.itGlue?.strategic);
     set('ks-itGlue-serviceDelivery', s.itGlue?.serviceDelivery);
     set('ks-itGlue-admin',         s.itGlue?.admin);
-    set('ks-saas-bundledPct',      s.saas?.bundledPct);
-    set('ks-dwp-bundledPct',       s.dwp?.bundledPct);
+    // Render workplace bundle overrides table
+    const listEl = document.getElementById('ks-workplace-bundles-list');
+    if (listEl) {
+      const WP_PRODUCTS = [
+        ['DWP Metered Plan - User License',          'DWP Metered — User'],
+        ['DWP Unlimited Plan - User License',         'DWP Unlimited — User'],
+        ['DWP Metered Plan - Server License',         'DWP Metered — Server'],
+        ['DWP Unlimited Plan - Server License',       'DWP Unlimited — Server'],
+        ['DFP Unlimited Plan - Laptop/Desktop License','DFP — Laptop/Desktop'],
+        ['DFP Unlimited Plan - Server License',       'DFP — Server'],
+      ];
+      const productOpts = WP_PRODUCTS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+      const addBundleRow = (client = '', product = '', seats = 0) => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:6px';
+        row.dataset.bundleRow = '1';
+        row.innerHTML = `<input class="field-input" placeholder="Client name" style="flex:1;min-width:150px" data-bundle-client value="${escHtml(client)}">
+          <select class="field-input" data-bundle-product style="width:175px;color-scheme:dark">${productOpts}</select>
+          <input class="field-input" type="number" min="0" placeholder="Seats" style="width:80px" data-bundle-seats value="${seats}">
+          <button class="btn btn-ghost btn-sm" type="button" style="white-space:nowrap;flex-shrink:0">Remove</button>`;
+        if (product) row.querySelector('[data-bundle-product]').value = product;
+        row.querySelector('button').addEventListener('click', () => row.remove());
+        listEl.appendChild(row);
+      };
+      listEl.innerHTML = '';
+      for (const b of (s.workplaceBundles || [])) addBundleRow(b.client, b.product || '', b.bundledSeats || 0);
+      const addBtn = document.getElementById('ks-add-workplace-bundle');
+      if (addBtn) {
+        const fresh = addBtn.cloneNode(true);
+        addBtn.replaceWith(fresh);
+        fresh.addEventListener('click', () => addBundleRow());
+      }
+    }
   } catch {}
 }
 
@@ -2336,12 +2556,19 @@ async function saveKaseyaSettingsUI() {
   const status = document.getElementById('ks-save-status');
   try {
     const g = (id) => parseFloat(document.getElementById(id)?.value) || 0;
+    const gs = (id) => (document.getElementById(id)?.value?.trim() || '');
+    const workplaceBundles = [];
+    document.querySelectorAll('#ks-workplace-bundles-list [data-bundle-row]').forEach(row => {
+      const client  = (row.querySelector('[data-bundle-client]')?.value || '').trim();
+      const product = row.querySelector('[data-bundle-product]')?.value || '';
+      const seats   = parseInt(row.querySelector('[data-bundle-seats]')?.value || '0', 10);
+      if (client && product) workplaceBundles.push({ client, product, bundledSeats: isNaN(seats) ? 0 : seats });
+    });
     const settings = {
       psa:    { strategic: g('ks-psa-strategic'), serviceDelivery: g('ks-psa-serviceDelivery'), admin: g('ks-psa-admin'), coManaged: g('ks-psa-coManaged') },
       rmm:    { strategic: g('ks-rmm-strategic'), serviceDelivery: g('ks-rmm-serviceDelivery') },
       itGlue: { strategic: g('ks-itGlue-strategic'), serviceDelivery: g('ks-itGlue-serviceDelivery'), admin: g('ks-itGlue-admin') },
-      saas:   { bundledPct: g('ks-saas-bundledPct') },
-      dwp:    { bundledPct: g('ks-dwp-bundledPct') },
+      workplaceBundles,
     };
     await window.api.saveKaseyaSettings(settings);
     status.textContent = '✓ Saved'; status.className = 'save-status success';
@@ -3245,36 +3472,32 @@ function renderKaseyaProcessor() {
     <div class="view-header">
       <div>
         <h1 class="view-title">Kaseya Invoice Processor</h1>
-        <p class="view-desc">Import a Kaseya invoice XLS file to generate QBO journal entries, module summaries, and client breakdowns. Optionally generate an Autotask prompt for quantity updates.</p>
+        <p class="view-desc">Load a Kaseya invoice from SharePoint to review all cost and usage sections and generate QBO journal entries.</p>
       </div>
       <img class="view-header-deco" src="Anchor_Logo_Vertical_High.png" alt="" draggable="false" />
     </div>
 
     <div class="settings-section">
-      <div class="section-title">Step 1 — Load Invoice File</div>
-      <p class="field-hint" style="margin-bottom:12px">Browse for the Kaseya invoice XLS file downloaded from the Kaseya vendor portal.</p>
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-        <button class="btn btn-primary" id="kp-browse-btn">
-          <svg width="13" height="13" viewBox="0 0 13 13" fill="none" style="margin-right:4px"><path d="M2 10V4a1 1 0 011-1h3l1 1h4a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1z" stroke="currentColor" stroke-width="1.3"/></svg>
-          Browse XLS…
-        </button>
-        <span id="kp-filename" style="font-size:12px;color:var(--text-muted);font-family:var(--font-mono)"></span>
-      </div>
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+      <div class="section-title">Step 1 — Select Invoice</div>
+      <p class="field-hint" style="margin-bottom:12px">Load a Kaseya invoice from SharePoint. Select the year folder, then choose the invoice file.</p>
+      <div style="display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <label style="font-size:11px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.06em">Year</label>
+          <select id="kp-sp-year" class="field-input" style="min-width:110px;color-scheme:dark;background:var(--surface-2);color:var(--text)">
+            <option value="">Loading…</option>
+          </select>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:240px">
+          <label style="font-size:11px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.06em">Invoice File</label>
+          <select id="kp-sp-file" class="field-input" style="min-width:240px;max-width:500px;color-scheme:dark;background:var(--surface-2);color:var(--text)" disabled>
+            <option value="">— select year first —</option>
+          </select>
+        </div>
         <button class="btn btn-primary" id="kp-process-btn" disabled>
           <svg width="13" height="13" viewBox="0 0 13 13" fill="none" style="margin-right:4px"><path d="M2 2.5l9 4-9 4V2.5z" fill="currentColor"/></svg>
           Process Invoice
         </button>
         <span id="kp-status" class="save-status"></span>
-      </div>
-      <!-- Load previous invoice from snapshot -->
-      <div style="display:flex;align-items:center;gap:8px;padding-top:12px;border-top:1px solid var(--border);flex-wrap:wrap">
-        <span style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;white-space:nowrap">Load Previous</span>
-        <select id="kp-load-prev-sel" class="field-input" style="min-width:240px;max-width:380px">
-          <option value="">— select a stored invoice —</option>
-        </select>
-        <button class="btn btn-ghost btn-sm" id="kp-load-prev-btn" disabled>Load</button>
-        <span id="kp-load-prev-status" class="save-status"></span>
       </div>
     </div>
 
@@ -3282,73 +3505,110 @@ function renderKaseyaProcessor() {
       <!-- Metric strip -->
       <div class="metric-strip" id="kp-metrics" style="margin-bottom:16px"></div>
 
+      <!-- Org mapping panel (admin only, injected by renderKaseyaOrgMapping) -->
+      <div id="kp-org-mapping"></div>
+
       <!-- Action bar -->
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
         <button class="btn btn-primary" id="kp-export-btn">
           <svg width="13" height="13" viewBox="0 0 13 13" fill="none" style="margin-right:4px"><path d="M1 10v1.5a.5.5 0 00.5.5h10a.5.5 0 00.5-.5V10M6.5 1v8M4 6.5L6.5 9 9 6.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Export Excel
         </button>
-        <button class="btn btn-ghost" id="kp-at-prompt-btn">
-          <svg width="13" height="13" viewBox="0 0 13 13" fill="none" style="margin-right:4px"><rect x="1" y="1" width="11" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M3.5 4.5h6M3.5 6.5h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-          Generate AT Prompt
-        </button>
+        <button class="btn btn-ghost" id="kp-clear-btn">Clear Invoice</button>
         <span id="kp-export-status" class="save-status"></span>
       </div>
 
-      <!-- QBO Journal Entries — full width -->
-      <div class="settings-section wide">
-        <div class="section-title">QBO Journal Entries</div>
-        <p class="field-hint" style="margin-bottom:10px">Enter these as a journal entry in QuickBooks. Highlighted rows cover items (BCDR, Networking) that need to be reconciled and split per-client separately — the total amount is correct but the per-client allocation is manual.</p>
-        <div id="kp-qbo-table" style="overflow-x:auto"></div>
-      </div>
+      <!-- Data cards grid -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(460px,1fr));gap:16px;margin-bottom:16px">
 
-      <!-- Summary box: Module left, Category right -->
-      <div class="settings-section wide">
-        <div class="section-title">Invoice Summary</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start">
-          <div>
-            <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:8px">By Module</div>
-            <div id="kp-module-table"></div>
-          </div>
-          <div>
-            <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:8px">By Category</div>
-            <div id="kp-category-table"></div>
-          </div>
+        <!-- QBO Journal Entries — full width -->
+        <div class="settings-section wide" style="grid-column:1/-1">
+          <div class="section-title">QBO Journal Entries</div>
+          <p class="field-hint" style="margin-bottom:10px">Enter these as a journal entry in QuickBooks.</p>
+          <div id="kp-qbo-table" style="overflow-x:auto"></div>
         </div>
-      </div>
 
-      <!-- AT Prompt -->
-      <div class="settings-section wide" id="kp-at-section" style="display:none">
-        <div class="section-title" style="display:flex;align-items:center;justify-content:space-between">
-          <span>Autotask Update Prompt</span>
-          <button class="btn btn-ghost btn-sm" id="kp-at-copy-btn">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="margin-right:3px"><rect x="1" y="3" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M3 3V2a1 1 0 011-1h5a1 1 0 011 1v6a1 1 0 01-1 1h-1" stroke="currentColor" stroke-width="1.2"/></svg>
-            Copy
-          </button>
+        <!-- Totals by Module -->
+        <div class="settings-section">
+          <div class="section-title">Totals by Module</div>
+          <div id="kp-module-table"></div>
         </div>
-        <p class="field-hint" style="margin-bottom:10px">Paste this prompt into Claude MCP to update Autotask contract service quantities.</p>
-        <textarea id="kp-at-ta" readonly style="width:100%;min-height:260px;font-family:var(--font-mono);font-size:12px;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;resize:vertical;line-height:1.5;box-sizing:border-box"></textarea>
+
+        <!-- Totals by Category -->
+        <div class="settings-section">
+          <div class="section-title">Totals by Category</div>
+          <div id="kp-category-table"></div>
+        </div>
+
+        <!-- Anchor Tools -->
+        <div class="settings-section">
+          <div class="section-title">Anchor Tools</div>
+          <div id="kp-anchor-tools-table"></div>
+        </div>
+
+        <!-- Datto Backup & Networking -->
+        <div class="settings-section">
+          <div class="section-title">Datto Backup &amp; Networking</div>
+          <div id="kp-backup-table"></div>
+        </div>
+
+        <!-- Datto Workplace Costs -->
+        <div class="settings-section">
+          <div class="section-title">Datto Workplace Costs</div>
+          <div id="kp-workplace-costs-table"></div>
+        </div>
+
+        <!-- Datto Workplace Usage -->
+        <div class="settings-section wide" style="grid-column:1/-1">
+          <div class="section-title" style="display:flex;align-items:center;justify-content:space-between">
+            <span>Datto Workplace Usage</span>
+            <button class="btn btn-ghost btn-sm" id="kp-dwp-push-btn" style="display:none">Push to AT</button>
+          </div>
+          <div id="kp-workplace-usage-table"></div>
+        </div>
+
+        <!-- Datto SaaS Usage -->
+        <div class="settings-section">
+          <div class="section-title" style="display:flex;align-items:center;justify-content:space-between">
+            <span>Datto SaaS Usage</span>
+            <button class="btn btn-ghost btn-sm" id="kp-saas-push-btn" style="display:none">Push to AT</button>
+          </div>
+          <div id="kp-saas-table"></div>
+        </div>
+
+        <!-- Datto Networking -->
+        <div class="settings-section">
+          <div class="section-title">Datto Networking</div>
+          <div id="kp-networking-table"></div>
+        </div>
+
+        <!-- Datto BCDR -->
+        <div class="settings-section">
+          <div class="section-title">Datto BCDR</div>
+          <div id="kp-bcdr-table"></div>
+        </div>
+
+        <!-- Totals by Client — full width, bottom -->
+        <div class="settings-section wide" style="grid-column:1/-1">
+          <div class="section-title">Totals by Client</div>
+          <div id="kp-client-table" style="overflow-x:auto"></div>
+        </div>
+
       </div>
     </div>
 
-    <!-- Delta Comparison — always visible if snapshots exist, outside kp-results -->
+    <!-- Delta Comparison — loads available SP invoice files -->
     <div class="settings-section wide" id="kp-delta-section" style="display:none">
-      <div class="section-title" style="display:flex;align-items:center;justify-content:space-between">
-        <span>Invoice Delta Comparison</span>
-        <span id="kp-delta-saved-badge" style="font-size:11px;color:var(--success);display:none">
-          <svg width="11" height="11" viewBox="0 0 11 11" fill="none" style="margin-right:3px;vertical-align:-1px"><circle cx="5.5" cy="5.5" r="4.5" stroke="currentColor" stroke-width="1.2"/><path d="M3.5 5.5l1.5 1.5 2.5-3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Snapshot saved
-        </span>
-      </div>
-      <p class="field-hint" style="margin-bottom:12px">Compare any two stored invoices to see what changed — new clients, dropped clients, cost increases, quantity shifts. Each invoice you process is automatically saved as a snapshot.</p>
+      <div class="section-title">Invoice Delta Comparison</div>
+      <p class="field-hint" style="margin-bottom:12px">Compare any two SharePoint invoices to see what changed — new clients, dropped clients, cost increases, quantity shifts.</p>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px">
         <div style="display:flex;flex-direction:column;gap:4px">
           <label style="font-size:11px;color:var(--text-muted)">Baseline (Month A)</label>
-          <select id="kp-delta-a" class="field-input" style="min-width:200px"><option value="">— select month —</option></select>
+          <select id="kp-delta-a" class="field-input" style="min-width:200px;color-scheme:dark;background:var(--surface-2);color:var(--text)"><option value="">— select month —</option></select>
         </div>
         <div style="display:flex;flex-direction:column;gap:4px">
           <label style="font-size:11px;color:var(--text-muted)">Compare (Month B)</label>
-          <select id="kp-delta-b" class="field-input" style="min-width:200px"><option value="">— select month —</option></select>
+          <select id="kp-delta-b" class="field-input" style="min-width:200px;color-scheme:dark;background:var(--surface-2);color:var(--text)"><option value="">— select month —</option></select>
         </div>
         <div style="display:flex;flex-direction:column;gap:4px">
           <label style="font-size:11px;color:transparent">run</label>
@@ -3357,31 +3617,87 @@ function renderKaseyaProcessor() {
         <span id="kp-delta-status" class="save-status"></span>
       </div>
       <div id="kp-delta-results"></div>
-      <div id="kp-delta-manage" style="margin-top:12px;display:none">
-        <details style="font-size:12px;color:var(--text-muted)">
-          <summary style="cursor:pointer;user-select:none">Manage stored snapshots</summary>
-          <div id="kp-delta-snap-list" style="margin-top:8px;display:flex;flex-direction:column;gap:4px"></div>
-        </details>
-      </div>
     </div>
   `;
 
-  let _filePath = null;
+  let _spSelectedFileId = null;
+  let _spSelectedFileName = null;
 
-  document.getElementById('kp-browse-btn').addEventListener('click', async () => {
-    const result = await window.api.browseKaseyaXls();
-    if (!result || !result.filePath) return;
-    _filePath = result.filePath;
-    document.getElementById('kp-filename').textContent = result.fileName || result.filePath.split(/[\\/]/).pop();
-    document.getElementById('kp-process-btn').disabled = false;
+  // Load SP year list on open
+  (async () => {
+    const yearSel = document.getElementById('kp-sp-year');
+    try {
+      const res = await window.api.kaseyaSpListYears();
+      yearSel.innerHTML = '';
+      if (!res?.ok) {
+        const msg = res?.error || 'Unknown error';
+        yearSel.innerHTML = `<option value="">(SP error: ${escHtml(msg)})</option>`;
+        return;
+      }
+      const years = res.years || [];
+      if (!years.length) {
+        yearSel.innerHTML = '<option value="">(no year folders found)</option>';
+        return;
+      }
+      const blank = document.createElement('option'); blank.value = ''; blank.textContent = '— select year —'; yearSel.appendChild(blank);
+      years.forEach(y => { const o = document.createElement('option'); o.value = y; o.textContent = y; yearSel.appendChild(o); });
+    } catch (e) {
+      yearSel.innerHTML = `<option value="">(error: ${escHtml(e.message)})</option>`;
+    }
+  })();
+
+  document.getElementById('kp-sp-year').addEventListener('change', async function () {
+    const year = this.value;
+    const fileSel = document.getElementById('kp-sp-file');
+    const processBtn = document.getElementById('kp-process-btn');
+    _spSelectedFileId = null;
+    _spSelectedFileName = null;
+    processBtn.disabled = true;
+    fileSel.disabled = true;
+    fileSel.innerHTML = '<option value="">Loading…</option>';
+    if (!year) { fileSel.innerHTML = '<option value="">— select year first —</option>'; return; }
+    try {
+      const res = await window.api.kaseyaSpListFiles({ year });
+      const files = res?.files || [];
+      fileSel.innerHTML = '<option value="">— select invoice —</option>';
+      // Load cached snapshots to show grand total alongside the date label
+      const snapList = await window.api.getKaseyaSnapshots().catch(() => []);
+      const snapTotals = new Map((snapList || []).map(s => [s.invoiceDate?.slice(0, 7), s.grandTotal]));
+      const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+      files.forEach(f => {
+        const o = document.createElement('option');
+        o.value = f.driveItemId;
+        o.dataset.name = f.name;
+        const dm = f.name.match(/_(\d{4})(\d{2})(\d{2})/);
+        if (dm) {
+          const [, yr, mo] = dm;
+          const label = `${MONTHS[parseInt(mo, 10) - 1]} ${yr}`;
+          const gt = snapTotals.get(`${yr}-${mo}`);
+          o.textContent = gt != null ? `${label} — $${gt.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : label;
+        } else {
+          o.textContent = f.name;
+        }
+        fileSel.appendChild(o);
+      });
+      fileSel.disabled = false;
+    } catch (e) {
+      fileSel.innerHTML = `<option value="">(error: ${escHtml(e.message)})</option>`;
+    }
+  });
+
+  document.getElementById('kp-sp-file').addEventListener('change', function () {
+    const opt = this.options[this.selectedIndex];
+    _spSelectedFileId = this.value || null;
+    _spSelectedFileName = opt?.dataset?.name || null;
+    document.getElementById('kp-process-btn').disabled = !_spSelectedFileId;
   });
 
   document.getElementById('kp-process-btn').addEventListener('click', async () => {
     const status = document.getElementById('kp-status');
-    status.textContent = 'Processing…'; status.className = 'save-status';
+    status.textContent = 'Downloading & processing…'; status.className = 'save-status';
     document.getElementById('kp-process-btn').disabled = true;
     try {
-      const data = await window.api.processKaseyaXls({ filePath: _filePath });
+      const data = await window.api.kaseyaSpProcessFile({ driveItemId: _spSelectedFileId, fileName: _spSelectedFileName });
       if (!data.success) throw new Error(data.error || 'Processing failed');
       _kaseyaData = data;
       renderKaseyaResults(data);
@@ -3390,51 +3706,16 @@ function renderKaseyaProcessor() {
     } catch (e) {
       status.textContent = `Error: ${e.message}`; status.className = 'save-status error';
     } finally {
-      document.getElementById('kp-process-btn').disabled = false;
+      document.getElementById('kp-process-btn').disabled = !_spSelectedFileId;
     }
   });
 
-  // Populate "Load Previous" dropdown from stored snapshots
-  (async () => {
-    try {
-      const snaps = await window.api.getKaseyaSnapshots();
-      const sel = document.getElementById('kp-load-prev-sel');
-      const btn = document.getElementById('kp-load-prev-btn');
-      if (!sel || !snaps || !snaps.length) return;
-      snaps.forEach(s => {
-        const label = s.invoiceDate
-          ? new Date(s.invoiceDate + 'T12:00:00').toLocaleDateString('en-US', { year: 'numeric', month: 'long' }) + ` — $${(s.grandTotal || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-          : `${s.key} — $${(s.grandTotal || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-        const opt = document.createElement('option');
-        opt.value = s.key;
-        opt.textContent = label;
-        sel.appendChild(opt);
-      });
-      sel.addEventListener('change', () => {
-        btn.disabled = !sel.value;
-      });
-      btn.addEventListener('click', async () => {
-        const key = sel.value;
-        if (!key) return;
-        const st = document.getElementById('kp-load-prev-status');
-        st.textContent = 'Loading…'; st.className = 'save-status';
-        btn.disabled = true;
-        try {
-          const data = await window.api.loadKaseyaSnapshot(key);
-          if (!data.success) throw new Error(data.error || 'Load failed');
-          _kaseyaData = data;
-          renderKaseyaResults(data);
-          saveToolStat('kaseya-processor', `${data.clients ? data.clients.length : 0} clients · ${data.totalLines || 0} rows`, 'ok');
-          st.textContent = '✓ Loaded'; st.className = 'save-status success';
-          setTimeout(() => { st.textContent = ''; }, 3000);
-        } catch (e) {
-          st.textContent = `Error: ${e.message}`; st.className = 'save-status error';
-        } finally {
-          btn.disabled = false;
-        }
-      });
-    } catch (_) { /* non-fatal — snapshots may not exist yet */ }
-  })();
+  // Restore previous invoice if still in session
+  if (_kaseyaData) {
+    renderKaseyaResults(_kaseyaData);
+    const st = document.getElementById('kp-status');
+    if (st) { st.textContent = `✓ ${_kaseyaData.fileName || 'Invoice loaded'}`; st.className = 'save-status success'; }
+  }
 
   // Load delta section on tool open (show available snapshots even before processing)
   kpLoadDeltaSection(null);
@@ -3444,6 +3725,14 @@ function renderKaseyaResults(data) {
   const resultsEl = document.getElementById('kp-results');
   if (!resultsEl) return;
   resultsEl.style.display = '';
+
+  // Wire Clear button every time results are shown (safe to re-wire — replaces prior listener)
+  const clearBtn = document.getElementById('kp-clear-btn');
+  if (clearBtn) {
+    const newClear = clearBtn.cloneNode(true);
+    clearBtn.replaceWith(newClear);
+    newClear.addEventListener('click', () => { _kaseyaData = null; renderKaseyaProcessor(); });
+  }
   const fmtAmt = v => '$' + (v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   // Metric strip
@@ -3458,67 +3747,35 @@ function renderKaseyaResults(data) {
     <div class="metric-card"><div class="metric-value">${clientCount}</div><div class="metric-label">Clients</div></div>
   `;
 
-  // Debug info — sheet + columns detected (replace if already exists)
-  const existingDebug = document.getElementById('kp-debug-info');
-  if (existingDebug) existingDebug.remove();
-  if (data.columnsDetected || data.sheetUsed) {
-    const cd = data.columnsDetected || {};
-    const debugEl = document.createElement('p');
-    debugEl.id = 'kp-debug-info';
-    debugEl.style.cssText = 'font-size:10px;color:var(--text-muted);font-family:var(--font-mono);margin:0 0 12px;opacity:.7';
-    debugEl.textContent = `Sheet: "${data.sheetUsed}" | Company→"${cd.company}" Module→"${cd.module}" Qty→"${cd.qty}" Total→"${cd.total}"`;
-    metricsEl.after(debugEl);
+  // Blank module / blank category warnings
+  const existingWarn = document.getElementById('kp-parse-warnings');
+  if (existingWarn) existingWarn.remove();
+  const blankMods  = data.blankModuleRows  || [];
+  const blankCats  = data.blankCategoryCount || 0;
+  if (blankMods.length || blankCats) {
+    const warnEl = document.createElement('div');
+    warnEl.id = 'kp-parse-warnings';
+    warnEl.style.cssText = 'margin-bottom:14px;display:flex;flex-direction:column;gap:6px';
+    if (blankMods.length) {
+      const rows = blankMods.map(r =>
+        `<li style="margin:0;padding:2px 0">${escHtml(r.company)} — <em>${escHtml(r.desc)}</em> (${fmtAmt(r.total)})</li>`
+      ).join('');
+      warnEl.innerHTML += `<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.35);border-radius:6px;padding:10px 14px;font-size:12px">
+        <span style="font-weight:600;color:var(--error)">⚠ ${blankMods.length} row${blankMods.length > 1 ? 's' : ''} skipped — blank module (not matched by fallback rules)</span>
+        <ul style="margin:6px 0 0;padding-left:18px;color:var(--text-muted)">${rows}</ul>
+      </div>`;
+    }
+    if (blankCats) {
+      warnEl.innerHTML += `<div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:6px;padding:8px 14px;font-size:12px;color:rgba(245,158,11,.9)">
+        ⚠ ${blankCats} row${blankCats > 1 ? 's' : ''} have a blank Category — they are included in totals but won't appear in the category breakdown.
+      </div>`;
+    }
+    metricsEl.after(warnEl);
   }
 
   // QBO table
   const qboEl = document.getElementById('kp-qbo-table');
-  const entries = data.qboEntries || [];
-  if (entries.length === 0) {
-    qboEl.innerHTML = '<p class="field-hint">No entries generated.</p>';
-  } else {
-    const qboTotal = entries.reduce((s, e) => s + e.amount, 0);
-    const classPill = cls => {
-      const map = {
-        'Strategic Services': 'background:rgba(139,92,246,.18);color:#c4b5fd',
-        'Service Delivery':   'background:rgba(59,130,246,.18);color:#93c5fd',
-        'Admin':              'background:rgba(148,163,184,.15);color:#94a3b8',
-      };
-      const s = map[cls];
-      return s
-        ? `<span style="display:inline-block;padding:1px 7px;border-radius:4px;font-size:10px;font-weight:700;${s}">${escHtml(cls)}</span>`
-        : `<span style="color:var(--text-muted);font-size:11px">—</span>`;
-    };
-    const thStyle = 'padding:9px 12px;text-align:left;font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:rgba(255,255,255,.75);white-space:nowrap';
-    qboEl.innerHTML = `
-      <table style="width:100%;border-collapse:collapse;font-size:12.5px">
-        <thead>
-          <tr style="background:rgba(45,77,107,.75)">
-            <th style="${thStyle}">Description</th>
-            <th style="${thStyle}">QBO Account</th>
-            <th style="${thStyle}">Class</th>
-            <th style="${thStyle};text-align:right">Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${entries.map((e, i) => `
-            <tr style="border-top:1px solid rgba(255,255,255,.06);${e.manual ? 'background:rgba(245,197,24,.07)' : i % 2 === 1 ? 'background:rgba(255,255,255,.025)' : ''}">
-              <td style="padding:8px 12px">
-                ${escHtml(e.description)}
-                ${e.manual ? '<span style="margin-left:6px;font-size:10px;font-weight:700;color:#f5c518;background:rgba(245,197,24,.12);padding:1px 6px;border-radius:3px">⚠ reconcile</span>' : ''}
-              </td>
-              <td style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--text-muted)">${escHtml(e.account)}</td>
-              <td style="padding:8px 12px">${classPill(e.class || '')}</td>
-              <td style="padding:8px 12px;text-align:right;font-family:var(--font-mono);font-weight:600">${fmtAmt(e.amount)}</td>
-            </tr>`).join('')}
-        </tbody>
-        <tfoot>
-          <tr style="border-top:2px solid rgba(45,77,107,.6);background:rgba(45,77,107,.2)">
-            <td colspan="3" style="padding:9px 12px;font-weight:700">Total</td>
-            <td style="padding:9px 12px;text-align:right;font-family:var(--font-mono);font-weight:700">${fmtAmt(qboTotal)}</td>
-          </tr>
-        </tfoot>
-      </table>`;
-  }
+  kpRenderQboTable(qboEl, data.qboEntries || []);
 
   // Shared bar-table builder for Module and Category summaries
   const buildBarTable = (rows, gtTotal) => {
@@ -3564,6 +3821,379 @@ function renderKaseyaResults(data) {
     catEl.innerHTML = buildBarTable(catKeys.map(k => ({ name: k, val: cats[k] || 0 })), catGT);
   }
 
+  // Product list table builder (name, qty, avgRate, total)
+  const buildProductTable = (rows) => {
+    if (!rows || !rows.length) return '<p class="field-hint">No data.</p>';
+    const thS = 'padding:8px 10px;text-align:left;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:rgba(255,255,255,.65);white-space:nowrap';
+    const gt = rows.reduce((s, r) => s + (r.total || 0), 0);
+    return `<table style="width:100%;border-collapse:collapse;font-size:12.5px">
+      <thead><tr style="background:rgba(45,77,107,.75)">
+        <th style="${thS}">Product</th>
+        <th style="${thS};text-align:right">Qty</th>
+        <th style="${thS};text-align:right">Avg Rate</th>
+        <th style="${thS};text-align:right">Total</th>
+      </tr></thead>
+      <tbody>
+        ${rows.map((r, i) => `<tr style="border-top:1px solid rgba(255,255,255,.06);${i%2===1?'background:rgba(255,255,255,.025)':''}">
+          <td style="padding:7px 10px">${escHtml(r.name)}</td>
+          <td style="padding:7px 10px;text-align:right;font-family:var(--font-mono)">${r.qty}</td>
+          <td style="padding:7px 10px;text-align:right;font-family:var(--font-mono)">${r.avgRate ? fmtAmt(r.avgRate) : '—'}</td>
+          <td style="padding:7px 10px;text-align:right;font-family:var(--font-mono);font-weight:600">${fmtAmt(r.total)}</td>
+        </tr>`).join('')}
+      </tbody>
+      <tfoot><tr style="border-top:2px solid rgba(45,77,107,.6);background:rgba(45,77,107,.2)">
+        <td colspan="3" style="padding:8px 10px;font-weight:700">Total</td>
+        <td style="padding:8px 10px;text-align:right;font-family:var(--font-mono);font-weight:700">${fmtAmt(gt)}</td>
+      </tr></tfoot>
+    </table>`;
+  };
+
+  // Totals by Client
+  const clientTableEl = document.getElementById('kp-client-table');
+  if (clientTableEl) {
+    const clients = data.clients || [];
+    if (!clients.length) {
+      clientTableEl.innerHTML = '<p class="field-hint">No client data.</p>';
+    } else {
+      const EXCLUDED_MODS  = new Set(['IT Glue', 'ITGlue', 'PSA', 'RMM']);
+      const USAGE_QTY_MODS = new Set(['SaaS Protection', 'DWP', 'DFP']);
+      const rawMods = [...new Set(clients.flatMap(c => Object.keys(c.modules || {})))].sort();
+      // Merge Azure Cloud Siris → BCDR; exclude IT Glue / PSA / RMM
+      const allMods = rawMods.filter(m => !EXCLUDED_MODS.has(m) && m !== 'Azure Cloud Siris');
+      // Ensure BCDR column exists if Azure Cloud Siris contributed
+      if (!allMods.includes('BCDR') && rawMods.includes('Azure Cloud Siris')) {
+        const idx = allMods.findIndex(m => m > 'BCDR');
+        allMods.splice(idx === -1 ? allMods.length : idx, 0, 'BCDR');
+      }
+      const getModValue = (c, m) => {
+        if (m === 'BCDR') {
+          const t = (c.modules?.['BCDR']?.total || 0) + (c.modules?.['Azure Cloud Siris']?.total || 0);
+          return t ? fmtAmt(t) : '—';
+        }
+        if (USAGE_QTY_MODS.has(m)) {
+          const lq = c.modules?.[m]?.licenseQty || 0;
+          return lq ? lq : '—';
+        }
+        return c.modules?.[m] ? fmtAmt(c.modules[m].total) : '—';
+      };
+      const thS = 'padding:8px 10px;text-align:left;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:rgba(255,255,255,.65);white-space:nowrap';
+      const gt = clients.reduce((s, c) => s + (c.total || 0), 0);
+      clientTableEl.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="background:rgba(45,77,107,.75)">
+          <th style="${thS}">Client</th>
+          ${allMods.map(m => `<th style="${thS};text-align:right">${escHtml(m)}</th>`).join('')}
+          <th style="${thS};text-align:right">Total</th>
+        </tr></thead>
+        <tbody>
+          ${clients.map((c, i) => `<tr style="border-top:1px solid rgba(255,255,255,.06);${i%2===1?'background:rgba(255,255,255,.025)':''}">
+            <td style="padding:7px 10px;white-space:nowrap">${escHtml(c.name)}</td>
+            ${allMods.map(m => `<td style="padding:7px 10px;text-align:right;font-family:var(--font-mono);font-size:11px;color:var(--text-muted)">${getModValue(c, m)}</td>`).join('')}
+            <td style="padding:7px 10px;text-align:right;font-family:var(--font-mono);font-weight:600">${fmtAmt(c.total)}</td>
+          </tr>`).join('')}
+        </tbody>
+        <tfoot><tr style="border-top:2px solid rgba(45,77,107,.6);background:rgba(45,77,107,.2)">
+          <td colspan="${allMods.length + 1}" style="padding:8px 10px;font-weight:700">Total</td>
+          <td style="padding:8px 10px;text-align:right;font-family:var(--font-mono);font-weight:700">${fmtAmt(gt)}</td>
+        </tr></tfoot>
+      </table>`;
+    }
+  }
+
+  // Anchor Tools
+  const anchorToolsEl = document.getElementById('kp-anchor-tools-table');
+  if (anchorToolsEl) anchorToolsEl.innerHTML = buildProductTable(data.anchorTools);
+
+  // Datto Backup & Networking
+  const backupEl = document.getElementById('kp-backup-table');
+  if (backupEl) backupEl.innerHTML = buildProductTable(data.backupProducts);
+
+  // Datto Workplace Costs
+  const wpCostsEl = document.getElementById('kp-workplace-costs-table');
+  if (wpCostsEl) wpCostsEl.innerHTML = buildProductTable(data.workplaceProducts);
+
+  // Datto Workplace Usage — per-client cross-tab, fixed column order, bundle-aware
+  const wpUsageEl = document.getElementById('kp-workplace-usage-table');
+  if (wpUsageEl) {
+    (async () => {
+      let workplaceBundles = [];
+      try { const s = await window.api.getKaseyaSettings(); workplaceBundles = s.workplaceBundles || []; } catch {}
+
+      const usage     = (data.workplaceUsage || []).filter(u => Object.values(u.products || {}).some(v => v > 0));
+      const allProds  = new Set((data.workplaceProductNames || []).concat(usage.flatMap(u => Object.keys(u.products || {}))));
+      const COL_ORDER = [
+        'DWP Metered Plan - User License', 'DWP Unlimited Plan - User License',
+        'DWP Metered Plan - Server License', 'DWP Unlimited Plan - Server License',
+        'DFP Unlimited Plan - Laptop/Desktop License', 'DFP Unlimited Plan - Server License',
+      ];
+      const prodNames = COL_ORDER.filter(c => allProds.has(c));
+      for (const p of allProds) { if (!prodNames.includes(p)) prodNames.push(p); }
+
+      if (!usage.length) { wpUsageEl.innerHTML = '<p class="field-hint">No workplace usage data.</p>'; return; }
+
+      // Group bundles by client (keyed lowercase) — each client can have multiple per-product bundles
+      const bundlesByClient = new Map();
+      for (const b of workplaceBundles) {
+        const key = b.client.toLowerCase().trim();
+        if (!bundlesByClient.has(key)) bundlesByClient.set(key, []);
+        bundlesByClient.get(key).push(b);
+      }
+      const hasBundles = workplaceBundles.length > 0;
+
+      // Per-client billable helper: deduct each bundle from its specific product
+      const clientBillable = (u) => {
+        const cbs = bundlesByClient.get(u.client.toLowerCase().trim()) || [];
+        return prodNames.reduce((s, p) => {
+          const pb = cbs.find(b => b.product === p);
+          return s + Math.max(0, (u.products?.[p] || 0) - (pb?.bundledSeats || 0));
+        }, 0);
+      };
+      const clientBundledTotal = (u) => {
+        const cbs = bundlesByClient.get(u.client.toLowerCase().trim()) || [];
+        return cbs.reduce((s, b) => s + (b.bundledSeats || 0), 0);
+      };
+
+      const thBase = 'padding:8px 12px;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:rgba(255,255,255,.65)';
+      const thL    = `${thBase};text-align:left;white-space:nowrap`;
+      const thR    = `${thBase};text-align:right;white-space:normal;min-width:90px;max-width:120px;line-height:1.3;vertical-align:bottom`;
+
+      wpUsageEl.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed">
+        <thead><tr style="background:rgba(45,77,107,.75)">
+          <th style="${thL};width:200px">Client</th>
+          ${prodNames.map(p => `<th style="${thR}">${escHtml(p)}</th>`).join('')}
+          <th style="${thBase};text-align:right;white-space:nowrap;width:80px;vertical-align:bottom">Total</th>
+          ${hasBundles ? `<th style="${thBase};text-align:right;white-space:nowrap;width:70px;vertical-align:bottom;color:rgba(130,200,130,.8)">Bundle</th>
+          <th style="${thBase};text-align:right;white-space:nowrap;width:75px;vertical-align:bottom;color:rgba(100,180,255,.8)">Billable</th>` : ''}
+        </tr></thead>
+        <tbody>
+          ${usage.map((u, i) => {
+            const rowTotal = prodNames.reduce((s, p) => s + (u.products?.[p] || 0), 0);
+            const bundled  = clientBundledTotal(u);
+            const billable = clientBillable(u);
+            return `<tr style="border-top:1px solid rgba(255,255,255,.06);${i%2===1?'background:rgba(255,255,255,.025)':''}">
+              <td style="padding:7px 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(u.client)}</td>
+              ${prodNames.map(p => `<td style="padding:7px 12px;text-align:right;font-family:var(--font-mono)">${u.products?.[p] || '—'}</td>`).join('')}
+              <td style="padding:7px 12px;text-align:right;font-family:var(--font-mono);font-weight:600">${rowTotal}</td>
+              ${hasBundles ? `<td style="padding:7px 12px;text-align:right;font-family:var(--font-mono);color:rgba(130,200,130,.8)">${bundled || '—'}</td>
+              <td style="padding:7px 12px;text-align:right;font-family:var(--font-mono);font-weight:600;${bundled ? 'color:rgba(100,180,255,.9)' : ''}">${billable}</td>` : ''}
+            </tr>`;
+          }).join('')}
+        </tbody>
+        <tfoot><tr style="border-top:2px solid rgba(45,77,107,.6);background:rgba(45,77,107,.2)">
+          <td style="padding:8px 12px;font-weight:700">Total</td>
+          ${prodNames.map(p => `<td style="padding:8px 12px;text-align:right;font-family:var(--font-mono);font-weight:700">${usage.reduce((s, u) => s + (u.products?.[p] || 0), 0)}</td>`).join('')}
+          <td style="padding:8px 12px;text-align:right;font-family:var(--font-mono);font-weight:700">${usage.reduce((s, u) => s + prodNames.reduce((ss, p) => ss + (u.products?.[p] || 0), 0), 0)}</td>
+          ${hasBundles ? `<td style="padding:8px 12px;text-align:right;font-family:var(--font-mono);font-weight:700;color:rgba(130,200,130,.8)">${usage.reduce((s, u) => s + clientBundledTotal(u), 0)}</td>
+          <td style="padding:8px 12px;text-align:right;font-family:var(--font-mono);font-weight:700;color:rgba(100,180,255,.9)">${usage.reduce((s, u) => s + clientBillable(u), 0)}</td>` : ''}
+        </tr></tfoot>
+      </table>`;
+
+      const dwpPushBtn = document.getElementById('kp-dwp-push-btn');
+      if (dwpPushBtn) {
+        dwpPushBtn.style.display = '';
+        dwpPushBtn.onclick = () => kpPushAtWorkplace(data, workplaceBundles);
+      }
+    })();
+  }
+
+  // Datto SaaS Usage — with bundled toggle backed by hub directory + Revenue SP file
+  const saasEl = document.getElementById('kp-saas-table');
+  if (saasEl) {
+    const saas = (data.saasCosts || []).filter(r => r.qty > 0);
+    if (!saas.length) {
+      saasEl.innerHTML = '<p class="field-hint">No SaaS Protection data.</p>';
+    } else {
+      const clientMap = new Map((data.clients || []).map(c => [c.name.toLowerCase().trim(), c]));
+      let _revBundles       = null;
+      let _saasBundled      = {};
+      let _saasQtyOverride  = {};
+      let _hubLoaded        = false;
+
+      const renderSaasTable = () => {
+        const loaded = _revBundles !== null;
+        const thS    = 'padding:8px 10px;text-align:left;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:rgba(255,255,255,.65);white-space:nowrap';
+        const totalQty = saas.reduce((s, r) => s + (r.qty || 0), 0);
+        let totalBillable = 0;
+
+        const bodyRows = saas.map((r, i) => {
+          const match       = clientMap.get(r.name.toLowerCase().trim());
+          const atId        = match?.atId;
+          const isBundled   = !!(atId && _saasBundled[atId]);
+          const autoQty     = isBundled && loaded ? kpMatchRevenueBundles(r.name, match?.atName, _revBundles) : null;
+          const overrideQty = atId != null ? _saasQtyOverride[atId] : undefined;
+          const hasOverride = overrideQty != null;
+          const bundledQty  = hasOverride ? overrideQty : autoQty;
+          const billable    = bundledQty != null ? Math.max(0, r.qty - bundledQty) : r.qty;
+          totalBillable    += billable;
+          const cbDisabled  = !atId ? 'disabled title="No AT mapping"' : (!_hubLoaded ? 'disabled title="Loading…"' : '');
+          const qtyColor    = hasOverride ? 'rgba(255,200,60,.95)' : 'rgba(255,255,255,.45)';
+          const editBtn     = hasOverride
+            ? `<button class="kp-saas-qty-clear" data-atid="${atId}" title="Clear override" style="margin-left:5px;background:none;border:none;color:rgba(255,200,60,.7);cursor:pointer;font-size:11px;padding:0;vertical-align:middle">✕</button>`
+            : `<button class="kp-saas-qty-edit" data-atid="${atId}" data-current="${bundledQty ?? ''}" title="Override bundled qty" style="margin-left:5px;background:none;border:none;color:rgba(255,255,255,.25);cursor:pointer;font-size:10px;padding:0;vertical-align:middle">✎</button>`;
+          return `<tr style="border-top:1px solid rgba(255,255,255,.06);${i%2===1?'background:rgba(255,255,255,.025)':''}">
+            <td style="padding:7px 10px">${escHtml(r.name)}</td>
+            <td style="padding:7px 10px;text-align:right;font-family:var(--font-mono);font-weight:600">${r.qty}</td>
+            <td style="padding:7px 10px;text-align:center">
+              <input type="checkbox" class="kp-saas-bundle-toggle" data-atid="${atId || ''}" ${isBundled ? 'checked' : ''} ${cbDisabled} style="cursor:${!atId || !_hubLoaded ? 'default' : 'pointer'};width:14px;height:14px">
+            </td>
+            ${loaded ? `
+            <td style="padding:7px 10px;text-align:right;font-family:var(--font-mono)">
+              ${isBundled ? `<span style="color:${qtyColor}">${bundledQty != null ? bundledQty : '—'}</span>${editBtn}` : '<span style="color:rgba(255,255,255,.3)">—</span>'}
+            </td>
+            <td style="padding:7px 10px;text-align:right;font-family:var(--font-mono);font-weight:600;${isBundled && bundledQty != null && billable < r.qty ? 'color:rgba(100,180,255,.9)' : ''}">${isBundled && bundledQty != null ? billable : r.qty}</td>` : ''}
+          </tr>`;
+        }).join('');
+
+        saasEl.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12.5px">
+          <thead><tr style="background:rgba(45,77,107,.75)">
+            <th style="${thS}">Client</th>
+            <th style="${thS};text-align:right">Invoice Qty</th>
+            <th style="${thS};text-align:center">Bundled?</th>
+            ${loaded ? `<th style="${thS};text-align:right">Bundled Qty</th>
+            <th style="${thS};text-align:right;color:rgba(100,180,255,.8)">Billable</th>` : ''}
+          </tr></thead>
+          <tbody>${bodyRows}</tbody>
+          <tfoot><tr style="border-top:2px solid rgba(45,77,107,.6);background:rgba(45,77,107,.2)">
+            <td style="padding:8px 10px;font-weight:700">Total</td>
+            <td style="padding:8px 10px;text-align:right;font-family:var(--font-mono);font-weight:700">${totalQty}</td>
+            <td></td>
+            ${loaded ? `<td></td><td style="padding:8px 10px;text-align:right;font-family:var(--font-mono);font-weight:700;color:rgba(100,180,255,.9)">${totalBillable}</td>` : ''}
+          </tr></tfoot>
+        </table>`;
+
+        saasEl.querySelectorAll('.kp-saas-bundle-toggle').forEach(cb => {
+          cb.addEventListener('change', async () => {
+            const atId = parseInt(cb.dataset.atid, 10);
+            if (!atId) return;
+            cb.disabled = true;
+            const res = await window.api.kaseyaSetSaasBundled({ atId, bundled: cb.checked }).catch(() => ({ ok: false, error: 'Network error' }));
+            if (res.ok) {
+              if (cb.checked) _saasBundled[atId] = true; else delete _saasBundled[atId];
+              renderSaasTable();
+              // Brief save confirmation
+              const msg = Object.assign(document.createElement('span'), {
+                textContent: cb.checked ? '✓ Marked bundled' : '✓ Unmarked',
+                style: 'position:fixed;bottom:24px;right:24px;background:rgba(30,60,90,.95);color:rgba(100,220,130,1);border:1px solid rgba(100,220,130,.3);border-radius:6px;padding:8px 14px;font-size:12px;z-index:9999;pointer-events:none',
+              });
+              document.body.appendChild(msg);
+              setTimeout(() => msg.remove(), 2500);
+            } else {
+              cb.checked = !cb.checked;
+              cb.disabled = false;
+              alert(`Save failed: ${res.error || 'Unknown error'}`);
+            }
+          });
+        });
+
+        // Qty override — pencil edit
+        saasEl.querySelectorAll('.kp-saas-qty-edit').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const atIdVal = parseInt(btn.dataset.atid, 10);
+            const td = btn.closest('td');
+            td.innerHTML = `<input type="number" min="0" value="${btn.dataset.current}" data-atid="${atIdVal}"
+              style="width:54px;background:rgba(0,0,0,.5);border:1px solid rgba(255,200,60,.5);border-radius:4px;
+              color:#fff;padding:2px 5px;font-family:var(--font-mono);font-size:12px;text-align:right">`;
+            const inp = td.querySelector('input');
+            inp.focus(); inp.select();
+            let done = false;
+            const save = async () => {
+              if (done) return; done = true;
+              const qty = parseInt(inp.value, 10);
+              if (!isNaN(qty) && qty >= 0) {
+                const res = await window.api.kaseyaSetSaasQtyOverride({ atId: atIdVal, qty }).catch(() => ({ ok: false }));
+                if (res.ok) _saasQtyOverride[atIdVal] = qty;
+              }
+              renderSaasTable();
+            };
+            inp.addEventListener('keydown', e => {
+              if (e.key === 'Enter') inp.blur();
+              if (e.key === 'Escape') { done = true; renderSaasTable(); }
+            });
+            inp.addEventListener('blur', save);
+          });
+        });
+
+        // Qty override — clear
+        saasEl.querySelectorAll('.kp-saas-qty-clear').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const atIdVal = parseInt(btn.dataset.atid, 10);
+            const res = await window.api.kaseyaSetSaasQtyOverride({ atId: atIdVal, qty: null }).catch(() => ({ ok: false }));
+            if (res.ok) delete _saasQtyOverride[atIdVal];
+            renderSaasTable();
+          });
+        });
+
+        const saasPushBtn = document.getElementById('kp-saas-push-btn');
+        if (saasPushBtn) {
+          saasPushBtn.style.display = '';
+          saasPushBtn.onclick = () => kpPushAtSaas(data, loaded ? _revBundles : null, loaded ? _saasBundled : null, _saasQtyOverride);
+        }
+      };
+
+      renderSaasTable();
+
+      window.api.kaseyaLoadRevenueBundles().then(res => {
+        // Hub flags always come back — enables checkboxes even if revenue file failed
+        _saasBundled     = res.saasBundled || {};
+        _saasQtyOverride = res.saasBundledQtyOverride || {};
+        _hubLoaded       = true;
+        if (res.ok) _revBundles = res.revenueBundles;
+        renderSaasTable();
+        if (!res.ok) {
+          console.warn('[Kaseya] Revenue file load failed:', res.error);
+          const warn = document.createElement('p');
+          warn.style.cssText = 'margin:6px 0 0;font-size:11px;color:rgba(255,180,60,.8)';
+          warn.textContent = `Revenue file unavailable — Bundled Qty/Billable columns hidden. (${res.error || 'Unknown error'})`;
+          saasEl.appendChild(warn);
+        }
+
+        // Update SaaS QBO entries with actual bundled amounts (rate × bundled seats)
+        if (!res.ok) return;
+        const r2 = v => Math.round(v * 100) / 100;
+        const totalSaasQty = saas.reduce((s, r) => s + r.qty, 0);
+        const totalSaasAmt = data.modules?.['SaaS Protection']?.total || 0;
+        if (totalSaasQty > 0 && totalSaasAmt !== 0) {
+          const rate = totalSaasAmt / totalSaasQty;
+          let saasBundledAmt = 0;
+          for (const r of saas) {
+            const match = clientMap.get(r.name.toLowerCase().trim());
+            const atId  = match?.atId;
+            if (!atId || !_saasBundled[atId]) continue;
+            const bQty = (_saasQtyOverride[atId] != null)
+              ? _saasQtyOverride[atId]
+              : (kpMatchRevenueBundles(r.name, match?.atName, _revBundles) || 0);
+            saasBundledAmt += Math.min(bQty, r.qty) * rate;
+          }
+          saasBundledAmt = r2(saasBundledAmt);
+          if (saasBundledAmt > 0) {
+            data.qboEntries = (data.qboEntries || []).filter(e => !e.description.startsWith('Datto SaaS'));
+            data.qboEntries.push(
+              { description: 'Datto SaaS – Standalone', amount: r2(totalSaasAmt - saasBundledAmt), account: 'Cost of Services-Recurring Svcs:Managed Cloud Services:Cloud Email Management', class: '' },
+              { description: 'Datto SaaS – Bundled',    amount: saasBundledAmt,                    account: 'Cost of Services-Recurring Svcs:Managed IT Services:Cloud Email Management-Bundled', class: '' },
+            );
+            const qboEl = document.getElementById('kp-qbo-table');
+            if (qboEl) kpRenderQboTable(qboEl, data.qboEntries);
+          }
+        }
+      }).catch(() => {});
+    }
+  }
+
+  // Datto Networking
+  const netEl = document.getElementById('kp-networking-table');
+  if (netEl) netEl.innerHTML = buildProductTable(data.networkingProducts);
+
+  // Datto BCDR — per-client costs
+  const bcdrEl = document.getElementById('kp-bcdr-table');
+  if (bcdrEl) {
+    const bcdr = data.bcdrCosts || [];
+    if (!bcdr.length) {
+      bcdrEl.innerHTML = '<p class="field-hint">No BCDR data.</p>';
+    } else {
+      const gt = bcdr.reduce((s, r) => s + (r.total || 0), 0);
+      bcdrEl.innerHTML = buildBarTable(bcdr.map(r => ({ name: r.name, val: r.total })), gt);
+    }
+  }
+
   // Wire export + AT prompt buttons
   document.getElementById('kp-export-btn').addEventListener('click', async () => {
     if (!_kaseyaData) return;
@@ -3582,109 +4212,628 @@ function renderKaseyaResults(data) {
     } finally { btn.disabled = false; }
   });
 
-  document.getElementById('kp-at-prompt-btn').addEventListener('click', async () => {
-    if (!_kaseyaData) return;
-    try {
-      const r = await window.api.generateKaseyaAtPrompt(_kaseyaData);
-      if (!r || !r.prompt) throw new Error('No prompt returned');
-      const section = document.getElementById('kp-at-section');
-      const ta      = document.getElementById('kp-at-ta');
-      if (ta) ta.value = r.prompt;
-      if (section) section.style.display = '';
-      ta?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    } catch (e) { alert('Error: ' + e.message); }
-  });
+  // Org mapping event delegation — wired once per results view lifetime
+  const resultsContainer = document.getElementById('kp-results');
+  if (resultsContainer && !resultsContainer._kpOrgDelegated) {
+    resultsContainer._kpOrgDelegated = true;
+    resultsContainer.addEventListener('click', async e => {
+      const findBtn = e.target.closest('.kp-org-find-btn');
+      if (findBtn) {
+        const key  = findBtn.dataset.key;
+        const wrap = document.getElementById(`kp-find-${key}`);
+        if (!wrap) return;
+        const isOpen = !wrap.classList.contains('hidden');
+        wrap.classList.toggle('hidden', isOpen);
+        if (!isOpen) {
+          const input = wrap.querySelector('.kp-find-input');
+          if (input) { input.focus(); input.select(); kpSearchAt(input, wrap, findBtn.dataset.name); }
+        }
+        return;
+      }
 
-  const atCopyBtn = document.getElementById('kp-at-copy-btn');
-  if (atCopyBtn) {
-    atCopyBtn.addEventListener('click', async () => {
-      const ta = document.getElementById('kp-at-ta');
-      if (!ta?.value) return;
-      try {
-        await navigator.clipboard.writeText(ta.value);
-        atCopyBtn.textContent = '✓ Copied';
-        setTimeout(() => { atCopyBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="margin-right:3px"><rect x="1" y="3" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M3 3V2a1 1 0 011-1h5a1 1 0 011 1v6a1 1 0 01-1 1h-1" stroke="currentColor" stroke-width="1.2"/></svg>Copy'; }, 2000);
-      } catch { alert('Copy failed'); }
+      // Accept a single auto-suggested match
+      const acceptBtn = e.target.closest('.kp-org-accept-btn');
+      if (acceptBtn) {
+        const name   = acceptBtn.dataset.name;
+        const atId   = parseInt(acceptBtn.dataset.atid, 10);
+        const atName = acceptBtn.dataset.atname;
+        acceptBtn.disabled = true; acceptBtn.textContent = 'Saving…';
+        try {
+          const r = await window.api.kaseyaConfirmMatch({ kaseyaName: name, atId, atName });
+          if (!r?.ok) throw new Error(r?.error || 'Save failed');
+          if (_kaseyaData?.clients) {
+            const c = _kaseyaData.clients.find(x => x.name === name);
+            if (c) { c.atId = atId; c.atName = atName; }
+          }
+          renderKaseyaOrgMapping(_kaseyaData?.clients);
+        } catch (e) { acceptBtn.disabled = false; acceptBtn.textContent = `Retry (${e.message.slice(0,40)})`; }
+        return;
+      }
+
+      const matchItem = e.target.closest('.kp-match-item');
+      if (matchItem) {
+        const kaseyaName = matchItem.dataset.kaseyaname;
+        const atId   = parseInt(matchItem.dataset.atid, 10);
+        const atName = matchItem.dataset.atname;
+        matchItem.textContent = 'Saving…';
+        try {
+          const r = await window.api.kaseyaConfirmMatch({ kaseyaName, atId, atName });
+          if (!r?.ok) throw new Error(r?.error || 'Save failed');
+          if (_kaseyaData?.clients) {
+            const c = _kaseyaData.clients.find(x => x.name === kaseyaName);
+            if (c) { c.atId = atId; c.atName = atName; }
+          }
+          renderKaseyaOrgMapping(_kaseyaData?.clients);
+        } catch (e) { matchItem.textContent = `⚠ ${e.message.slice(0,40)} — click to retry`; matchItem.style.color = 'var(--warning)'; }
+        return;
+      }
+
+      const excBtn = e.target.closest('.kp-org-exclude-btn');
+      if (excBtn) {
+        const name = excBtn.dataset.name;
+        excBtn.disabled = true; excBtn.textContent = '…';
+        try {
+          await window.api.kaseyaSetExcluded({ kaseyaName: name, excluded: true });
+          if (_kaseyaData?.clients) {
+            const c = _kaseyaData.clients.find(x => x.name === name);
+            if (c) c._excluded = true;
+          }
+          renderKaseyaOrgMapping(_kaseyaData?.clients);
+        } catch { excBtn.disabled = false; excBtn.textContent = 'Exclude'; }
+        return;
+      }
+
+      const restoreBtn = e.target.closest('.kp-org-restore-btn');
+      if (restoreBtn) {
+        const name = restoreBtn.dataset.name;
+        restoreBtn.disabled = true; restoreBtn.textContent = '…';
+        try {
+          await window.api.kaseyaSetExcluded({ kaseyaName: name, excluded: false });
+          if (_kaseyaData?.clients) {
+            const c = _kaseyaData.clients.find(x => x.name === name);
+            if (c) delete c._excluded;
+          }
+          renderKaseyaOrgMapping(_kaseyaData?.clients);
+        } catch { restoreBtn.disabled = false; restoreBtn.textContent = 'Restore'; }
+        return;
+      }
     });
   }
+  renderKaseyaOrgMapping(data.clients);
 
   // Load delta section after snapshot auto-save has completed
   kpLoadDeltaSection(data.snapKey);
 }
 
-async function kpLoadDeltaSection(currentSnapKey) {
+// ── Kaseya org mapping panel ──────────────────────────────────────────────────
+async function renderKaseyaOrgMapping(clients) {
+  const el = document.getElementById('kp-org-mapping');
+  if (!el) return;
+
+  const isAdmin = _currentUser?.isAdmin || _currentUser?.roles?.includes('hub.admin');
+  if (!isAdmin) { el.innerHTML = ''; return; }
+
+  const allClients = (clients || []).filter(c => c.name && c.name !== '(blank)');
+  const withoutAtId = allClients.filter(c => !c.atId);
+  if (!withoutAtId.length) { el.innerHTML = ''; return; }
+
+  // Load excluded state from hub (non-fatal)
+  const hubExcluded = new Set();
+  try {
+    const mappings = await window.api.kaseyaLoadMappings();
+    if (mappings?.excluded) {
+      for (const [name, val] of Object.entries(mappings.excluded)) {
+        if (val) hubExcluded.add((name || '').toLowerCase().trim());
+      }
+    }
+  } catch (_) {}
+
+  const needsMapping = withoutAtId.filter(c => !hubExcluded.has((c.name || '').toLowerCase().trim()) && !c._excluded);
+  const excludedOrgs = withoutAtId.filter(c =>  hubExcluded.has((c.name || '').toLowerCase().trim()) ||  c._excluded);
+
+  if (!needsMapping.length && !excludedOrgs.length) { el.innerHTML = ''; return; }
+
+  // Show a loading state while suggestions are fetched
+  const warnIcon = `<svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M7 1L1 13h12L7 1z" stroke="var(--warn)" stroke-width="1.3" stroke-linejoin="round"/><path d="M7 6v3M7 10.5v.5" stroke="var(--warn)" stroke-width="1.4" stroke-linecap="round"/></svg>`;
+  el.innerHTML = `
+    <div class="settings-section wide" style="padding:16px 20px;margin-bottom:16px">
+      <div class="cd-review-hdr">
+        ${warnIcon}
+        ${needsMapping.length} ${needsMapping.length === 1 ? 'org needs' : 'orgs need'} Autotask mapping
+        <span class="cd-review-sub"><span class="spinner" style="display:inline-block;width:10px;height:10px;border-width:1.5px;vertical-align:middle;margin-right:4px"></span>Auto-matching against Autotask…</span>
+      </div>
+    </div>`;
+
+  // Fetch bulk suggestions (single AT API call, 30 min cached)
+  let suggestions = {};
+  try {
+    const names = needsMapping.map(c => c.name).filter(Boolean);
+    const result = await window.api.kaseyaBulkSuggest({ names });
+    suggestions = result?.suggestions || {};
+  } catch (_) {}
+
+  const highConf = needsMapping.filter(c => (suggestions[c.name]?.score ?? 0) >= 0.85);
+  const matched  = Object.keys(suggestions).length;
+
+  el.innerHTML = `
+    <div class="settings-section wide" style="padding:16px 20px;margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+        <div class="cd-review-hdr" style="margin:0">
+          ${warnIcon}
+          ${needsMapping.length} ${needsMapping.length === 1 ? 'org needs' : 'orgs need'} Autotask mapping
+          <span class="cd-review-sub">${matched > 0 ? `${matched} auto-match${matched === 1 ? '' : 'es'} found — review and accept` : 'No auto-matches — search manually'}</span>
+        </div>
+        ${highConf.length > 0 ? `
+          <button class="btn btn-primary btn-sm" id="kp-accept-all-btn">
+            Accept all high-confidence (${highConf.length})
+          </button>` : ''}
+      </div>
+      ${needsMapping.length ? `<div class="cd-review-list" id="kp-org-review-list">${needsMapping.map(c => kpOrgRowHtml(c, false, suggestions[c.name] || null)).join('')}</div>` : ''}
+      ${excludedOrgs.length ? `
+        <details style="margin-top:${needsMapping.length ? '10px' : '0'};font-size:12px;color:var(--text-muted)">
+          <summary style="cursor:pointer;user-select:none;padding:4px 0">${excludedOrgs.length} excluded ${excludedOrgs.length === 1 ? 'org' : 'orgs'}</summary>
+          <div class="cd-review-list" style="margin-top:8px">${excludedOrgs.map(c => kpOrgRowHtml(c, true, null)).join('')}</div>
+        </details>` : ''}
+    </div>`;
+
+  // Accept All high-confidence — single batch write to avoid SP race conditions
+  document.getElementById('kp-accept-all-btn')?.addEventListener('click', async () => {
+    const btn = document.getElementById('kp-accept-all-btn');
+    btn.disabled = true; btn.textContent = 'Saving to SharePoint…';
+    try {
+      const matches = highConf
+        .map(c => ({ kaseyaName: c.name, atId: suggestions[c.name]?.atId, atName: suggestions[c.name]?.atName }))
+        .filter(m => m.atId);
+      const result = await window.api.kaseyaBulkConfirmMatches({ matches });
+      if (!result?.ok) throw new Error(result?.error || 'Save failed');
+      for (const m of matches) {
+        const local = _kaseyaData?.clients?.find(x => x.name === m.kaseyaName);
+        if (local) { local.atId = m.atId; local.atName = m.atName; }
+      }
+      renderKaseyaOrgMapping(_kaseyaData?.clients);
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = `Retry (${e.message})`;
+    }
+  });
+}
+
+function kpOrgRowHtml(client, isExcluded, suggestion) {
+  const name    = client.name || '(unknown)';
+  const safeKey = btoa(unescape(encodeURIComponent(name))).replace(/[+=\/]/g, '');
+
+  const scoreBadge = s => {
+    const pct = Math.round(s * 100);
+    const col = s >= 0.85 ? 'var(--success)' : s >= 0.7 ? 'var(--accent)' : 'var(--text-muted)';
+    return `<span style="font-size:10px;font-weight:600;color:${col};flex-shrink:0">${pct}%</span>`;
+  };
+
+  let actionHtml;
+  if (isExcluded) {
+    actionHtml = `
+      <span class="cd-review-match cd-review-none">Excluded</span>
+      <span class="cd-badge cd-badge-none" style="flex-shrink:0">Excluded</span>
+      <button class="btn btn-ghost btn-sm kp-org-restore-btn" data-name="${escHtml(name)}">Restore</button>`;
+  } else if (suggestion) {
+    actionHtml = `
+      <span class="cd-review-match" style="color:var(--text-muted)">→ ${escHtml(suggestion.atName)}</span>
+      ${scoreBadge(suggestion.score)}
+      <button class="btn btn-ghost btn-sm kp-org-accept-btn"
+        data-name="${escHtml(name)}" data-atid="${suggestion.atId}" data-atname="${escHtml(suggestion.atName)}"
+        style="color:var(--success);border-color:color-mix(in srgb,var(--success) 40%,transparent)">Accept</button>
+      <button class="btn btn-ghost btn-sm kp-org-find-btn" data-name="${escHtml(name)}" data-key="${safeKey}">Different match</button>
+      <button class="btn btn-ghost btn-sm kp-org-exclude-btn" data-name="${escHtml(name)}" style="color:var(--warn);border-color:color-mix(in srgb,var(--warn) 30%,transparent);font-size:10px;padding:2px 7px">Exclude</button>`;
+  } else {
+    actionHtml = `
+      <span class="cd-review-match cd-review-none">No match found</span>
+      <span class="cd-badge cd-badge-none" style="flex-shrink:0">Unmatched</span>
+      <button class="btn btn-ghost btn-sm kp-org-find-btn" data-name="${escHtml(name)}" data-key="${safeKey}">Find Match</button>
+      <button class="btn btn-ghost btn-sm kp-org-exclude-btn" data-name="${escHtml(name)}" style="color:var(--warn);border-color:color-mix(in srgb,var(--warn) 30%,transparent)">Exclude</button>`;
+  }
+
+  return `
+  <div class="cd-review-row" data-kaseya-name="${escHtml(name)}">
+    <span class="cd-review-name" title="${escHtml(name)}">${escHtml(name)}</span>
+    ${actionHtml}
+  </div>
+  ${!isExcluded ? `
+  <div class="cd-find-wrap hidden" id="kp-find-${safeKey}">
+    <input type="text" class="kp-find-input cd-find-input" placeholder="Search Autotask companies…" value="${escHtml(name)}">
+    <div class="cd-find-results"></div>
+  </div>` : ''}`;
+}
+
+function kpSearchAt(input, wrap, kaseyaName) {
+  let timer;
+  const resultsEl = wrap.querySelector('.cd-find-results');
+
+  async function doSearch() {
+    const q = input.value.trim();
+    if (!q) { resultsEl.innerHTML = ''; return; }
+    resultsEl.innerHTML = `<div style="padding:6px 10px;font-size:11px;color:var(--text-muted)">Searching…</div>`;
+    const results = await window.api.kaseyaSearchAtCompanies({ query: q }).catch(() => []);
+    if (!results || !results.length) {
+      resultsEl.innerHTML = `<div style="padding:6px 10px;font-size:11px;color:var(--text-muted)">No matches found</div>`;
+      return;
+    }
+    resultsEl.innerHTML = results.map(r => `
+      <div class="cd-match-item kp-match-item" data-kaseyaname="${escHtml(kaseyaName)}" data-atid="${r.atId}" data-atname="${escHtml(r.atName)}">
+        ${escHtml(r.atName)} <span style="color:var(--text-muted);font-size:10px">ID: ${r.atId}</span>
+      </div>`).join('');
+  }
+
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(doSearch, 300); });
+  doSearch();
+}
+
+// AT service ID → display name for confirmation modal
+const KP_AT_SERVICE_NAMES = {
+  58: 'Cloud File Sync & Share',
+  111: 'Cloud File Sync & Share for Servers',
+  125: 'Cloud File Sync & Share (Unlimited Storage)',
+  126: 'Cloud File Sync & Share for Servers (Unlimited Storage)',
+  253: 'Cloud File Backup and Protection for Servers (Unlimited Storage)',
+  88:  'Cloud Backup for Office 365',
+  98:  'Cloud Backup for GSuite',
+};
+
+const KP_AT_PRODUCT_MAP = {
+  'DWP Metered Plan - User License':     [{ serviceId: 58 }],
+  'DWP Metered Plan - Server License':   [{ serviceId: 111 }],
+  'DWP Unlimited Plan - Server License': [{ serviceId: 126 }],
+  'DWP Unlimited Plan - User License':   [{ serviceId: 125 }],
+  'DFP Unlimited Plan - Server License': [{ serviceId: 253 }],
+  'SaaS Protection Infinite Cloud Retention Monthly': [{ serviceId: 98 }, { serviceId: 88 }],
+};
+
+function kpShowAtConfirmModal(title, previewRows, onConfirm) {
+  document.getElementById('kp-at-confirm-modal')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'kp-at-confirm-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9999;display:flex;align-items:center;justify-content:center';
+  modal.innerHTML = `
+    <div style="background:var(--surface-1);border:1px solid var(--border);border-radius:var(--radius);width:680px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden">
+      <div style="padding:18px 20px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+        <div style="font-weight:700;font-size:14px">${escHtml(title)}</div>
+        <button id="kp-atc-cancel-x" style="background:none;border:none;color:var(--text-muted);font-size:18px;cursor:pointer;line-height:1">✕</button>
+      </div>
+      <div style="overflow-y:auto;flex:1;padding:14px 20px">
+        <p class="field-hint" style="margin-bottom:12px">${previewRows.length} line${previewRows.length !== 1 ? 's' : ''} will be pushed across ${new Set(previewRows.map(r => r.company)).size} client${new Set(previewRows.map(r => r.company)).size !== 1 ? 's' : ''}. Review and confirm.</p>
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr style="border-bottom:1px solid rgba(255,255,255,.1)">
+            <th style="text-align:left;padding:5px 10px;color:var(--text-muted);font-weight:600;font-size:10.5px;text-transform:uppercase">Client</th>
+            <th style="text-align:left;padding:5px 10px;color:var(--text-muted);font-weight:600;font-size:10.5px;text-transform:uppercase">Product</th>
+            <th style="text-align:left;padding:5px 10px;color:var(--text-muted);font-weight:600;font-size:10.5px;text-transform:uppercase">AT Service</th>
+            <th style="text-align:right;padding:5px 10px;color:var(--text-muted);font-weight:600;font-size:10.5px;text-transform:uppercase">Qty</th>
+          </tr></thead>
+          <tbody>
+            ${previewRows.map(r => {
+              const isDrop = r.qty === 0;
+              return `<tr style="border-top:1px solid rgba(255,255,255,.04)${isDrop ? ';opacity:.6' : ''}">
+                <td style="padding:6px 10px">${escHtml(r.company)}</td>
+                <td style="padding:6px 10px;color:var(--text-muted)">${escHtml(r.product)}</td>
+                <td style="padding:6px 10px">${escHtml(r.atService)}</td>
+                <td style="padding:6px 10px;text-align:right;font-family:var(--font-mono);font-weight:600;color:${isDrop ? 'var(--warning)' : 'inherit'}">${isDrop ? '0 — drop' : r.qty}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div style="padding:14px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px">
+        <button id="kp-atc-cancel" class="btn btn-ghost">Cancel</button>
+        <button id="kp-atc-confirm" class="btn btn-primary">Push to Autotask</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  const close = () => modal.remove();
+  modal.querySelector('#kp-atc-cancel-x').addEventListener('click', close);
+  modal.querySelector('#kp-atc-cancel').addEventListener('click', close);
+  modal.querySelector('#kp-atc-confirm').addEventListener('click', () => { close(); onConfirm(); });
+}
+
+function kpRenderQboTable(el, entries) {
+  if (!el) return;
+  if (!entries || !entries.length) { el.innerHTML = '<p class="field-hint">No entries generated.</p>'; return; }
+
+  const fmtAmt = v => '$' + (v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const classPill = cls => {
+    const map = {
+      'Strategic Services': 'background:rgba(139,92,246,.18);color:#c4b5fd',
+      'Service Delivery':   'background:rgba(59,130,246,.18);color:#93c5fd',
+      'Admin':              'background:rgba(148,163,184,.15);color:#94a3b8',
+    };
+    const sty = map[cls];
+    return sty
+      ? `<span style="display:inline-block;padding:1px 7px;border-radius:4px;font-size:10px;font-weight:700;${sty}">${escHtml(cls)}</span>`
+      : `<span style="color:var(--text-muted);font-size:11px">—</span>`;
+  };
+
+  // Persist sort state on element between re-renders
+  if (!el._qboSort) el._qboSort = { col: null, dir: 1 };
+  const { col: sortCol, dir: sortDir } = el._qboSort;
+
+  const COLS = ['description', 'account', 'class', 'amount'];
+  const sorted = [...entries].sort((a, b) => {
+    if (!sortCol) return 0;
+    let va = a[sortCol] ?? '', vb = b[sortCol] ?? '';
+    if (sortCol === 'amount') return sortDir * (va - vb);
+    return sortDir * String(va).localeCompare(String(vb));
+  });
+
+  const qboTotal = entries.reduce((s, e) => s + e.amount, 0);
+  const thBase = 'padding:9px 12px;text-align:left;font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:rgba(255,255,255,.75);white-space:nowrap;cursor:pointer;user-select:none';
+  const arrow = col => col === sortCol ? (sortDir === 1 ? ' ▲' : ' ▼') : ' ⇅';
+
+  el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12.5px">
+    <thead><tr style="background:rgba(45,77,107,.75)">
+      <th data-qbo-col="description" style="${thBase}">Description${arrow('description')}</th>
+      <th data-qbo-col="account"     style="${thBase}">QBO Account${arrow('account')}</th>
+      <th data-qbo-col="class"       style="${thBase}">Class${arrow('class')}</th>
+      <th data-qbo-col="amount"      style="${thBase};text-align:right">Amount${arrow('amount')}</th>
+    </tr></thead>
+    <tbody>
+      ${sorted.map((e, i) => `<tr style="border-top:1px solid rgba(255,255,255,.06);${i%2===1 ? 'background:rgba(255,255,255,.025)' : ''}">
+        <td style="padding:8px 12px">${escHtml(e.description)}</td>
+        <td style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--text-muted)">${escHtml(e.account)}</td>
+        <td style="padding:8px 12px">${classPill(e.class || '')}</td>
+        <td style="padding:8px 12px;text-align:right;font-family:var(--font-mono);font-weight:600">${fmtAmt(e.amount)}</td>
+      </tr>`).join('')}
+    </tbody>
+    <tfoot><tr style="border-top:2px solid rgba(45,77,107,.6);background:rgba(45,77,107,.2)">
+      <td colspan="3" style="padding:9px 12px;font-weight:700">Total</td>
+      <td style="padding:9px 12px;text-align:right;font-family:var(--font-mono);font-weight:700">${fmtAmt(qboTotal)}</td>
+    </tr></tfoot>
+  </table>`;
+
+  el.querySelectorAll('th[data-qbo-col]').forEach(th => {
+    th.addEventListener('click', () => {
+      const c = th.dataset.qboCol;
+      el._qboSort = { col: c, dir: el._qboSort.col === c ? el._qboSort.dir * -1 : 1 };
+      kpRenderQboTable(el, entries);
+    });
+  });
+}
+
+// Match a client name against Revenue SP file entries (exact → no-space exact → partial)
+function kpMatchRevenueBundles(kaseyaName, atName, revenueBundles) {
+  if (!revenueBundles || !revenueBundles.length) return null;
+  const norm   = s => (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+  const normNs = s => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const t1 = norm(kaseyaName), t2 = norm(atName);
+  const t1ns = normNs(kaseyaName), t2ns = normNs(atName);
+  // Pass 1: exact with spaces
+  for (const rb of revenueBundles) {
+    const rn = norm(rb.client);
+    if (rn === t1 || (t2 && rn === t2)) return rb.includedSeats;
+  }
+  // Pass 2: exact ignoring spaces/punctuation (catches "39North" vs "39 North")
+  for (const rb of revenueBundles) {
+    const rnns = normNs(rb.client);
+    if (rnns === t1ns || (t2ns && rnns === t2ns)) return rb.includedSeats;
+  }
+  // Pass 3: partial
+  for (const rb of revenueBundles) {
+    const rn = norm(rb.client), rnns = normNs(rb.client);
+    if (rn.includes(t1) || t1.includes(rn) || (t2 && (rn.includes(t2) || t2.includes(rn)))) return rb.includedSeats;
+    if (rnns.includes(t1ns) || t1ns.includes(rnns) || (t2ns && (rnns.includes(t2ns) || t2ns.includes(rnns)))) return rb.includedSeats;
+  }
+  return null;
+}
+
+// Deduct each bundle override from its specific product
+function applyWorkplaceBundles(products, clientBundles) {
+  if (!clientBundles || !clientBundles.length) return products;
+  const result = { ...products };
+  for (const b of clientBundles) {
+    if (result[b.product] !== undefined) {
+      result[b.product] = Math.max(0, result[b.product] - (b.bundledSeats || 0));
+    }
+  }
+  return result;
+}
+
+async function kpPushAtWorkplace(data, workplaceBundles) {
+  const btn = document.getElementById('kp-dwp-push-btn');
+  const usage = data.workplaceUsage || [];
+  const clients = data.clients || [];
+  const clientMap = new Map(clients.map(c => [c.name.toLowerCase().trim(), c]));
+  const bundlesByClient = new Map();
+  for (const b of (workplaceBundles || [])) {
+    const key = b.client.toLowerCase().trim();
+    if (!bundlesByClient.has(key)) bundlesByClient.set(key, []);
+    bundlesByClient.get(key).push(b);
+  }
+
+  const rows = usage.map(u => {
+    const match      = clientMap.get(u.client.toLowerCase().trim());
+    const cbs        = bundlesByClient.get(u.client.toLowerCase().trim()) || [];
+    const products   = cbs.length ? applyWorkplaceBundles(u.products, cbs) : u.products;
+    return { name: u.client, atId: match?.atId || null, products };
+  }).filter(r => r.atId);
+
+  if (!rows.length) {
+    alert('No clients have a confirmed Autotask mapping. Map clients in the org mapping panel first.');
+    return;
+  }
+
+  // Build preview for confirmation modal
+  const previewRows = [];
+  for (const row of rows) {
+    for (const [product, qty] of Object.entries(row.products || {})) {
+      const mapping = KP_AT_PRODUCT_MAP[product];
+      if (!mapping) continue;
+      for (const { serviceId } of mapping) {
+        previewRows.push({ company: row.name, product, atService: KP_AT_SERVICE_NAMES[serviceId] || `Service ID ${serviceId}`, qty });
+      }
+    }
+  }
+
+  kpShowAtConfirmModal('Push Datto Workplace to Autotask', previewRows, async () => {
+    btn.disabled = true;
+    const progressEl = kpShowPushProgress('kp-dwp-progress', 'Datto Workplace — Pushing to AT');
+    const unsubscribe = window.api.onKaseyaPushProgress(({ company, product, status, detail }) => {
+      kpAppendPushProgress(progressEl, company, product, status, detail);
+    });
+    try {
+      const result = await window.api.kaseyaAtPushWorkplace({ rows });
+      kpRenderPushSummary(progressEl, result.summary);
+    } catch (e) {
+      progressEl.innerHTML += `<p style="color:var(--error);font-size:12px">Error: ${escHtml(e.message)}</p>`;
+    } finally {
+      btn.disabled = false;
+      if (unsubscribe) unsubscribe();
+    }
+  });
+}
+
+async function kpPushAtSaas(data, revenueBundles, saasBundled, saasQtyOverride = {}) {
+  const btn = document.getElementById('kp-saas-push-btn');
+  const saas = data.saasCosts || [];
+  const clients = data.clients || [];
+  const clientMap = new Map(clients.map(c => [c.name.toLowerCase().trim(), c]));
+
+  const rows = saas.map(s => {
+    const match = clientMap.get(s.name.toLowerCase().trim());
+    const atId  = match?.atId || null;
+    let   qty   = s.qty;
+    if (atId && saasBundled?.[atId]) {
+      const bundledQty = (saasQtyOverride[atId] != null)
+        ? saasQtyOverride[atId]
+        : (revenueBundles ? (kpMatchRevenueBundles(s.name, match?.atName, revenueBundles) || 0) : 0);
+      qty = Math.max(0, qty - bundledQty);
+    }
+    return { name: s.name, atId, qty };
+  }).filter(r => r.atId);
+
+  if (!rows.length) {
+    alert('No clients have a confirmed Autotask mapping. Map clients in the org mapping panel first.');
+    return;
+  }
+
+  const previewRows = rows.flatMap(row => [
+    { company: row.name, product: 'SaaS Protection', atService: KP_AT_SERVICE_NAMES[98], qty: row.qty },
+    { company: row.name, product: 'SaaS Protection', atService: KP_AT_SERVICE_NAMES[88], qty: row.qty },
+  ]);
+
+  kpShowAtConfirmModal('Push Datto SaaS Protection to Autotask', previewRows, async () => {
+    btn.disabled = true;
+    const progressEl = kpShowPushProgress('kp-saas-progress', 'Datto SaaS — Pushing to AT');
+    const unsubscribe = window.api.onKaseyaPushProgress(({ company, product, status, detail }) => {
+      kpAppendPushProgress(progressEl, company, product, status, detail);
+    });
+    try {
+      const result = await window.api.kaseyaAtPushSaas({ rows });
+      kpRenderPushSummary(progressEl, result.summary);
+    } catch (e) {
+      progressEl.innerHTML += `<p style="color:var(--error);font-size:12px">Error: ${escHtml(e.message)}</p>`;
+    } finally {
+      btn.disabled = false;
+      if (unsubscribe) unsubscribe();
+    }
+  });
+}
+
+function kpShowPushProgress(id, title) {
+  let el = document.getElementById(id);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = id;
+    el.className = 'settings-section wide';
+    el.style.marginTop = '8px';
+    const parent = document.getElementById('kp-results');
+    if (parent) {
+      const atSection = document.getElementById('kp-at-section');
+      if (atSection) atSection.before(el);
+      else parent.appendChild(el);
+    }
+  }
+  el.innerHTML = `<div class="section-title">${escHtml(title)}</div><div id="${id}-rows" style="font-size:12px;margin-top:8px"></div>`;
+  el.style.display = '';
+  return el;
+}
+
+function kpAppendPushProgress(el, company, product, status, detail) {
+  const rowsEl = el.querySelector('[id$="-rows"]') || el;
+  const color = { success: 'var(--success)', no_change: 'var(--text-muted)', error: 'var(--error)', no_contract: 'var(--warning)', no_service: 'var(--warning)', negative_qty: 'var(--warning)', working: 'var(--text-muted)' }[status] || 'var(--text-muted)';
+  const icon  = { success: '✓', no_change: '–', error: '✗', no_contract: '✗', no_service: '✗', negative_qty: '!', working: '…' }[status] || '?';
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:8px;padding:4px 0;border-top:1px solid rgba(255,255,255,.04)';
+  row.innerHTML = `
+    <span style="color:${color};font-weight:700;min-width:14px">${icon}</span>
+    <span style="flex:1">${escHtml(company)}${product ? ` <span style="color:var(--text-muted);font-size:11px">· ${escHtml(product)}</span>` : ''}</span>
+    <span style="color:var(--text-muted);font-size:11px">${escHtml(detail || '')}</span>`;
+  rowsEl.appendChild(row);
+  el.scrollTop = el.scrollHeight;
+}
+
+function kpRenderPushSummary(el, summary = {}) {
+  const rowsEl = el.querySelector('[id$="-rows"]') || el;
+  const div = document.createElement('div');
+  div.style.cssText = 'margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.1);font-size:12px;color:var(--text-muted)';
+  div.textContent = `Done — Updated: ${summary.updated || 0}  ·  No change: ${summary.skipped || 0}  ·  Errors: ${summary.errors || 0}`;
+  rowsEl.appendChild(div);
+}
+
+async function kpLoadDeltaSection(_unused) {
   const section = document.getElementById('kp-delta-section');
   const selA    = document.getElementById('kp-delta-a');
   const selB    = document.getElementById('kp-delta-b');
   if (!section || !selA || !selB) return;
 
-  const snaps = await window.api.getKaseyaSnapshots();
-  if (!snaps || snaps.length < 1) return;
+  // Load all SP files across all available years
+  let allFiles = [];
+  try {
+    const { years } = await window.api.kaseyaSpListYears();
+    const byYear = await Promise.all((years || []).map(yr =>
+      window.api.kaseyaSpListFiles({ year: yr }).catch(() => ({ files: [] }))
+    ));
+    allFiles = byYear.flatMap(r => r.files || []).sort((a, b) => {
+      const da = (a.name.match(/_(\d{8})/) || [])[1] || '';
+      const db = (b.name.match(/_(\d{8})/) || [])[1] || '';
+      return db.localeCompare(da) || (b.lastModified || '').localeCompare(a.lastModified || '');
+    });
+  } catch (_) {}
 
-  // Show section
+  if (allFiles.length < 1) return;
   section.style.display = '';
 
-  // Show "snapshot saved" badge briefly if we just processed one
-  if (currentSnapKey) {
-    const badge = document.getElementById('kp-delta-saved-badge');
-    if (badge) { badge.style.display = ''; setTimeout(() => { badge.style.display = 'none'; }, 4000); }
-  }
+  const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const fileLabel = f => {
+    const m = f.name.match(/_(\d{4})(\d{2})\d{2}/);
+    return m ? `${MONTHS[parseInt(m[2], 10) - 1]} ${m[1]}` : f.name;
+  };
 
-  // Populate dropdowns
-  const opts = snaps.map(s => {
-    const label = s.invoiceDate
-      ? new Date(s.invoiceDate + 'T12:00:00').toLocaleDateString('en-US', { year: 'numeric', month: 'long' })
-      : s.key;
-    const amt = '$' + (s.grandTotal || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return `<option value="${escHtml(s.key)}">${escHtml(label)} — ${amt}</option>`;
-  }).join('');
+  const opts = allFiles.map(f =>
+    `<option value="${escHtml(f.driveItemId)}" data-name="${escHtml(f.name)}">${escHtml(fileLabel(f))}</option>`
+  ).join('');
   selA.innerHTML = '<option value="">— Baseline month —</option>' + opts;
   selB.innerHTML = '<option value="">— Compare month —</option>' + opts;
 
-  // Auto-select: A = second newest, B = newest (most common use case)
-  if (snaps.length >= 2) { selA.value = snaps[1].key; selB.value = snaps[0].key; }
-  else if (snaps.length === 1) { selB.value = snaps[0].key; }
+  if (allFiles.length >= 2) { selA.value = allFiles[1].driveItemId; selB.value = allFiles[0].driveItemId; }
+  else if (allFiles.length === 1) { selB.value = allFiles[0].driveItemId; }
 
-  // Compare button
-  document.getElementById('kp-delta-run-btn').addEventListener('click', async () => {
-    const keyA = selA.value, keyB = selB.value;
-    const st = document.getElementById('kp-delta-status');
-    if (!keyA || !keyB) { if (st) { st.textContent = 'Select both months.'; st.className = 'save-status error'; } return; }
-    if (keyA === keyB) { if (st) { st.textContent = 'Select two different months.'; st.className = 'save-status error'; } return; }
-    if (st) { st.textContent = 'Comparing…'; st.className = 'save-status'; }
+  // Replace button to clear any previously stacked listeners
+  const oldBtn = document.getElementById('kp-delta-run-btn');
+  const newBtn = oldBtn.cloneNode(true);
+  oldBtn.parentNode.replaceChild(newBtn, oldBtn);
+  newBtn.addEventListener('click', async () => {
+    const idA   = selA.value, idB = selB.value;
+    const nameA = selA.options[selA.selectedIndex]?.dataset?.name || '';
+    const nameB = selB.options[selB.selectedIndex]?.dataset?.name || '';
+    const st    = document.getElementById('kp-delta-status');
+    if (!idA || !idB) { if (st) { st.textContent = 'Select both months.'; st.className = 'save-status error'; } return; }
+    if (idA === idB)  { if (st) { st.textContent = 'Select two different months.'; st.className = 'save-status error'; } return; }
+    if (st) { st.textContent = 'Downloading…'; st.className = 'save-status'; }
+    newBtn.disabled = true;
     try {
-      const result = await window.api.compareKaseyaSnapshots({ keyA, keyB });
+      const result = await window.api.compareKaseyaSpFiles({ idA, nameA, idB, nameB });
       if (result.error) throw new Error(result.error);
-      kpRenderDelta(result, snaps);
+      kpRenderDelta(result, []);   // labels come from result.keyA / result.keyB directly
       if (st) { st.textContent = ''; }
     } catch (e) {
       if (st) { st.textContent = `Error: ${e.message}`; st.className = 'save-status error'; }
-    }
+    } finally { newBtn.disabled = false; }
   });
-
-  // Snapshot manager
-  const mgr = document.getElementById('kp-delta-manage');
-  const lst = document.getElementById('kp-delta-snap-list');
-  if (mgr && lst && snaps.length > 0) {
-    mgr.style.display = '';
-    lst.innerHTML = snaps.map(s => {
-      const label = s.invoiceDate
-        ? new Date(s.invoiceDate + 'T12:00:00').toLocaleDateString('en-US', { year: 'numeric', month: 'long' })
-        : s.key;
-      const saved = s.savedAt ? new Date(s.savedAt).toLocaleDateString() : '?';
-      return `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:4px 8px;background:var(--surface-2);border-radius:4px">
-        <span>${escHtml(label)} <span style="color:var(--text-muted);font-size:10px">(saved ${saved})</span></span>
-        <button class="btn btn-ghost btn-sm kp-del-snap" data-key="${escHtml(s.key)}" style="padding:2px 8px;font-size:11px">Delete</button>
-      </div>`;
-    }).join('');
-    lst.querySelectorAll('.kp-del-snap').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        if (!confirm(`Delete snapshot for ${btn.dataset.key}?`)) return;
-        await window.api.deleteKaseyaSnapshot(btn.dataset.key);
-        await kpLoadDeltaSection(null); // reload
-      });
-    });
-  }
 }
 
 function kpRenderDelta(d, snaps) {
@@ -3707,12 +4856,19 @@ function kpRenderDelta(d, snaps) {
   };
   const deltaColor = v => v > 0 ? 'var(--warn)' : v < 0 ? '#4caf97' : 'var(--text-muted)';
 
+  // Shared table styles
+  const thS  = 'padding:9px 14px;font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:rgba(255,255,255,.65);white-space:nowrap';
+  const thR  = thS + ';text-align:right';
+  const tdM  = 'padding:8px 14px;font-family:var(--font-mono);font-size:12px';
+  const tdMR = tdM + ';text-align:right';
+  const secHdr = (title, sub = '') => `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin:18px 0 8px">${title}${sub ? `<span style="font-weight:400;text-transform:none;letter-spacing:0;margin-left:6px">${sub}</span>` : ''}</div>`;
+
   // Grand total banner
   const gt = d.grandTotal;
   const gtColor = deltaColor(gt.delta);
-  const cardBase = 'background:var(--surface-2);border-radius:var(--radius);padding:18px 22px;display:flex;flex-direction:column;align-items:center;gap:6px;border:1px solid var(--border)';
+  const cardBase = 'background:var(--surface-2);border-radius:var(--radius);padding:20px 24px;display:flex;flex-direction:column;align-items:center;gap:6px;border:1px solid var(--border)';
   let html = `
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:4px">
       <div style="${cardBase};border-left:4px solid #5b8dd9">
         <div class="metric-value">$${gt.a.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
         <div class="metric-label">${escHtml(snapLabel(d.keyA))}</div>
@@ -3727,102 +4883,107 @@ function kpRenderDelta(d, snaps) {
       </div>
     </div>`;
 
-  // Module deltas
+  // Module deltas — full width
   if (d.modules && d.modules.length > 0) {
-    html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;align-items:start">`;
-
-    // Modules table
-    html += `<div>
-      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:8px">Module Changes</div>
-      <table class="data-table">
-        <thead><tr><th></th><th>Module</th><th style="text-align:right">${escHtml(snapLabel(d.keyA))}</th><th style="text-align:right">${escHtml(snapLabel(d.keyB))}</th><th style="text-align:right">Δ</th></tr></thead>
-        <tbody>
-          ${d.modules.map(m => `<tr>
-            <td style="width:28px">${statusBadge(m.status)}</td>
-            <td>${escHtml(m.name)}</td>
-            <td style="text-align:right;font-family:var(--font-mono)">${m.a ? fmtAmt(m.a) : '—'}</td>
-            <td style="text-align:right;font-family:var(--font-mono)">${m.b ? fmtAmt(m.b) : '—'}</td>
-            <td style="text-align:right;font-family:var(--font-mono);color:${deltaColor(m.delta)}">${fmtSgn(m.delta)}</td>
-          </tr>`).join('')}
-        </tbody>
-      </table>
-    </div>`;
-
-    // Category deltas
-    if (d.categories && d.categories.length > 0) {
-      html += `<div>
-        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:8px">Category Changes</div>
-        <table class="data-table">
-          <thead><tr><th></th><th>Category</th><th style="text-align:right">${escHtml(snapLabel(d.keyA))}</th><th style="text-align:right">${escHtml(snapLabel(d.keyB))}</th><th style="text-align:right">Δ</th></tr></thead>
-          <tbody>
-            ${d.categories.map(c => `<tr>
-              <td style="width:28px">${statusBadge(c.status)}</td>
-              <td>${escHtml(c.name)}</td>
-              <td style="text-align:right;font-family:var(--font-mono)">${c.a ? fmtAmt(c.a) : '—'}</td>
-              <td style="text-align:right;font-family:var(--font-mono)">${c.b ? fmtAmt(c.b) : '—'}</td>
-              <td style="text-align:right;font-family:var(--font-mono);color:${deltaColor(c.delta)}">${fmtSgn(c.delta)}</td>
-            </tr>`).join('')}
-          </tbody>
-        </table>
-      </div>`;
-    }
-    html += `</div>`; // close grid
+    const lA = escHtml(snapLabel(d.keyA)), lB = escHtml(snapLabel(d.keyB));
+    html += secHdr('Module Changes');
+    html += `<table class="data-table" style="width:100%">
+      <thead><tr>
+        <th style="${thS};width:32px"></th>
+        <th style="${thS}">Module</th>
+        <th style="${thR}">${lA}</th>
+        <th style="${thR}">${lB}</th>
+        <th style="${thR}">Change</th>
+        <th style="${thR}">%</th>
+      </tr></thead>
+      <tbody>
+        ${d.modules.map(m => `<tr>
+          <td style="padding:8px 14px;width:32px">${statusBadge(m.status)}</td>
+          <td style="padding:8px 14px">${escHtml(m.name)}</td>
+          <td style="${tdMR}">${m.a ? fmtAmt(m.a) : '—'}</td>
+          <td style="${tdMR}">${m.b ? fmtAmt(m.b) : '—'}</td>
+          <td style="${tdMR};color:${deltaColor(m.delta)}">${fmtSgn(m.delta)}</td>
+          <td style="${tdMR};color:${deltaColor(m.delta)}">${pctStr(m.pct)}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
   }
 
-  // Client deltas
+  // Category deltas — full width
+  if (d.categories && d.categories.length > 0) {
+    const lA = escHtml(snapLabel(d.keyA)), lB = escHtml(snapLabel(d.keyB));
+    html += secHdr('Category Changes');
+    html += `<table class="data-table" style="width:100%">
+      <thead><tr>
+        <th style="${thS};width:32px"></th>
+        <th style="${thS}">Category</th>
+        <th style="${thR}">${lA}</th>
+        <th style="${thR}">${lB}</th>
+        <th style="${thR}">Change</th>
+        <th style="${thR}">%</th>
+      </tr></thead>
+      <tbody>
+        ${d.categories.map(c => `<tr>
+          <td style="padding:8px 14px;width:32px">${statusBadge(c.status)}</td>
+          <td style="padding:8px 14px">${escHtml(c.name)}</td>
+          <td style="${tdMR}">${c.a ? fmtAmt(c.a) : '—'}</td>
+          <td style="${tdMR}">${c.b ? fmtAmt(c.b) : '—'}</td>
+          <td style="${tdMR};color:${deltaColor(c.delta)}">${fmtSgn(c.delta)}</td>
+          <td style="${tdMR};color:${deltaColor(c.delta)}">${pctStr(c.pct)}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+  }
+
+  // Client deltas — full width
+  const USAGE_QTY_MODS = new Set(['SaaS Protection', 'DWP', 'DFP']);
   if (d.clients && d.clients.length > 0) {
-    html += `
-      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:8px">
-        Client Changes <span style="font-weight:400;text-transform:none;letter-spacing:0">(${d.clients.length} changed)</span>
-      </div>
-      <table class="data-table" id="kp-delta-client-tbl">
-        <thead><tr>
-          <th style="width:28px"></th>
-          <th>Client</th>
-          <th style="text-align:right">${escHtml(snapLabel(d.keyA))}</th>
-          <th style="text-align:right">${escHtml(snapLabel(d.keyB))}</th>
-          <th style="text-align:right">Δ Amount</th>
-          <th style="text-align:right">Δ %</th>
-          <th style="width:28px"></th>
-        </tr></thead>
-        <tbody>
-          ${d.clients.map((c, i) => {
-            const hasMods = c.modDeltas && c.modDeltas.length > 0;
-            const detailId = `kp-dc-${i}`;
-            return `<tr class="kp-delta-client-row" data-detail="${detailId}" style="cursor:${hasMods ? 'pointer' : 'default'}">
-              <td>${statusBadge(c.status)}</td>
-              <td>${escHtml(c.name)}</td>
-              <td style="text-align:right;font-family:var(--font-mono)">${c.a ? fmtAmt(c.a) : '—'}</td>
-              <td style="text-align:right;font-family:var(--font-mono)">${c.b ? fmtAmt(c.b) : '—'}</td>
-              <td style="text-align:right;font-family:var(--font-mono);color:${deltaColor(c.delta)}">${fmtSgn(c.delta)}</td>
-              <td style="text-align:right;font-family:var(--font-mono);color:${deltaColor(c.delta)}">${pctStr(c.pct)}</td>
-              <td style="text-align:center;color:var(--text-muted);font-size:11px">${hasMods ? '▶' : ''}</td>
-            </tr>
-            ${hasMods ? `<tr id="${detailId}" style="display:none;background:var(--surface-2)">
-              <td colspan="7" style="padding:8px 12px 8px 36px">
-                <table style="width:100%;border-collapse:collapse;font-size:12px">
-                  <thead><tr>
-                    <th style="text-align:left;padding:3px 8px;color:var(--text-muted);font-weight:500">Module</th>
-                    <th style="text-align:right;padding:3px 8px;color:var(--text-muted);font-weight:500">Qty A→B</th>
-                    <th style="text-align:right;padding:3px 8px;color:var(--text-muted);font-weight:500">Amount A</th>
-                    <th style="text-align:right;padding:3px 8px;color:var(--text-muted);font-weight:500">Amount B</th>
-                    <th style="text-align:right;padding:3px 8px;color:var(--text-muted);font-weight:500">Δ</th>
-                  </tr></thead>
-                  <tbody>
-                    ${c.modDeltas.map(m => `<tr>
-                      <td style="padding:3px 8px">${escHtml(m.name)}</td>
-                      <td style="text-align:right;padding:3px 8px;font-family:var(--font-mono)">${m.aQty || '—'} → ${m.bQty || '—'}</td>
-                      <td style="text-align:right;padding:3px 8px;font-family:var(--font-mono)">${m.aAmt ? fmtAmt(m.aAmt) : '—'}</td>
-                      <td style="text-align:right;padding:3px 8px;font-family:var(--font-mono)">${m.bAmt ? fmtAmt(m.bAmt) : '—'}</td>
-                      <td style="text-align:right;padding:3px 8px;font-family:var(--font-mono);color:${deltaColor(m.deltaAmt)}">${fmtSgn(m.deltaAmt)}</td>
-                    </tr>`).join('')}
-                  </tbody>
-                </table>
-              </td>
-            </tr>` : ''}`;
-          }).join('')}
-        </tbody>
-      </table>`;
+    const lA = escHtml(snapLabel(d.keyA)), lB = escHtml(snapLabel(d.keyB));
+    html += secHdr('Client Changes', `(${d.clients.length} changed)`);
+
+    const clientBg = 'background:rgba(255,255,255,.04)';
+    const prodBg   = 'background:rgba(255,255,255,.015)';
+    const tdL      = 'padding:8px 14px';
+    const tdLi     = 'padding:6px 14px 6px 36px;font-size:12px';
+    const tdRi     = 'padding:6px 14px;font-size:12px;text-align:right;font-family:var(--font-mono)';
+
+    html += `<table class="data-table" style="width:100%">
+      <thead><tr>
+        <th style="${thS};width:32px"></th>
+        <th style="${thS}">Client / Product</th>
+        <th style="${thR}">Usage A→B</th>
+        <th style="${thR}">${lA}</th>
+        <th style="${thR}">${lB}</th>
+        <th style="${thR}">Change</th>
+      </tr></thead>
+      <tbody>
+        ${d.clients.map(c => {
+          const clientRow = `<tr style="${clientBg};border-top:2px solid rgba(255,255,255,.1)">
+            <td style="${tdL}">${statusBadge(c.status)}</td>
+            <td style="${tdL};font-weight:600" colspan="5">${escHtml(c.name)}</td>
+          </tr>`;
+
+          const prodRows = (c.productDeltas || []).map(p => {
+            const useUsage = USAGE_QTY_MODS.has(p.module);
+            const qA = useUsage ? (p.aLicQty || 0) : (p.aQty || 0);
+            const qB = useUsage ? (p.bLicQty || 0) : (p.bQty || 0);
+            const qDelta = qB - qA;
+            const qStr = qA === 0 && qB === 0 ? '—'
+              : `${qA || '—'} → ${qB || '—'}${qDelta !== 0 ? ` <span style="color:${qDelta > 0 ? 'var(--warn)' : '#4caf97'};font-weight:600">(${qDelta > 0 ? '+' : ''}${qDelta})</span>` : ''}`;
+            return `<tr style="${prodBg}">
+              <td style="${tdLi};color:var(--text-muted)">↳</td>
+              <td style="${tdLi}">${escHtml(p.name)}</td>
+              <td style="${tdRi}">${qStr}</td>
+              <td style="${tdRi}">${p.aAmt ? fmtAmt(p.aAmt) : '—'}</td>
+              <td style="${tdRi}">${p.bAmt ? fmtAmt(p.bAmt) : '—'}</td>
+              <td style="${tdRi};color:${deltaColor(p.deltaAmt)}">${p.deltaAmt !== 0 ? fmtSgn(p.deltaAmt) : '—'}</td>
+            </tr>`;
+          }).join('');
+
+          return clientRow + prodRows;
+        }).join('')}
+      </tbody>
+    </table>`;
   }
 
   if (!d.modules?.length && !d.clients?.length) {
@@ -3830,19 +4991,6 @@ function kpRenderDelta(d, snaps) {
   }
 
   el.innerHTML = html;
-
-  // Wire expand/collapse on client rows
-  el.querySelectorAll('.kp-delta-client-row').forEach(row => {
-    const detailId = row.dataset.detail;
-    const detail = document.getElementById(detailId);
-    if (!detail) return;
-    const arrow = row.querySelector('td:last-child');
-    row.addEventListener('click', () => {
-      const open = detail.style.display !== 'none';
-      detail.style.display = open ? 'none' : '';
-      if (arrow) arrow.textContent = open ? '▶' : '▼';
-    });
-  });
 }
 
 // ─── Autotask Contract Changes ─────────────────────────────────────────────────────────
