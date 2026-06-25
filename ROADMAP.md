@@ -25,6 +25,9 @@
 | Microsoft SSO / Entra ID login | v1.4 |
 | Contract Name column (Project Time Summary) | v1.4 |
 | Microsoft profile photo in user chip | v1.4 |
+| Modular IPC restructure (main/ipc/) | v1.5 |
+| Home Screen daily start page | v1.5.7 |
+| Help page overhaul + in-app support | v1.5.7 |
 
 ---
 
@@ -56,8 +59,8 @@ Do these in order. The Azure backend work unlocks everything below it.
 - [x] **Microsoft SSO / Entra ID** *(shipped v1.4.0)*
   MSAL PublicClientApplication with file-based token cache. Roles defined in Entra ID (`hub.admin`, `hub.standard`, `hub.readonly`). Admin consent granted tenant-wide. Profile photo pulled from Microsoft Graph.
 
-- [ ] **Modular file restructure**
-  Split `main.js` and `app.js` into per-tool files (`main/ipc/toolName.js`, `renderer/views/toolName.js`). Do this alongside SSO so the new auth layer is built into a clean structure from day one. Prevents merge conflicts as contributor count grows.
+- [x] **Modular file restructure** *(main process complete)*
+  `main/ipc/` is fully split into 19 per-tool files. `main.js` is 165 lines. `app.js` (renderer) remains a single file — splitting it carries refactor risk with no user benefit. New tools added by contributors should each get their own renderer file going forward; the monolith shrinks naturally over time.
 
 - [ ] **Intune / MDM deployment**
   Package as Win32 app and push via Intune. Solves Windows SmartScreen for all managed employee machines immediately — no cert required for internal distribution.
