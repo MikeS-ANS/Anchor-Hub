@@ -5,6 +5,7 @@ const { app, shell } = require('electron');
 const { atFetch, atQuery } = require('../shared/at');
 const { kvGetSecret }      = require('../shared/kv');
 const { USER_DATA, getMainWindow } = require('../shared/state');
+const { loadHubDirectory, saveHubDirectory } = require('../shared/hubDirectory');
 
 const BP_BASE          = 'https://api.blackpointcyber.com';
 const BP_SNAPSHOT_FILE = path.join(USER_DATA, 'anchor-bp-snapshot.json');
@@ -15,7 +16,7 @@ const GRAPH_SCOPES    = ['https://graph.microsoft.com/Files.ReadWrite.All'];
 const SP_INVOICES_LIB = 'ANS-Vendors';
 const SP_INVOICES     = '/Blackpoint/invoices';
 const SP_MAPPINGS_LIB = 'ANS-Company Shared';
-const SP_MAPPINGS     = '/Anchor%20Hub/bp-company-mappings.json';
+const SP_MAPPINGS     = '/Anchor%20Hub/hub-company-mappings.json'; // central AT-centric directory
 const SP_PUSH_LOG     = '/Blackpoint/push-log.json';
 
 // ─── Bulk AT data cache (30-min TTL) ─────────────────────────────────────────
@@ -293,28 +294,84 @@ function firstOfNextMonth() {
   return new Date(d.getFullYear(), d.getMonth() + 1, 1).toISOString();
 }
 
-// ─── SharePoint mapping store ─────────────────────────────────────────────────
+// ─── SharePoint mapping store (reads/writes hub-company-mappings.json v2) ────
+//
+// Internal v2 format: { _version: 2, companies: [{ atId, atName, platforms: { blackpoint: {...} } }] }
+// BP compatibility format (what bp-get-at-comparison needs): { mappings: { "BPName": { atCompanyId, atCompanyName, confidence } }, excluded: {...} }
+//
+// loadSpMappings() returns: { _version: 2, _hubRaw: <full hub>, mappings: {...}, excluded: {...} }
+// saveSpMappings() accepts that same shape and writes back to the hub file.
 
 async function loadSpMappings() {
   try {
-    const meta = await graphFetch(`${SP_MAPPINGS}:`, { library: SP_MAPPINGS_LIB });
-    const downloadUrl = meta['@microsoft.graph.downloadUrl'];
-    if (!downloadUrl) throw new Error('No download URL for mappings file');
-    return JSON.parse(await spDownload(downloadUrl));
+    const hub = await loadHubDirectory();
+    if (!hub) return { _version: 2, _hubRaw: null, mappings: {}, excluded: {} };
+
+    if (hub._version !== 2) return hub; // legacy format passthrough
+
+    // Build BP compatibility layer from v2 hub
+    const mappings = {}, excluded = {};
+    for (const entry of (hub.companies || [])) {
+      const bp = entry.platforms?.blackpoint;
+      if (!bp?.name) continue;
+      if (bp.excluded || entry.excluded) {
+        excluded[bp.name] = true;
+      } else {
+        mappings[bp.name] = {
+          atCompanyId:   entry.atId,
+          atCompanyName: entry.atName || '',
+          confidence:    bp.confidence || 0,
+          ...(bp.confirmedAt ? { confirmedAt: bp.confirmedAt } : {}),
+        };
+      }
+    }
+    return { _version: 2, _hubRaw: hub, mappings, excluded };
   } catch (e) {
-    if (/Graph 404|itemNotFound|404/.test(e.message)) return { _updated: null, mappings: {} };
-    throw e;
+    console.warn('[Blackpoint] Hub load failed:', e.message);
+    return { _version: 2, _hubRaw: null, mappings: {}, excluded: {} };
   }
 }
 
 async function saveSpMappings(data) {
-  const body = Buffer.from(JSON.stringify(data, null, 2), 'utf8');
-  await graphFetch(`${SP_MAPPINGS}:/content`, {
-    method: 'PUT',
-    body,
-    headers: { 'Content-Type': 'application/octet-stream' },
-    library: SP_MAPPINGS_LIB,
-  });
+  if (data._version !== 2 || !data._hubRaw) {
+    return saveHubDirectory(data);
+  }
+
+  // Merge BP changes back into the hub file
+  const hub = JSON.parse(JSON.stringify(data._hubRaw));
+  const byAtId   = new Map(hub.companies.filter(e => e.atId).map(e => [e.atId, e]));
+  const byBpName = new Map();
+  for (const e of hub.companies) {
+    if (e.platforms?.blackpoint?.name) byBpName.set(e.platforms.blackpoint.name, e);
+  }
+
+  for (const [bpName, bpData] of Object.entries(data.mappings || {})) {
+    let entry = byAtId.get(bpData.atCompanyId) || byBpName.get(bpName);
+    if (!entry) {
+      entry = { atId: bpData.atCompanyId, atName: bpData.atCompanyName || '', excluded: false, platforms: {} };
+      hub.companies.push(entry);
+      if (bpData.atCompanyId) byAtId.set(bpData.atCompanyId, entry);
+    }
+    if (!entry.atName && bpData.atCompanyName) entry.atName = bpData.atCompanyName;
+    entry.platforms.blackpoint = {
+      name:       bpName,
+      confidence: bpData.confidence || 0,
+      ...(bpData.confirmedAt ? { confirmedAt: bpData.confirmedAt } : {}),
+    };
+    delete entry.platforms.blackpoint.excluded;
+    byBpName.set(bpName, entry);
+  }
+
+  for (const [bpName, excl] of Object.entries(data.excluded || {})) {
+    const entry = byBpName.get(bpName);
+    if (entry?.platforms?.blackpoint) {
+      if (excl) entry.platforms.blackpoint.excluded = true;
+      else      delete entry.platforms.blackpoint.excluded;
+    }
+  }
+
+  hub._updated = new Date().toISOString();
+  return saveHubDirectory(hub);
 }
 
 // ─── Push audit log ───────────────────────────────────────────────────────────
@@ -397,9 +454,12 @@ module.exports = function registerBlackpoint(ipcMain) {
     return { rows, fileName, loadedAt: new Date().toISOString() };
   });
 
-  // Load company mappings from SharePoint
+  // Load company mappings from SharePoint — returns { mappings, excluded } shape for UI
   ipcMain.handle('bp-load-company-mappings', async () => {
-    return loadSpMappings();
+    const data = await loadSpMappings();
+    // Strip _hubRaw (large) before sending to renderer
+    const { _hubRaw: _h, ...safe } = data;
+    return safe;
   });
 
   // Compare CSV rows against Autotask contract units.

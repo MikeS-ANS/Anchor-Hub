@@ -2,17 +2,96 @@ const fs   = require('fs');
 const path = require('path');
 const { dialog, shell } = require('electron');
 const { USER_DATA, getMainWindow, loadMappings, saveMappingsFile } = require('../shared/state');
+const { loadHubDirectory, saveHubDirectory } = require('../shared/hubDirectory');
 const { getPax8Token, pax8Paginate, resolveProductDetails } = require('../shared/pax8');
 const { atFetch, atQuery } = require('../shared/at');
 const { parseCSVLine, mkProductKey, termLabel } = require('../shared/csvMappings');
 
-let _lastMappingSyncResult = null;
+async function loadSpMappings() {
+  return loadHubDirectory().catch(e => {
+    console.warn('[CompanyMapping] SP load failed, falling back to local:', e.message);
+    return null;
+  });
+}
 
+async function saveSpMappings(data) {
+  return saveHubDirectory(data);
+}
+
+// Load from SP first, fall back to local file. Updates local cache on SP hit.
+async function loadMappingsCentral() {
+  const spData = await loadSpMappings();
+  if (spData) {
+    saveMappingsFile(spData);
+    return { ...spData, _storageSource: 'sharepoint' };
+  }
+  return { ...loadMappings(), _storageSource: 'local' };
+}
+
+// Save to SP (primary) and local file (backup).
+async function saveMappingsCentral(data) {
+  const { _storageSource: _s, ...clean } = data;
+  await saveSpMappings(clean);
+  saveMappingsFile(clean);
+}
+
+// ─── v2 format helpers ─────────────────────────────────────────────────────────
+
+// Expand AT-centric v2 companies array into flat rows (one per Pax8 entry).
+// The flat format is what the UI consumes.
+function v2ToFlat(companies) {
+  const flat = [];
+  for (const entry of (companies || [])) {
+    const pax8All = Array.isArray(entry.platforms?.pax8) ? entry.platforms.pax8
+                  : entry.platforms?.pax8 ? [entry.platforms.pax8] : [];
+    // Only count entries with real Pax8 IDs (empty IDs come from a corrupt migration run)
+    const validPax8 = pax8All.filter(p => p.id);
+
+    if (validPax8.length === 0) {
+      // No valid Pax8 entries — AT/BP-only entry; skip for the Company Directory UI.
+      // These are visible only after a sync re-populates platforms.pax8 from the API.
+      continue;
+    }
+    for (const p of validPax8) {
+      flat.push({
+        pax8Id:     p.id,
+        pax8Name:   p.name || '',
+        atId:       entry.atId || null,
+        atName:     entry.atName || '',
+        confidence: p.confidence || 'low',
+        source:     p.source || 'none',
+        accepted:   !!entry.atId && !entry.excluded && p.confidence !== 'unmatched',
+        excluded:   entry.excluded || false,
+      });
+    }
+  }
+  return flat;
+}
+
+// Find the v2 entry + pax8 sub-entry that has the given pax8Id.
+function findByPax8Id(companies, pax8Id) {
+  for (const entry of (companies || [])) {
+    const pax8List = Array.isArray(entry.platforms?.pax8) ? entry.platforms.pax8
+                   : entry.platforms?.pax8 ? [entry.platforms.pax8] : [];
+    const idx = pax8List.findIndex(p => p.id === pax8Id);
+    if (idx >= 0) return { entry, pax8List, idx };
+  }
+  return null;
+}
+
+// Ensure data is in v2 format; if it's an old flat format, return as-is (no conversion).
+function isV2(data) { return data && data._version === 2; }
+
+// ─── Name normalisation ───────────────────────────────────────────────────────
 const normName = s => (s || '').toLowerCase()
   .replace(/\binc\.?\b|\bllc\.?\b|\bltd\.?\b|\bcorp\.?\b|\bco\.?\b/g, '')
   .replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 
+let _lastMappingSyncResult = null;
+
 module.exports = function registerCompanyMapping(ipcMain) {
+
+  // ── Full sync from Pax8 + Autotask ─────────────────────────────────────────
   ipcMain.handle('run-company-mapping-sync', async () => {
     const send = (msg, type = 'info') => getMainWindow().webContents.send('mapping-log', { msg, type });
 
@@ -36,45 +115,140 @@ module.exports = function registerCompanyMapping(ipcMain) {
       const atCByNorm = new Map();
       for (const c of atCompanies) {
         const n = normName(c.companyName || c.name || '');
-        if (n && !atCById.has(n)) atCByNorm.set(n, c);
+        if (n && !atCByNorm.has(n)) atCByNorm.set(n, c);
       }
 
-      const existing   = loadMappings();
-      const prevByPax8 = new Map((existing.companies || []).map(c => [c.pax8Id, c]));
+      // Load existing data — preserve BP mappings and manual AT assignments
+      send('Loading existing mappings...');
+      const existing   = await loadMappingsCentral();
+      const prevByAtId = new Map();
+      const prevByPax8 = new Map();
 
-      const companies = [];
+      if (isV2(existing)) {
+        for (const entry of (existing.companies || [])) {
+          if (entry.atId) prevByAtId.set(entry.atId, entry);
+          const pax8List = Array.isArray(entry.platforms?.pax8) ? entry.platforms.pax8 : [];
+          for (const p of pax8List) { if (p.id) prevByPax8.set(p.id, entry); }
+        }
+      } else {
+        // Old flat format in local cache — convert to rough prev lookup
+        for (const c of (existing.companies || [])) {
+          if (c.pax8Id) prevByPax8.set(c.pax8Id, { atId: c.atId, atName: c.atName,
+            excluded: c.excluded, platforms: { pax8: [{ id: c.pax8Id, name: c.pax8Name,
+              confidence: c.confidence, source: c.source }] } });
+        }
+      }
+
+      // ── Build AT-centric map ───────────────────────────────────────────────
+      const byAtId  = new Map();
+      const unmatched = [];
       let coHigh = 0, coLow = 0, coNone = 0;
 
       for (const co of pax8Companies) {
-        const prev    = prevByPax8.get(co.id);
+        const prevEntry = prevByPax8.get(co.id);
+
+        // Preserve manually confirmed matches
+        if (prevEntry?.platforms?.pax8) {
+          const prevPax8 = (Array.isArray(prevEntry.platforms.pax8) ? prevEntry.platforms.pax8 : [prevEntry.platforms.pax8])
+            .find(p => p.id === co.id);
+          if (prevPax8?.source === 'manual' && prevEntry.atId) {
+            const entry = byAtId.get(prevEntry.atId) || (() => {
+              const e = { atId: prevEntry.atId, atName: prevEntry.atName, excluded: prevEntry.excluded || false, platforms: {} };
+              // Carry over BP data from previous entry
+              if (prevEntry.platforms?.blackpoint) e.platforms.blackpoint = prevEntry.platforms.blackpoint;
+              byAtId.set(prevEntry.atId, e);
+              return e;
+            })();
+            if (!entry.platforms.pax8) entry.platforms.pax8 = [];
+            if (!entry.platforms.pax8.find(p => p.id === co.id))
+              entry.platforms.pax8.push({ id: co.id, name: co.name || '', confidence: 'manual', source: 'manual' });
+            coHigh++;
+            continue;
+          }
+        }
+
         const rawId   = co.externalId ?? co.psaId ?? co.psaCompanyId ?? co.crmId
                         ?? co.psa?.companyId ?? co.provisioningId ?? null;
         const atIdNum = rawId != null ? parseInt(String(rawId), 10) || null : null;
 
         if (atIdNum && atIdNum > 0) {
-          const atCo = atCById.get(atIdNum);
-          companies.push({ pax8Id: co.id, pax8Name: co.name || '', atId: atIdNum,
-            atName: atCo?.companyName || atCo?.name || prev?.atName || '',
-            confidence: 'high', source: 'pax8_api', accepted: true });
+          const atCo    = atCById.get(atIdNum);
+          const prev    = prevByAtId.get(atIdNum);
+          const entry   = byAtId.get(atIdNum) || (() => {
+            const e = {
+              atId: atIdNum,
+              atName: atCo?.companyName || atCo?.name || prev?.atName || '',
+              excluded: prev?.excluded ?? false,
+              platforms: {},
+            };
+            if (prev?.platforms?.blackpoint) e.platforms.blackpoint = prev.platforms.blackpoint;
+            byAtId.set(atIdNum, e);
+            return e;
+          })();
+          if (!entry.platforms.pax8) entry.platforms.pax8 = [];
+          if (!entry.platforms.pax8.find(p => p.id === co.id))
+            entry.platforms.pax8.push({ id: co.id, name: co.name || '', confidence: 'high', source: 'pax8_api' });
           coHigh++;
         } else {
           const norm    = normName(co.name || '');
           const matched = norm ? atCByNorm.get(norm) : null;
           if (matched) {
-            companies.push({ pax8Id: co.id, pax8Name: co.name || '',
-              atId: matched.id, atName: matched.companyName || matched.name || '',
-              confidence: 'low', source: 'name_match', accepted: prev?.accepted ?? false });
+            const prev  = prevByAtId.get(matched.id);
+            const entry = byAtId.get(matched.id) || (() => {
+              const e = {
+                atId: matched.id,
+                atName: matched.companyName || matched.name || '',
+                excluded: prev?.excluded ?? false,
+                platforms: {},
+              };
+              if (prev?.platforms?.blackpoint) e.platforms.blackpoint = prev.platforms.blackpoint;
+              byAtId.set(matched.id, e);
+              return e;
+            })();
+            if (!entry.platforms.pax8) entry.platforms.pax8 = [];
+            if (!entry.platforms.pax8.find(p => p.id === co.id))
+              entry.platforms.pax8.push({ id: co.id, name: co.name || '', confidence: 'low', source: 'name_match' });
             coLow++;
           } else {
-            companies.push({ pax8Id: co.id, pax8Name: co.name || '',
-              atId: prev?.atId ?? null, atName: prev?.atName ?? '',
-              confidence: 'unmatched', source: prev?.source ?? 'none', accepted: prev?.accepted ?? false });
-            coNone++;
+            const prev    = prevEntry;
+            const prevPax8 = prev ? (Array.isArray(prev.platforms?.pax8) ? prev.platforms.pax8 : []).find(p => p.id === co.id) : null;
+            if (prevPax8?.source === 'manual' && prev?.atId) {
+              // Previously manually matched
+              const entry = byAtId.get(prev.atId) || (() => {
+                const e = { atId: prev.atId, atName: prev.atName || '', excluded: prev.excluded || false, platforms: {} };
+                if (prev.platforms?.blackpoint) e.platforms.blackpoint = prev.platforms.blackpoint;
+                byAtId.set(prev.atId, e);
+                return e;
+              })();
+              if (!entry.platforms.pax8) entry.platforms.pax8 = [];
+              if (!entry.platforms.pax8.find(p => p.id === co.id))
+                entry.platforms.pax8.push({ id: co.id, name: co.name || '', confidence: 'manual', source: 'manual' });
+              coHigh++;
+            } else {
+              unmatched.push({
+                atId: null, atName: null,
+                excluded: prev?.excluded ?? false,
+                platforms: { pax8: [{ id: co.id, name: co.name || '', confidence: 'unmatched', source: 'none' }] },
+              });
+              coNone++;
+            }
           }
         }
       }
+
+      // Preserve AT/BP-only entries that have no Pax8 data
+      if (isV2(existing)) {
+        for (const entry of (existing.companies || [])) {
+          if (!entry.atId) continue;
+          if (!byAtId.has(entry.atId) && entry.platforms?.blackpoint) {
+            byAtId.set(entry.atId, { ...entry, platforms: { ...entry.platforms, pax8: [] } });
+          }
+        }
+      }
+
       send(`Companies: ${coHigh} auto-mapped, ${coLow} name-matched, ${coNone} unmatched`, coLow + coNone ? 'warn' : 'success');
 
+      // ── Services (unchanged logic) ─────────────────────────────────────────
       send('Fetching Pax8 active subscriptions...');
       const allSubs = await pax8Paginate(token, '/subscriptions?status=Active');
       send(`✓ ${allSubs.length} active subscriptions`, 'success');
@@ -91,8 +265,6 @@ module.exports = function registerCompanyMapping(ipcMain) {
         const tLabel = termLabel(sub);
         productMap.set(key, { key, productId: pid, name: sub.productName || sub.product?.name || null, vendorName: null, vendorSku: null, termLabel: tLabel, svcId });
       }
-      send(`  ℹ ${productMap.size} unique product+term combinations from ${allSubs.length} subscriptions`, 'info');
-
       for (const [, p] of productMap) {
         const details = await resolveProductDetails(token, p.productId);
         if (!p.name)       p.name       = details.name;
@@ -143,8 +315,13 @@ module.exports = function registerCompanyMapping(ipcMain) {
       }
       send(`Services: ${svcHigh} auto-mapped, ${svcLow} name-matched, ${svcNone} unmatched`, svcLow + svcNone ? 'warn' : 'success');
 
-      const lastSync = new Date().toISOString();
-      saveMappingsFile({ lastSync, companies, services });
+      send('Saving to SharePoint...');
+      const companies = [
+        ...[...byAtId.values()].sort((a, b) => (a.atName || '').localeCompare(b.atName || '')),
+        ...unmatched.sort((a, b) => (a.platforms?.pax8?.[0]?.name || '').localeCompare(b.platforms?.pax8?.[0]?.name || '')),
+      ];
+      const newData = { _version: 2, _updated: new Date().toISOString(), companies, services };
+      await saveMappingsCentral(newData);
 
       _lastMappingSyncResult = {
         atCompanies: atCompanies.map(c => ({ id: c.id, name: c.companyName || c.name || '' })),
@@ -152,13 +329,16 @@ module.exports = function registerCompanyMapping(ipcMain) {
       };
 
       send('────────────────────────────', 'divider');
-      send(`Sync complete. Mappings saved to pax8hub-mappings.json`, 'success');
+      send('Sync complete. Mappings saved to SharePoint (shared with all users).', 'success');
 
+      const flatCompanies = v2ToFlat(companies);
       return {
-        success: true, lastSync, companies, services,
+        success: true, lastSync: newData._updated,
+        companies: flatCompanies, services,
         atCompanies: _lastMappingSyncResult.atCompanies,
         atServices:  _lastMappingSyncResult.atServices,
         stats: { coHigh, coLow, coNone, svcHigh, svcLow, svcNone },
+        storageSource: 'sharepoint',
       };
     } catch (err) {
       send(`Fatal: ${err.message}`, 'error');
@@ -166,41 +346,187 @@ module.exports = function registerCompanyMapping(ipcMain) {
     }
   });
 
-  ipcMain.handle('set-company-excluded', (_, { pax8Id, excluded }) => {
-    const data = loadMappings();
-    const companies = (data.companies || []).map(c => c.pax8Id === pax8Id ? { ...c, excluded: !!excluded } : c);
-    if (!companies.find(c => c.pax8Id === pax8Id))
-      companies.push({ pax8Id, excluded: !!excluded, confidence: 'excluded', accepted: false });
-    saveMappingsFile({ ...data, companies });
+  // ── Accept a company match (may include manual atId/atName) ─────────────────
+  ipcMain.handle('accept-company-match', async (_, { pax8Id, atId, atName }) => {
+    const data = await loadMappingsCentral();
+
+    if (!isV2(data)) {
+      // Legacy flat format fallback
+      const companies = (data.companies || []).map(c => {
+        if (c.pax8Id !== pax8Id) return c;
+        const update = { ...c, accepted: true, excluded: false };
+        if (atId) { update.atId = atId; update.atName = atName || c.atName;
+                    update.confidence = 'manual'; update.source = 'manual'; }
+        return update;
+      });
+      await saveMappingsCentral({ ...data, companies });
+      return { success: true };
+    }
+
+    const companies = [...(data.companies || [])];
+    const found = findByPax8Id(companies, pax8Id);
+
+    if (found) {
+      const { entry, pax8List, idx } = found;
+      const updated = { ...pax8List[idx] };
+
+      if (atId && atId !== entry.atId) {
+        // Moving to a different AT company — need to reorganize entries
+        const oldEntry = entry;
+        // Remove this pax8 entry from old AT entry
+        oldEntry.platforms.pax8 = pax8List.filter((_, i) => i !== idx);
+
+        // Find or create the target AT entry
+        let targetEntry = companies.find(e => e.atId === atId);
+        if (!targetEntry) {
+          targetEntry = { atId, atName: atName || '', excluded: false, platforms: {} };
+          companies.push(targetEntry);
+        } else if (atName && !targetEntry.atName) {
+          targetEntry.atName = atName;
+        }
+        if (!targetEntry.platforms.pax8) targetEntry.platforms.pax8 = [];
+        updated.confidence = 'manual';
+        updated.source     = 'manual';
+        targetEntry.platforms.pax8.push(updated);
+      } else {
+        // Same AT company — just update confidence/source
+        if (atId) {
+          pax8List[idx] = { ...updated, confidence: 'manual', source: 'manual' };
+          if (atName && !entry.atName) entry.atName = atName;
+        }
+        entry.excluded = false;
+      }
+    } else if (atId) {
+      // pax8Id not found — create a new entry
+      let targetEntry = companies.find(e => e.atId === atId);
+      if (!targetEntry) {
+        targetEntry = { atId, atName: atName || '', excluded: false, platforms: {} };
+        companies.push(targetEntry);
+      }
+      if (!targetEntry.platforms.pax8) targetEntry.platforms.pax8 = [];
+      targetEntry.platforms.pax8.push({ id: pax8Id, name: '', confidence: 'manual', source: 'manual' });
+    }
+
+    await saveMappingsCentral({ ...data, companies });
     return { success: true };
   });
 
-  ipcMain.handle('accept-company-match', (_, { pax8Id }) => {
-    const data = loadMappings();
-    const companies = (data.companies || []).map(c =>
-      c.pax8Id === pax8Id ? { ...c, accepted: true, excluded: false } : c
-    );
-    saveMappingsFile({ ...data, companies });
+  // ── Exclude / un-exclude a company ──────────────────────────────────────────
+  ipcMain.handle('set-company-excluded', async (_, { pax8Id, excluded }) => {
+    const data = await loadMappingsCentral();
+
+    if (!isV2(data)) {
+      const companies = (data.companies || []).map(c =>
+        c.pax8Id === pax8Id ? { ...c, excluded: !!excluded, accepted: !excluded && c.accepted } : c
+      );
+      if (!companies.find(c => c.pax8Id === pax8Id))
+        companies.push({ pax8Id, excluded: !!excluded, confidence: 'excluded', accepted: false });
+      await saveMappingsCentral({ ...data, companies });
+      return { success: true };
+    }
+
+    const companies = [...(data.companies || [])];
+    const found = findByPax8Id(companies, pax8Id);
+    if (found) {
+      found.entry.excluded = !!excluded;
+    } else {
+      // pax8Id not in any entry — add as a new unmatched excluded entry
+      companies.push({
+        atId: null, atName: null,
+        excluded: !!excluded,
+        platforms: { pax8: [{ id: pax8Id, name: '', confidence: 'excluded', source: 'none' }] },
+      });
+    }
+
+    await saveMappingsCentral({ ...data, companies });
     return { success: true };
   });
 
+  // ── Get current mappings (SP primary, local fallback) ───────────────────────
+  ipcMain.handle('get-mappings', async () => {
+    const data = await loadMappingsCentral();
+    const flatCompanies = isV2(data) ? v2ToFlat(data.companies) : (data.companies || []);
+    return {
+      companies:   flatCompanies,
+      services:    data.services || [],
+      lastSync:    isV2(data) ? data._updated : data.lastSync,
+      _storageSource: data._storageSource,
+      atCompanies: _lastMappingSyncResult?.atCompanies || [],
+      atServices:  _lastMappingSyncResult?.atServices  || [],
+    };
+  });
+
+  // ── Save mappings (called from CSV import) ───────────────────────────────────
+  ipcMain.handle('save-mappings', async (_, { companies, services }) => {
+    const existing = await loadMappingsCentral();
+    if (!isV2(existing)) {
+      await saveMappingsCentral({ ...existing, companies, services });
+      return { success: true };
+    }
+    // Re-integrate flat companies back into v2 format
+    const byAtId  = new Map((existing.companies || []).filter(e => e.atId).map(e => [e.atId, e]));
+    const byPax8  = new Map();
+    for (const e of (existing.companies || [])) {
+      const pax8List = Array.isArray(e.platforms?.pax8) ? e.platforms.pax8 : [];
+      for (const p of pax8List) { if (p.id) byPax8.set(p.id, e); }
+    }
+    for (const c of (companies || [])) {
+      if (!c.pax8Id) continue;
+      let entry = byPax8.get(c.pax8Id);
+      if (!entry && c.atId) entry = byAtId.get(c.atId);
+      if (!entry) {
+        entry = { atId: c.atId || null, atName: c.atName || '', excluded: c.excluded || false, platforms: {} };
+        if (c.atId) { byAtId.set(c.atId, entry); existing.companies.push(entry); }
+        else         { existing.companies.push(entry); }
+      }
+      if (!entry.platforms.pax8) entry.platforms.pax8 = [];
+      const idx = entry.platforms.pax8.findIndex(p => p.id === c.pax8Id);
+      const newPax8 = { id: c.pax8Id, name: c.pax8Name || '', confidence: c.confidence || 'low', source: c.source || 'none' };
+      if (idx >= 0) entry.platforms.pax8[idx] = newPax8;
+      else          entry.platforms.pax8.push(newPax8);
+      entry.excluded = c.excluded || false;
+      if (c.atName && !entry.atName) entry.atName = c.atName;
+    }
+    await saveMappingsCentral({ ...existing, services: services || existing.services });
+    return { success: true };
+  });
+
+  // ── Search Autotask companies by name (for manual matching) ─────────────────
+  ipcMain.handle('cm-search-at-companies', async (_, name) => {
+    try {
+      const cleaned = (name || '').replace(/[^a-z0-9\s]/gi, ' ').trim();
+      const words   = cleaned.split(/\s+/);
+      const alphaPart = words.map(w => w.replace(/^\d+/, '')).find(w => w.length >= 3);
+      const term    = (alphaPart || words.find(w => w.length >= 3) || cleaned).substring(0, 15);
+      if (!term) return [];
+      const companies = await atQuery('/Companies', [
+        { field: 'companyName', op: 'contains', value: term },
+        { field: 'isActive',    op: 'eq',       value: true },
+      ]);
+      return (companies || []).slice(0, 10).map(c => ({ id: c.id, name: c.companyName || c.name || '' }));
+    } catch { return []; }
+  });
+
+  // ── CSV Export ───────────────────────────────────────────────────────────────
   function buildMappingCsvs(data, includeAll = false) {
     const esc = s => `"${String(s ?? '').replace(/"/g, '""')}"`;
-    const companies  = includeAll ? (data.companies || []) : (data.companies || []).filter(c => !c.atId);
-    const coHeader   = 'pax8_company_id,pax8_company_name,at_company_id,at_company_name,confidence,accepted,excluded\n';
-    const coRows     = companies
+    // Flatten v2 or use flat directly
+    const flatCos = isV2(data) ? v2ToFlat(data.companies) : (data.companies || []);
+    const companies = includeAll ? flatCos : flatCos.filter(c => !c.atId);
+    const coHeader  = 'pax8_company_id,pax8_company_name,at_company_id,at_company_name,confidence,accepted,excluded\n';
+    const coRows    = companies
       .map(c => [c.pax8Id, c.pax8Name, c.atId ?? '', c.atName ?? '', c.confidence, c.accepted ? 'yes' : 'no', c.excluded ? 'yes' : 'no']
       .map(esc).join(',')).join('\n');
-    const services   = includeAll ? (data.services || []) : (data.services || []).filter(s => !s.atServiceId);
-    const svcHeader  = 'pax8_product_id,pax8_product_name,term,vendor_name,vendor_sku,at_service_id,at_service_name,confidence,accepted\n';
-    const svcRows    = services
+    const services  = includeAll ? (data.services || []) : (data.services || []).filter(s => !s.atServiceId);
+    const svcHeader = 'pax8_product_id,pax8_product_name,term,vendor_name,vendor_sku,at_service_id,at_service_name,confidence,accepted\n';
+    const svcRows   = services
       .map(s => [s.pax8ProductId, s.pax8ProductName, s.termLabel ?? '', s.vendorName ?? '', s.vendorSku ?? '', s.atServiceId ?? '', s.atServiceName ?? '', s.confidence, s.accepted ? 'yes' : 'no']
       .map(esc).join(',')).join('\n');
     return { coHeader, coRows, svcHeader, svcRows, coCount: companies.length, svcCount: services.length };
   }
 
   ipcMain.handle('export-mapping-csv', async () => {
-    const data = loadMappings();
+    const data = await loadMappingsCentral();
     const { coHeader, coRows, svcHeader, svcRows, coCount, svcCount } = buildMappingCsvs(data, false);
     const coPath  = path.join(USER_DATA, 'anchor-company-mappings.csv');
     const svcPath = path.join(USER_DATA, 'anchor-service-mappings.csv');
@@ -211,7 +537,7 @@ module.exports = function registerCompanyMapping(ipcMain) {
   });
 
   ipcMain.handle('export-full-mapping-csv', async () => {
-    const data = loadMappings();
+    const data = await loadMappingsCentral();
     const { coHeader, coRows, svcHeader, svcRows, coCount, svcCount } = buildMappingCsvs(data, true);
     const coPath  = path.join(USER_DATA, 'anchor-company-mappings-full.csv');
     const svcPath = path.join(USER_DATA, 'anchor-service-mappings-full.csv');
@@ -228,6 +554,7 @@ module.exports = function registerCompanyMapping(ipcMain) {
     return { success: true, coPath, svcPath, coCount, svcCount, hasRef: !!refRows };
   });
 
+  // ── CSV Import ───────────────────────────────────────────────────────────────
   ipcMain.handle('import-mapping-csv', async (_, type) => {
     const { filePaths } = await dialog.showOpenDialog(getMainWindow(), {
       title: type === 'companies' ? 'Import Company Mappings CSV' : 'Import Service Mappings CSV',
@@ -238,7 +565,7 @@ module.exports = function registerCompanyMapping(ipcMain) {
 
     const lines    = fs.readFileSync(filePaths[0], 'utf8').split(/\r?\n/);
     const header   = lines[0].toLowerCase().replace(/\s/g, '');
-    const existing = loadMappings();
+    const existing = await loadMappingsCentral();
 
     if (type === 'companies') {
       const cols_h       = header.split(',');
@@ -250,7 +577,8 @@ module.exports = function registerCompanyMapping(ipcMain) {
       const idxExcluded  = cols_h.indexOf('excluded');
       if (idxPax8Id < 0 || idxAtId < 0) return { error: 'Missing required columns: pax8_company_id, at_company_id' };
 
-      const updated = [];
+      // Parse CSV into flat entries
+      const csvEntries = [];
       for (let i = 1; i < lines.length; i++) {
         if (!lines[i].trim()) continue;
         const cols    = parseCSVLine(lines[i]);
@@ -261,22 +589,66 @@ module.exports = function registerCompanyMapping(ipcMain) {
         const accepted= idxAccepted >= 0 ? cols[idxAccepted]?.trim().toLowerCase() !== 'no' : !!atId;
         const excluded= idxExcluded >= 0 ? cols[idxExcluded]?.trim().toLowerCase() === 'yes' : false;
         if (!pax8Id) continue;
-        const prev = (existing.companies || []).find(c => c.pax8Id === pax8Id) || {};
-        updated.push({ ...prev, pax8Id, pax8Name: pax8Name || prev.pax8Name || '', atId, atName,
-          accepted: !excluded && accepted && !!atId, excluded });
+        csvEntries.push({ pax8Id, pax8Name, atId, atName,
+          accepted: !excluded && accepted && !!atId, excluded, confidence: atId ? 'csv' : 'unmatched', source: 'csv' });
       }
-      saveMappingsFile({ ...existing, companies: updated });
-      return { success: true, count: updated.length };
+
+      if (!isV2(existing)) {
+        // Legacy flat format — just replace
+        const prevFlat = existing.companies || [];
+        const updated  = csvEntries.map(e => {
+          const prev = prevFlat.find(c => c.pax8Id === e.pax8Id) || {};
+          return { ...prev, ...e };
+        });
+        await saveMappingsCentral({ ...existing, companies: updated });
+        return { success: true, count: updated.length };
+      }
+
+      // v2 format — integrate CSV into existing hub structure
+      const companies = [...(existing.companies || [])];
+      const byAtId = new Map(companies.filter(e => e.atId).map(e => [e.atId, e]));
+      const byPax8 = new Map();
+      for (const e of companies) {
+        const pax8List = Array.isArray(e.platforms?.pax8) ? e.platforms.pax8 : [];
+        for (const p of pax8List) { if (p.id) byPax8.set(p.id, e); }
+      }
+
+      for (const ce of csvEntries) {
+        let entry = byPax8.get(ce.pax8Id);
+        if (!entry && ce.atId) {
+          // Move pax8 entry to target AT company
+          entry = byAtId.get(ce.atId);
+          if (!entry) {
+            entry = { atId: ce.atId, atName: ce.atName || '', excluded: ce.excluded, platforms: {} };
+            companies.push(entry);
+            byAtId.set(ce.atId, entry);
+          }
+        }
+        if (!entry) {
+          entry = { atId: null, atName: null, excluded: ce.excluded, platforms: {} };
+          companies.push(entry);
+        }
+        if (!entry.platforms.pax8) entry.platforms.pax8 = [];
+        const idx = entry.platforms.pax8.findIndex(p => p.id === ce.pax8Id);
+        const newP = { id: ce.pax8Id, name: ce.pax8Name || '', confidence: ce.atId ? 'csv' : 'unmatched', source: 'csv' };
+        if (idx >= 0) entry.platforms.pax8[idx] = newP;
+        else          entry.platforms.pax8.push(newP);
+        entry.excluded = ce.excluded;
+        if (ce.atId && ce.atName && !entry.atName) entry.atName = ce.atName;
+      }
+      await saveMappingsCentral({ ...existing, companies });
+      return { success: true, count: csvEntries.length };
+
     } else {
       const cols_h = header.split(',');
       const isPsaExport = cols_h.some(c => c.trim() === 'product id') && cols_h.some(c => c.trim() === 'psa product id');
 
       let idxPid, idxPname, idxSvcId, idxSvcName, idxAccepted;
       if (isPsaExport) {
-        idxPid     = cols_h.findIndex(c => c.trim() === 'product id');
-        idxPname   = cols_h.findIndex(c => c.trim() === 'product name');
-        idxSvcId   = cols_h.findIndex(c => c.trim() === 'psa product id');
-        idxSvcName = cols_h.findIndex(c => c.trim() === 'psa product name');
+        idxPid      = cols_h.findIndex(c => c.trim() === 'product id');
+        idxPname    = cols_h.findIndex(c => c.trim() === 'product name');
+        idxSvcId    = cols_h.findIndex(c => c.trim() === 'psa product id');
+        idxSvcName  = cols_h.findIndex(c => c.trim() === 'psa product name');
         idxAccepted = -1;
       } else {
         idxPid      = cols_h.indexOf('pax8_product_id');
@@ -302,23 +674,8 @@ module.exports = function registerCompanyMapping(ipcMain) {
           atServiceId: svcId, atServiceName: svcName, accepted: accepted && !!svcId,
           source: isPsaExport ? 'psa_export' : (prev.source || 'csv') });
       }
-      saveMappingsFile({ ...existing, services: updated });
+      await saveMappingsCentral({ ...existing, services: updated });
       return { success: true, count: updated.length, isPsaExport };
     }
-  });
-
-  ipcMain.handle('get-mappings', () => {
-    const saved = loadMappings();
-    return {
-      ...saved,
-      atCompanies: _lastMappingSyncResult?.atCompanies || [],
-      atServices:  _lastMappingSyncResult?.atServices  || [],
-    };
-  });
-
-  ipcMain.handle('save-mappings', (_, { companies, services }) => {
-    const existing = loadMappings();
-    saveMappingsFile({ ...existing, companies, services });
-    return { success: true };
   });
 };

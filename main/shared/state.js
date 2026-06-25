@@ -23,7 +23,30 @@ function savePushLogEntry(entry) {
 
 function loadMappings() {
   if (!fs.existsSync(MAPPINGS_FILE)) return { companies: [], services: [], lastSync: null };
-  try { return JSON.parse(fs.readFileSync(MAPPINGS_FILE, 'utf8')); }
+  try {
+    const data = JSON.parse(fs.readFileSync(MAPPINGS_FILE, 'utf8'));
+    if (data._version !== 2) return data;
+    // v2 AT-centric format → legacy flat { pax8Id, atId, ... } shape for existing consumers
+    const companies = [];
+    for (const entry of (data.companies || [])) {
+      const pax8List = Array.isArray(entry.platforms?.pax8) ? entry.platforms.pax8
+                     : entry.platforms?.pax8 ? [entry.platforms.pax8] : [];
+      for (const p of pax8List) {
+        if (!p.id) continue;
+        companies.push({
+          pax8Id:     p.id,
+          pax8Name:   p.name || '',
+          atId:       entry.atId || null,
+          atName:     entry.atName || '',
+          confidence: p.confidence || 'low',
+          source:     p.source || 'none',
+          accepted:   !!entry.atId && !entry.excluded && p.confidence !== 'unmatched',
+          excluded:   entry.excluded || false,
+        });
+      }
+    }
+    return { companies, services: data.services || [], lastSync: data._updated || null };
+  }
   catch { return { companies: [], services: [], lastSync: null }; }
 }
 
