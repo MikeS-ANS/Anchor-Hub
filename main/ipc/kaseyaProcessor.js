@@ -4,7 +4,7 @@ const { dialog, shell } = require('electron');
 const { USER_DATA, getMainWindow } = require('../shared/state');
 const { loadPromptTemplates, DEFAULT_KASEYA_PROMPT_HEADER, firstOfCurrentMonth, lastOfCurrentMonth } = require('../shared/promptTemplates');
 const { loadHubDirectory, saveHubDirectory, buildPlatformLookup, upsertPlatformEntry, upsertKaseyaEntry, setPlatformExcluded,
-        getGraphToken, getSpDriveBase, spDownload } = require('../shared/hubDirectory');
+        getServiceMappings, getSvcAtServiceIds, getGraphToken, getSpDriveBase, spDownload } = require('../shared/hubDirectory');
 const fetch = require('node-fetch');
 const { atQuery, atFetch } = require('../shared/at');
 
@@ -1108,18 +1108,30 @@ async function processKaseyaBuffer(buf, fileName) {
     }
   }
 
-  // Push Datto Workplace + DFP usage to AT contracts (hard-coded service IDs)
+  // Push Datto Workplace + DFP usage to AT contracts
   ipcMain.handle('kaseya-at-push-workplace', async (_, { rows }) => {
     const mainWindow = getMainWindow();
     const emit = (company, product, status, detail = '') => {
       if (mainWindow) mainWindow.webContents.send('kaseya-push-progress', { company, product, status, detail });
     };
 
+    // Build KASEYA_AT_MAP from hub service mappings (falls back to defaults via getServiceMappings)
+    const hub = await loadHubDirectory();
+    const kaseyaLiveMap = {};
+    for (const m of getServiceMappings(hub, 'kaseya')) {
+      if (!m.vendorName) continue;
+      const ids = getSvcAtServiceIds(m);
+      if (!ids.length) continue;
+      if (!kaseyaLiveMap[m.vendorName]) kaseyaLiveMap[m.vendorName] = [];
+      for (const svcId of ids)
+        kaseyaLiveMap[m.vendorName].push({ serviceId: svcId, contracts: m.contracts || [] });
+    }
+
     const results = [];
     for (const row of rows) {
       if (!row.atId) continue;
       for (const [product, qty] of Object.entries(row.products || {})) {
-        const mapping = KASEYA_AT_MAP[product];
+        const mapping = kaseyaLiveMap[product];
         if (!mapping) {
           emit(row.name, product, 'no_service', `No AT mapping for "${product}"`);
           results.push({ company: row.name, product, status: 'no_service', detail: `No AT mapping for "${product}"` });
@@ -1145,14 +1157,18 @@ async function processKaseyaBuffer(buf, fileName) {
     return { results, summary };
   });
 
-  // Push Datto SaaS Protection license counts to AT contracts (hard-coded service IDs 98 + 88)
+  // Push Datto SaaS Protection license counts to AT contracts
   ipcMain.handle('kaseya-at-push-saas', async (_, { rows }) => {
     const mainWindow = getMainWindow();
     const emit = (company, product, status, detail = '') => {
       if (mainWindow) mainWindow.webContents.send('kaseya-push-progress', { company, product, status, detail });
     };
 
-    const saasEntries = KASEYA_AT_MAP['SaaS Protection Infinite Cloud Retention Monthly'];
+    const hub = await loadHubDirectory();
+    const kaseyaSvcMap = getServiceMappings(hub, 'kaseya');
+    const saasVendorName = 'SaaS Protection Infinite Cloud Retention Monthly';
+    const saasEntries = kaseyaSvcMap.filter(m => m.vendorName === saasVendorName && getSvcAtServiceIds(m).length)
+      .flatMap(m => getSvcAtServiceIds(m).map(svcId => ({ serviceId: svcId, contracts: m.contracts || [] })));
     const results = [];
     for (const row of rows) {
       if (!row.atId) continue;

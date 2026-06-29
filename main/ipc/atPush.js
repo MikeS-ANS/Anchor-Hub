@@ -1,20 +1,45 @@
 const { atFetch, atQuery } = require('../shared/at');
 const { savePushLogEntry } = require('../shared/state');
+const { loadHubDirectory, getServiceMappings, getSvcAtServiceIds } = require('../shared/hubDirectory');
 
-const AT_SVC_IDS = {
+// Module-level fallback constants (used when hub service mappings are unavailable).
+const DEFAULT_AT_SVC_IDS = {
   azure:      110,
   nerdio:     159,
   exclaimer:  [262, 288],
   ironscales: 275,
   printix:    266,
 };
-const AT_CONTRACT_NAME = {
+const DEFAULT_AT_CONTRACT_NAME = {
   azure:      ['Azure'],
   nerdio:     ['Azure'],
   exclaimer:  ['Managed Cloud'],
   ironscales: ['Managed Cloud', 'Managed Security'],
   printix:    ['Managed Cloud'],
 };
+
+// Build AT_SVC_IDS and AT_CONTRACT_NAME from hub service mappings (pax8 group).
+function buildAtPax8Maps(hub) {
+  const svcIds = {};
+  const contractNames = {};
+  for (const m of getServiceMappings(hub, 'pax8')) {
+    if (!m.vendorKey) continue;
+    const ids = getSvcAtServiceIds(m);
+    if (!ids.length) continue;
+    for (const id of ids) {
+      if (svcIds[m.vendorKey] == null) {
+        svcIds[m.vendorKey] = id;
+        contractNames[m.vendorKey] = [...(m.contracts || [])];
+      } else {
+        svcIds[m.vendorKey] = [].concat(svcIds[m.vendorKey], id);
+        for (const c of (m.contracts || [])) {
+          if (!contractNames[m.vendorKey].includes(c)) contractNames[m.vendorKey].push(c);
+        }
+      }
+    }
+  }
+  return { svcIds, contractNames };
+}
 
 async function atFindContract(companyId, namePattern, effectiveDate) {
   const all = await atQuery('/Contracts', [
@@ -45,9 +70,9 @@ async function atGetCurrentUnits(contractServiceId) {
   return all[0].units || 0;
 }
 
-async function atLocateService(companyId, serviceType, effectiveDate) {
-  const serviceIds = [].concat(AT_SVC_IDS[serviceType]);
-  const patterns   = AT_CONTRACT_NAME[serviceType];
+async function atLocateService(companyId, serviceType, effectiveDate, svcIds, contractNames) {
+  const serviceIds = [].concat(svcIds[serviceType] ?? []);
+  const patterns   = contractNames[serviceType] ?? [];
   for (const pattern of patterns) {
     const contract = await atFindContract(companyId, pattern, effectiveDate);
     if (!contract) continue;
@@ -61,11 +86,13 @@ async function atLocateService(companyId, serviceType, effectiveDate) {
 
 module.exports = function registerAtPush(ipcMain) {
   ipcMain.handle('at-push-azure', async (_, { rows, effectiveDate }) => {
+    const hub = await loadHubDirectory();
+    const { svcIds, contractNames } = buildAtPax8Maps(hub);
     const results = [];
     for (const row of rows) {
       if (!row.atCompanyId) { results.push({ company: row.company, status: 'no_mapping' }); continue; }
       try {
-        const found = await atLocateService(row.atCompanyId, 'azure', effectiveDate);
+        const found = await atLocateService(row.atCompanyId, 'azure', effectiveDate, svcIds, contractNames);
         if (!found) { results.push({ company: row.company, status: 'no_contract' }); continue; }
         const { contract, cs } = found;
         await atFetch('/ContractServiceAdjustments', {
@@ -97,12 +124,12 @@ module.exports = function registerAtPush(ipcMain) {
     return { results };
   });
 
-  async function atPushQtyService(rows, serviceType, effectiveDate) {
+  async function atPushQtyService(rows, serviceType, effectiveDate, svcIds, contractNames) {
     const results = [];
     for (const row of rows) {
       if (!row.atCompanyId) { results.push({ company: row.company, status: 'no_mapping' }); continue; }
       try {
-        const found = await atLocateService(row.atCompanyId, serviceType, effectiveDate);
+        const found = await atLocateService(row.atCompanyId, serviceType, effectiveDate, svcIds, contractNames);
         if (!found) { results.push({ company: row.company, status: 'no_contract' }); continue; }
         const { contract, cs } = found;
         const currentUnits = await atGetCurrentUnits(cs.id);
@@ -135,8 +162,14 @@ module.exports = function registerAtPush(ipcMain) {
     return { results };
   }
 
-  ipcMain.handle('at-push-nerdio',     async (_, d) => atPushQtyService(d.rows, 'nerdio',     d.effectiveDate));
-  ipcMain.handle('at-push-exclaimer',  async (_, d) => atPushQtyService(d.rows, 'exclaimer',  d.effectiveDate));
-  ipcMain.handle('at-push-ironscales', async (_, d) => atPushQtyService(d.rows, 'ironscales', d.effectiveDate));
-  ipcMain.handle('at-push-printix',    async (_, d) => atPushQtyService(d.rows, 'printix',    d.effectiveDate));
+  async function atPushQtyWithHub(rows, serviceType, effectiveDate) {
+    const hub = await loadHubDirectory();
+    const { svcIds, contractNames } = buildAtPax8Maps(hub);
+    return atPushQtyService(rows, serviceType, effectiveDate, svcIds, contractNames);
+  }
+
+  ipcMain.handle('at-push-nerdio',     async (_, d) => atPushQtyWithHub(d.rows, 'nerdio',     d.effectiveDate));
+  ipcMain.handle('at-push-exclaimer',  async (_, d) => atPushQtyWithHub(d.rows, 'exclaimer',  d.effectiveDate));
+  ipcMain.handle('at-push-ironscales', async (_, d) => atPushQtyWithHub(d.rows, 'ironscales', d.effectiveDate));
+  ipcMain.handle('at-push-printix',    async (_, d) => atPushQtyWithHub(d.rows, 'printix',    d.effectiveDate));
 };

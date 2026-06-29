@@ -389,7 +389,7 @@ const TOOL_DEFS = [
     icon: `<rect x="2" y="2" width="9" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M5 5.5h5M5 8.5h3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="12.5" cy="12.5" r="2.8" fill="var(--bg,#0d0f14)" stroke="currentColor" stroke-width="1.3"/><path d="M12.5 11.3v1.2l.9.9" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>` },
   { key: 'contract-renewals',   label: 'Autotask Contract Renewals',
     icon: `<path d="M13 8A5 5 0 1 1 8 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M8 1l3 2-3 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 8h2v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>` },
-  { key: 'blackpoint-processor', label: 'BlackPoint Usage',
+  { key: 'blackpoint-processor', label: 'BlackPoint Invoice Processor',
     icon: `<path d="M8 1.5L2 4.5v4c0 3.3 2.4 5.5 6 6 3.6-.5 6-2.7 6-6v-4L8 1.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 8l1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>` },
   { key: 'project-profitability', label: 'Project Profitability',
     icon: `<path d="M2 12l3-4 3 2 3-5 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 14H2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>` },
@@ -514,8 +514,8 @@ const HOME_CARDS = [
   },
   {
     key:   'blackpoint-processor',
-    label: 'BlackPoint Usage',
-    desc:  'Track BlackPoint protected endpoint counts per client, compare month-over-month, and generate a Claude prompt to update Security+ quantities in Autotask.',
+    label: 'BlackPoint Invoice Processor',
+    desc:  'Process BlackPoint Account Usage Report CSVs, compare against Autotask Security+ billing, and push unit changes directly.',
     icon:  `<svg width="24" height="24" viewBox="0 0 16 16" fill="none"><path d="M8 1.5L2 4.5v4c0 3.3 2.4 5.5 6 6 3.6-.5 6-2.7 6-6v-4L8 1.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 8l1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   },
   {
@@ -1448,9 +1448,14 @@ function renderMarginSummary(summary) {
 }
 
 // ─── Company Directory ────────────────────────────────────────────────────────
-let _cdCurrentData = null;
-let _cdActiveTab   = 'companies';
-let _cdSearchTimer = null;
+let _cdCurrentData  = null;
+let _cdHubData      = null;
+let _cdActiveTab    = 'companies';
+let _cdSearchTimer  = null;
+let _cdSvcEditId    = null;
+let _cdSvcEditDraft = null; // { vendorName, atServices:[{id,name}], contracts:string } during edit
+let _cdShowExcluded = false;
+let _cdEditCell     = null; // { atId, platform, platformName } for inline reassign/add
 
 function renderCompanyMapping() {
   const isAdmin = _currentUser?.isAdmin || _currentUser?.roles?.includes('hub.admin');
@@ -1466,39 +1471,95 @@ function renderCompanyMapping() {
 
     <div class="cd-status-bar">
       <span class="cd-sync-info" id="cd-sync-info">Loading…</span>
+      <span class="save-status" id="cd-action-status"></span>
+    </div>
+
+    <div class="stab-nav" style="max-width:1000px;margin-bottom:0">
+      <button class="stab ${_cdActiveTab==='companies'?'active':''}" data-cdtab="companies">Companies</button>
+      <button class="stab ${_cdActiveTab==='svcmap'?'active':''}" data-cdtab="svcmap">Service Mappings</button>
+      <button class="stab ${_cdActiveTab==='services'?'active':''}" data-cdtab="services">
+        Pax8 Sync <span class="cd-tab-badge" id="cd-svc-badge"></span>
+      </button>
+    </div>
+
+    <!-- ── Tab 1: Companies (AT-centric hub view) ──────────────────── -->
+    <div class="cd-panel ${_cdActiveTab==='companies'?'':'hidden'}" id="cd-panel-companies">
+      <div class="settings-section" style="max-width:1000px;padding:0;margin-top:16px">
+        <div class="cd-table-header">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span class="section-title" style="font-size:11px">All Clients</span>
+            ${isAdmin ? `<button class="btn btn-ghost btn-sm" id="btn-update-classifications" style="font-size:11px;padding:2px 8px">↻ Update Classifications</button>` : ''}
+          </div>
+          <div style="display:flex;align-items:center;gap:12px">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);cursor:pointer">
+              <input type="checkbox" id="cd-show-excluded" ${_cdShowExcluded ? 'checked' : ''}> Show excluded
+            </label>
+            <input type="text" class="cd-search" id="cd-hub-search" placeholder="Search by AT name or platform name…">
+          </div>
+        </div>
+        <div class="cd-table-scroll">
+          <table class="cd-table">
+            <thead><tr>
+              <th style="min-width:180px">Autotask Company</th>
+              <th>Kaseya</th>
+              <th>Blackpoint</th>
+              <th>Pax8</th>
+              <th style="width:90px;text-align:center">Status</th>
+            </tr></thead>
+            <tbody id="cd-hub-tbody"><tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-muted);font-size:12px">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Tab 2: Service Mappings ─────────────────────────────────── -->
+    <div class="cd-panel ${_cdActiveTab==='svcmap'?'':'hidden'}" id="cd-panel-svcmap">
+      <div style="max-width:1000px;margin-top:16px;display:flex;flex-direction:column;gap:16px">
+        <div class="settings-section" style="padding:0">
+          <div class="cd-svcmap-hdr">
+            <span class="cd-svcmap-tool-label" style="color:#3b82f6">Pax8</span>
+            <span class="cd-svcmap-tool-desc">Vendor key → AT service line + contract type</span>
+          </div>
+          <div id="cd-svcmap-pax8"></div>
+        </div>
+        <div class="settings-section" style="padding:0">
+          <div class="cd-svcmap-hdr">
+            <span class="cd-svcmap-tool-label" style="color:#10b981">Kaseya</span>
+            <span class="cd-svcmap-tool-desc">Product name → AT service line + contract type</span>
+          </div>
+          <div id="cd-svcmap-kaseya"></div>
+        </div>
+        <div class="settings-section" style="padding:0">
+          <div class="cd-svcmap-hdr">
+            <span class="cd-svcmap-tool-label" style="color:#ef4444">Blackpoint</span>
+            <span class="cd-svcmap-tool-desc">Product → AT service line + contract type</span>
+          </div>
+          <div id="cd-svcmap-blackpoint"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Tab 3: Pax8 Sync (existing review + confirmed tables) ───── -->
+    <div class="cd-panel ${_cdActiveTab==='services'?'':'hidden'}" id="cd-panel-services">
       ${isAdmin ? `
-      <div class="cd-admin-bar">
+      <div class="cd-admin-bar" style="margin-top:16px">
         <button class="btn btn-primary btn-sm" id="btn-run-mapping">
           <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 7a5 5 0 1 0 1.2-3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2 3v4h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Sync Now
+          Sync Pax8
         </button>
         <button class="btn btn-ghost btn-sm" id="btn-export-mapping-csv">↓ Unmapped CSV</button>
         <button class="btn btn-ghost btn-sm" id="btn-export-full-mapping-csv">↓ Full Export</button>
         <button class="btn btn-ghost btn-sm" id="btn-import-co-csv">↑ Import Companies</button>
         <button class="btn btn-ghost btn-sm" id="btn-import-svc-csv">↑ Import Services</button>
-        <span class="save-status" id="cd-action-status"></span>
+      </div>
+      <div class="log-container" style="max-width:1000px;margin-top:12px;display:none" id="cd-log-wrap">
+        <div class="log-output" id="mapping-log-output"></div>
       </div>` : ''}
-    </div>
-
-    <div class="log-container" style="max-width:860px;margin-bottom:16px;display:none" id="cd-log-wrap">
-      <div class="log-output" id="mapping-log-output"></div>
-    </div>
-
-    <div class="stab-nav" style="max-width:860px;margin-bottom:0">
-      <button class="stab ${_cdActiveTab==='companies'?'active':''}" data-cdtab="companies">
-        Companies <span class="cd-tab-badge" id="cd-co-badge"></span>
-      </button>
-      <button class="stab ${_cdActiveTab==='services'?'active':''}" data-cdtab="services">
-        Services <span class="cd-tab-badge" id="cd-svc-badge"></span>
-      </button>
-    </div>
-
-    <div class="cd-panel ${_cdActiveTab==='companies'?'':'hidden'}" id="cd-panel-companies">
-      <div class="report-stats" style="max-width:860px;margin-top:16px" id="cd-co-stats"></div>
+      <div class="report-stats" style="max-width:1000px;margin-top:16px" id="cd-co-stats"></div>
       <div id="cd-co-review"></div>
-      <div class="settings-section" style="max-width:860px;padding:0" id="cd-co-table-wrap">
+      <div class="settings-section" style="max-width:1000px;padding:0" id="cd-co-table-wrap">
         <div class="cd-table-header">
-          <span class="section-title" style="font-size:11px">Confirmed Mappings</span>
+          <span class="section-title" style="font-size:11px">Confirmed Company Mappings</span>
           <input type="text" class="cd-search" id="cd-co-search" placeholder="Search companies…">
         </div>
         <div class="cd-table-scroll">
@@ -1513,12 +1574,9 @@ function renderCompanyMapping() {
           </table>
         </div>
       </div>
-    </div>
-
-    <div class="cd-panel ${_cdActiveTab==='services'?'':'hidden'}" id="cd-panel-services">
-      <div class="report-stats" style="max-width:860px;margin-top:16px" id="cd-svc-stats"></div>
+      <div class="report-stats" style="max-width:1000px;margin-top:20px" id="cd-svc-stats"></div>
       <div id="cd-svc-review"></div>
-      <div class="settings-section" style="max-width:860px;padding:0" id="cd-svc-table-wrap">
+      <div class="settings-section" style="max-width:1000px;padding:0" id="cd-svc-table-wrap">
         <div class="cd-table-header">
           <span class="section-title" style="font-size:11px">Confirmed Service Mappings</span>
           <input type="text" class="cd-search" id="cd-svc-search" placeholder="Search services…">
@@ -1542,21 +1600,59 @@ function renderCompanyMapping() {
   content.querySelectorAll('[data-cdtab]').forEach(btn => {
     btn.addEventListener('click', () => {
       _cdActiveTab = btn.dataset.cdtab;
+      _cdSvcEditId = null;
       content.querySelectorAll('[data-cdtab]').forEach(b => b.classList.toggle('active', b === btn));
       content.querySelectorAll('.cd-panel').forEach(p => p.classList.toggle('hidden', p.id !== `cd-panel-${_cdActiveTab}`));
     });
   });
 
-  // Admin buttons
+  // Admin buttons (now inside Pax8 Sync tab — wired after tab switch renders them)
+  // We use event delegation on content for clicks, but these buttons exist on initial render:
   if (isAdmin) {
-    document.getElementById('btn-run-mapping').addEventListener('click', cdRunSync);
-    document.getElementById('btn-export-mapping-csv').addEventListener('click', exportMappingCsv);
-    document.getElementById('btn-export-full-mapping-csv').addEventListener('click', exportFullMappingCsv);
-    document.getElementById('btn-import-co-csv').addEventListener('click', () => importMappingCsv('companies'));
-    document.getElementById('btn-import-svc-csv').addEventListener('click', () => importMappingCsv('services'));
+    const wireAdminBtns = () => {
+      document.getElementById('btn-run-mapping')?.addEventListener('click', cdRunSync);
+      document.getElementById('btn-export-mapping-csv')?.addEventListener('click', exportMappingCsv);
+      document.getElementById('btn-export-full-mapping-csv')?.addEventListener('click', exportFullMappingCsv);
+      document.getElementById('btn-import-co-csv')?.addEventListener('click', () => importMappingCsv('companies'));
+      document.getElementById('btn-import-svc-csv')?.addEventListener('click', () => importMappingCsv('services'));
+    };
+    wireAdminBtns();
+    // Re-wire after tab switches (tab switching via classList toggle keeps DOM in place, so only needed once)
   }
 
-  // Live search
+  // Update AT Classifications button
+  document.getElementById('btn-update-classifications')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-update-classifications');
+    btn.disabled = true; btn.textContent = '↻ Updating…';
+    try {
+      const r = await window.api.cmUpdateAtClassifications();
+      if (r.ok) {
+        const hub = await window.api.cmGetHubData();
+        _cdHubData = hub; cdRenderCompaniesHub();
+        btn.textContent = `↻ Updated ${r.updated} entries`;
+        setTimeout(() => { if (btn) { btn.disabled = false; btn.textContent = '↻ Update Classifications'; } }, 3000);
+      } else {
+        btn.textContent = `Error: ${r.error?.slice(0,40)}`;
+        setTimeout(() => { if (btn) { btn.disabled = false; btn.textContent = '↻ Update Classifications'; } }, 4000);
+      }
+    } catch(e) { btn.disabled = false; btn.textContent = '↻ Update Classifications'; }
+  });
+
+  // Show/hide excluded toggle
+  const showExclCb = document.getElementById('cd-show-excluded');
+  if (showExclCb) showExclCb.addEventListener('change', () => {
+    _cdShowExcluded = showExclCb.checked;
+    cdRenderCompaniesHub();
+  });
+
+  // Live search — companies hub tab
+  const hubSearch = document.getElementById('cd-hub-search');
+  if (hubSearch) hubSearch.addEventListener('input', () => {
+    clearTimeout(_cdSearchTimer);
+    _cdSearchTimer = setTimeout(cdRenderCompaniesHub, 180);
+  });
+
+  // Live search — Pax8 sync tab tables
   ['co', 'svc'].forEach(tab => {
     const input = document.getElementById(`cd-${tab}-search`);
     if (input) input.addEventListener('input', () => {
@@ -1570,61 +1666,296 @@ function renderCompanyMapping() {
 
 async function cdLoadData() {
   try {
-    const data = await window.api.getMappings();
+    const [data, hubData] = await Promise.all([
+      window.api.getMappings(),
+      window.api.cmGetHubData(),
+    ]);
     _cdCurrentData = data;
-    cdRenderAll(data);
+    _cdHubData     = hubData;
+    cdRenderAll();
   } catch (e) {
     const el = document.getElementById('cd-sync-info');
     if (el) el.textContent = `Error loading mappings: ${e.message}`;
   }
 }
 
-function cdRenderAll(data) {
-  if (!data) return;
-  const isAdmin = _currentUser?.isAdmin || _currentUser?.roles?.includes('hub.admin');
-
+function cdRenderAll() {
   // Status bar
   const infoEl = document.getElementById('cd-sync-info');
   if (infoEl) {
-    const synced = data.lastSync ? `Last synced: ${new Date(data.lastSync).toLocaleString()}` : 'Not yet synced';
-    const src    = data._storageSource === 'sharepoint'
-      ? '<span class="cd-sp-badge">SharePoint ✓</span>'
-      : '<span class="cd-sp-badge cd-sp-local">Local cache</span>';
+    const src = _cdHubData
+      ? (_cdHubData._storageSource === 'sharepoint'
+          ? '<span class="cd-sp-badge">SharePoint ✓</span>'
+          : '<span class="cd-sp-badge cd-sp-local">Local cache</span>')
+      : '<span class="cd-sp-badge cd-sp-local">Unavailable</span>';
+    const synced = _cdCurrentData?.lastSync
+      ? `Pax8 sync: ${new Date(_cdCurrentData.lastSync).toLocaleString()}`
+      : 'Not yet synced';
     infoEl.innerHTML = `${synced} ${src}`;
   }
 
-  const companies = data.companies || [];
-  const services  = data.services  || [];
+  // Pax8 Sync tab badge (combined pending review)
+  if (_cdCurrentData) {
+    const companies = _cdCurrentData.companies || [];
+    const services  = _cdCurrentData.services  || [];
+    const pending   = companies.filter(c => !c.accepted && !c.excluded).length
+                    + services.filter(s => !s.accepted && !s.excluded).length;
+    const svcBadge = document.getElementById('cd-svc-badge');
+    if (svcBadge) svcBadge.textContent = pending > 0 ? pending : '';
+  }
 
-  // Tab badges
-  const coReview  = companies.filter(c => !c.accepted && !c.excluded).length;
-  const svcReview = services.filter(s => !s.accepted && !s.excluded).length;
-  const coBadge  = document.getElementById('cd-co-badge');
-  const svcBadge = document.getElementById('cd-svc-badge');
-  if (coBadge)  coBadge.textContent  = coReview  > 0 ? coReview  : '';
-  if (svcBadge) svcBadge.textContent = svcReview > 0 ? svcReview : '';
+  cdRenderCompaniesHub();
+  cdRenderSvcMap();
+  cdRenderPax8Sync();
+}
 
-  // Company stats
+// ── AT-centric Companies tab ──────────────────────────────────────────────────
+
+function cdChipsHtml(platform, items, atId, color) {
+  // items: array of { name, excluded?, ... }
+  const visible = items.filter(k => k?.name && !k.excluded);
+  if (!visible.length) {
+    const canAdd = platform !== 'pax8'; // Pax8 adds come from sync, not manually
+    const editKey = `${atId}::${platform}::__add__`;
+    const isAdding = _cdEditCell?.key === editKey;
+    if (isAdding) {
+      return `<span class="cd-platform-edit-wrap" data-editkey="${editKey}">
+        <input class="cd-platform-add-input" type="text" placeholder="Enter ${platform} name…" value="${escHtml(_cdEditCell.value || '')}" style="width:160px;font-size:12px;padding:2px 6px;background:var(--bg-input,var(--bg2));border:1px solid var(--accent);border-radius:4px;color:var(--text)">
+        <button class="cd-platform-add-save" data-atid="${atId}" data-platform="${platform}" style="margin-left:4px;font-size:11px">Save</button>
+        <button class="cd-platform-add-cancel" style="margin-left:2px;font-size:11px">✕</button>
+      </span>`;
+    }
+    return `<span style="color:var(--text-muted);font-size:11px">—${canAdd ? `<button class="cd-platform-add-btn" data-atid="${atId}" data-platform="${platform}" title="Add ${platform} mapping" style="margin-left:4px;background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:11px;padding:0 2px;opacity:0.6">+</button>` : ''}</span>`;
+  }
+  return visible.map(k => {
+    const editKey = `${atId}::${platform}::${k.name}`;
+    const isReassigning = _cdEditCell?.key === editKey;
+    if (isReassigning) {
+      return `<span class="cd-platform-edit-wrap" data-editkey="${editKey}">
+        <input class="cd-platform-reassign-input" type="text" placeholder="Search AT company…" value="${escHtml(_cdEditCell.value || '')}" data-atid="${atId}" data-platform="${platform}" data-pname="${escHtml(k.name)}" style="width:180px;font-size:12px;padding:2px 6px;background:var(--bg-input,var(--bg2));border:1px solid var(--accent);border-radius:4px;color:var(--text)">
+        <div class="cd-platform-reassign-results" id="reassign-results-${editKey.replace(/[^a-z0-9]/gi,'_')}"></div>
+        <button class="cd-platform-add-cancel" style="margin-left:2px;font-size:11px">✕</button>
+      </span>`;
+    }
+    return `<span class="cd-hub-chip cd-hub-chip-${platform === 'kaseya' ? 'ks' : platform === 'blackpoint' ? 'bp' : 'p8'} cd-chip-clickable" title="${escHtml(k.name)} — click to reassign" data-atid="${atId}" data-platform="${platform}" data-pname="${escHtml(k.name)}">${escHtml(k.name)}<button class="cd-chip-remove" data-atid="${atId}" data-platform="${platform}" data-pname="${escHtml(k.name)}" title="Remove mapping">×</button></span>`;
+  }).join('');
+}
+
+function cdRenderCompaniesHub() {
+  const tbody = document.getElementById('cd-hub-tbody');
+  if (!tbody) return;
+
+  if (!_cdHubData) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--text-muted);font-size:12px">Hub directory unavailable — check SharePoint connection.</td></tr>`;
+    return;
+  }
+
+  const query = (document.getElementById('cd-hub-search')?.value || '').toLowerCase();
+  // Filter out entries with no AT identity (unmatched Pax8-only, atId === null)
+  const all = (_cdHubData.companies || []).filter(c => c.atId != null);
+  // Hide excluded unless toggled
+  const withExcl = _cdShowExcluded ? all : all.filter(c => !c.excluded);
+  const companies = query ? withExcl.filter(c => {
+    if ((c.atName || '').toLowerCase().includes(query)) return true;
+    const ks = c.platforms?.kaseya;
+    const ksNames = Array.isArray(ks) ? ks.map(k => k.name || '') : (ks?.name ? [ks.name] : []);
+    if (ksNames.some(n => n.toLowerCase().includes(query))) return true;
+    if ((c.platforms?.blackpoint?.name || '').toLowerCase().includes(query)) return true;
+    const p8 = c.platforms?.pax8;
+    const p8Names = Array.isArray(p8) ? p8.map(p => p.name || '') : (p8?.name ? [p8.name] : []);
+    if (p8Names.some(n => n.toLowerCase().includes(query))) return true;
+    return false;
+  }) : withExcl;
+
+  if (!companies.length) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--text-muted);font-size:12px">${query ? `No results for "${escHtml(query)}"` : 'No companies in hub directory.'}</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = companies.map(c => {
+    const ks = c.platforms?.kaseya;
+    const ksItems = Array.isArray(ks) ? ks : (ks ? [ks] : []);
+    const ksHtml = cdChipsHtml('kaseya', ksItems, c.atId, '#10b981');
+
+    const bp = c.platforms?.blackpoint;
+    const bpItems = bp ? [bp] : [];
+    const bpHtml = cdChipsHtml('blackpoint', bpItems, c.atId, '#ef4444');
+
+    const p8 = c.platforms?.pax8;
+    const p8Items = Array.isArray(p8) ? p8 : (p8 ? [p8] : []);
+    const p8Html = cdChipsHtml('pax8', p8Items, c.atId, '#3b82f6');
+
+    const classLabel = c.atClassification
+      ? `<span class="cd-classification-chip">${escHtml(c.atClassification)}</span>`
+      : '';
+
+    return `<tr style="${c.excluded ? 'opacity:0.45' : ''}">
+      <td><span style="font-weight:500">${escHtml(c.atName || String(c.atId))}</span>${classLabel}</td>
+      <td>${ksHtml}</td>
+      <td>${bpHtml}</td>
+      <td>${p8Html}</td>
+      <td style="text-align:center">
+        <button class="cd-excl-toggle ${c.excluded ? 'cd-excl-on' : ''}" data-atid="${c.atId}" data-excl="${c.excluded ? '1' : '0'}" title="${c.excluded ? 'Excluded — click to re-include' : 'Active — click to exclude'}">
+          ${c.excluded ? 'Excluded' : 'Active'}
+        </button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  // Wire up reassign search inputs that are currently in edit mode
+  tbody.querySelectorAll('.cd-platform-reassign-input').forEach(input => cdPlatformStartReassign(input));
+}
+
+// ── Service Mappings tab ──────────────────────────────────────────────────────
+
+function cdRenderSvcMap() {
+  if (!_cdHubData?.serviceMappings) return;
+  const { serviceMappings } = _cdHubData;
+
+  ['pax8', 'kaseya', 'blackpoint'].forEach(tool => {
+    const el = document.getElementById(`cd-svcmap-${tool}`);
+    if (!el) return;
+    cdRenderSvcMapGroup(el, tool, serviceMappings[tool] || []);
+  });
+}
+
+function cdRenderSvcMapGroup(el, tool, entries) {
+  const isPax8 = tool === 'pax8';
+  el.innerHTML = `
+    <table class="cd-table" style="margin:0">
+      <thead><tr>
+        <th>${isPax8 ? 'Vendor Key / Label' : 'Vendor Product'}</th>
+        <th>AT Service</th>
+        <th>Contracts</th>
+        <th style="width:80px"></th>
+      </tr></thead>
+      <tbody>
+        ${entries.map(m => cdSvcMapRowHtml(tool, m)).join('')}
+        ${!entries.length ? `<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:20px;font-size:12px">No mappings configured.</td></tr>` : ''}
+      </tbody>
+    </table>`;
+
+  // Wire up search input if a row is in edit mode
+  const editInput = el.querySelector('.cd-svc-search-input');
+  if (editInput) cdSvcStartSearch(editInput);
+}
+
+function cdSvcAtServices(m) {
+  if (Array.isArray(m.atServices) && m.atServices.length) return m.atServices;
+  if (m.atServiceId) return [{ id: m.atServiceId, name: m.atServiceName || '' }];
+  return [];
+}
+
+function cdSvcMapRowHtml(tool, m) {
+  const isEditing = _cdSvcEditId === `${tool}::${m.id}`;
+  const isPax8 = tool === 'pax8';
+  const services = isEditing ? (_cdSvcEditDraft?.atServices ?? cdSvcAtServices(m)) : cdSvcAtServices(m);
+
+  if (isEditing) {
+    const draft = _cdSvcEditDraft;
+    const vendorVal = escHtml(draft?.vendorName ?? (isPax8 ? (m.vendorLabel || m.vendorKey || '') : (m.vendorName || '')));
+    const contractsVal = escHtml(draft?.contracts ?? (m.contracts || []).join(', '));
+    const svcRows = services.map((s, idx) =>
+      `<div class="cd-svc-service-row">
+        <span class="cd-svc-service-chip">${escHtml(s.name || `ID: ${s.id}`)}<span style="color:var(--text-muted);font-size:10px;margin-left:4px">${s.name ? `(${s.id})` : ''}</span></span>
+        <button class="cd-svc-remove-svc btn btn-ghost btn-sm" data-tool="${tool}" data-mid="${escHtml(m.id)}" data-svcidx="${idx}" style="font-size:10px;padding:1px 5px">×</button>
+      </div>`
+    ).join('');
+
+    return `<tr class="cd-svc-edit-row">
+      <td style="vertical-align:top;padding-top:10px">
+        ${isPax8
+          ? `<span style="font-size:11px;color:var(--text-muted)">Key: ${escHtml(m.vendorKey || '')}</span><br>`
+          : ''}
+        <input type="text" class="cd-svc-vendor-input" data-tool="${tool}" data-mid="${escHtml(m.id)}" value="${vendorVal}" placeholder="${isPax8 ? 'Vendor label' : 'Vendor product name'}" style="width:160px;font-size:12px;padding:3px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text)">
+      </td>
+      <td style="vertical-align:top;padding-top:10px">
+        ${svcRows}
+        <div class="cd-svc-edit-wrap" style="margin-top:4px">
+          <input type="text" class="cd-find-input cd-svc-search-input" placeholder="+ Search to add service…" data-tool="${escHtml(tool)}" data-mid="${escHtml(m.id)}" style="width:200px;font-size:12px">
+          <div class="cd-find-results" id="cd-svc-results-${escHtml(tool)}-${escHtml(m.id)}"></div>
+        </div>
+      </td>
+      <td style="vertical-align:top;padding-top:10px">
+        <input type="text" class="cd-svc-contracts-input" data-tool="${tool}" data-mid="${escHtml(m.id)}" value="${contractsVal}" placeholder="Contract names (comma-separated)" style="width:160px;font-size:11px;padding:3px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text)">
+      </td>
+      <td style="vertical-align:top;padding-top:10px;white-space:nowrap">
+        <button class="btn btn-primary btn-sm cd-svc-save-btn" data-tool="${tool}" data-mid="${escHtml(m.id)}" style="font-size:10px">Save</button>
+        <button class="btn btn-ghost btn-sm cd-svc-cancel-btn" data-tool="${escHtml(tool)}" data-mid="${escHtml(m.id)}" style="font-size:10px;margin-left:4px">Cancel</button>
+      </td>
+    </tr>`;
+  }
+
+  const atDisplay = services.length
+    ? services.map(s => escHtml(s.name || `ID: ${s.id}`)).join('<br>')
+    : '<span style="color:var(--warn);font-size:11px">Not set</span>';
+  const vendorDisplay = isPax8
+    ? `<span style="font-weight:500">${escHtml(m.vendorLabel || m.vendorKey || '')}</span><span style="color:var(--text-muted);font-size:11px;margin-left:6px">${escHtml(m.vendorKey || '')}</span>`
+    : escHtml(m.vendorName || '');
+
+  return `<tr>
+    <td>${vendorDisplay}</td>
+    <td style="font-size:12px">${atDisplay}</td>
+    <td style="color:var(--text-muted);font-size:11px">${escHtml((m.contracts || []).join(', '))}</td>
+    <td><button class="btn btn-ghost btn-sm cd-svc-edit-btn" data-tool="${escHtml(tool)}" data-mid="${escHtml(m.id)}" style="font-size:10px">Edit</button></td>
+  </tr>`;
+}
+
+function cdSvcStartSearch(input) {
+  const tool = input.dataset.tool;
+  const mid  = input.dataset.mid;
+  const resultsEl = document.getElementById(`cd-svc-results-${tool}-${mid}`);
+  if (!resultsEl) return;
+
+  let timer;
+  async function doSearch() {
+    const q = input.value.trim();
+    if (!q) { resultsEl.innerHTML = ''; return; }
+    resultsEl.innerHTML = `<div class="cd-match-item" style="pointer-events:none;color:var(--text-muted)">Searching…</div>`;
+    const results = await window.api.cmSearchAtServices(q).catch(() => []);
+    if (!results.length) {
+      resultsEl.innerHTML = `<div class="cd-match-item" style="pointer-events:none;color:var(--text-muted)">No matches</div>`;
+      return;
+    }
+    resultsEl.innerHTML = results.map(r =>
+      `<div class="cd-match-item cd-svc-result-item" data-tool="${escHtml(tool)}" data-mid="${escHtml(mid)}" data-svcid="${r.id}" data-svcname="${escHtml(r.name)}">
+        ${escHtml(r.name)} <span style="color:var(--text-muted);font-size:10px">ID: ${r.id}</span>
+      </div>`
+    ).join('');
+  }
+
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(doSearch, 300); });
+  input.focus();
+  doSearch();
+}
+
+// ── Pax8 Sync tab (existing review + confirmed tables) ────────────────────────
+
+function cdRenderPax8Sync() {
+  if (!_cdCurrentData) return;
+  const isAdmin = _currentUser?.isAdmin || _currentUser?.roles?.includes('hub.admin');
+  const companies = _cdCurrentData.companies || [];
+  const services  = _cdCurrentData.services  || [];
+
   const coMapped   = companies.filter(c => c.accepted && c.atId).length;
+  const coReview   = companies.filter(c => !c.accepted && !c.excluded).length;
   const coExcluded = companies.filter(c => c.excluded).length;
-  const coStatsEl  = document.getElementById('cd-co-stats');
+  const svcMapped  = services.filter(s => s.accepted && s.atServiceId).length;
+  const svcReview  = services.filter(s => !s.accepted && !s.excluded).length;
+
+  const coStatsEl = document.getElementById('cd-co-stats');
   if (coStatsEl) coStatsEl.innerHTML = `
     <div class="report-stat clean"><span class="report-stat-num">${coMapped}</span><span class="report-stat-label">Mapped</span></div>
     <div class="report-stat ${coReview > 0 ? 'warn' : 'clean'}"><span class="report-stat-num">${coReview}</span><span class="report-stat-label">Needs Review</span></div>
     <div class="report-stat"><span class="report-stat-num">${coExcluded}</span><span class="report-stat-label">Excluded</span></div>`;
 
-  // Service stats
-  const svcMapped  = services.filter(s => s.accepted && s.atServiceId).length;
   const svcStatsEl = document.getElementById('cd-svc-stats');
   if (svcStatsEl) svcStatsEl.innerHTML = `
     <div class="report-stat clean"><span class="report-stat-num">${svcMapped}</span><span class="report-stat-label">Mapped</span></div>
     <div class="report-stat ${svcReview > 0 ? 'warn' : 'clean'}"><span class="report-stat-num">${svcReview}</span><span class="report-stat-label">Needs Review</span></div>`;
 
-  // Needs Review — Companies
   cdRenderReview(companies, isAdmin);
   cdRenderServiceReview(services);
-
-  // Confirmed tables
   cdRenderTable('co');
   cdRenderTable('svc');
 }
@@ -1750,6 +2081,13 @@ function cdRenderTable(tab) {
 
 // ── Sync ─────────────────────────────────────────────────────────────────────
 async function cdRunSync() {
+  // Ensure we're on the Pax8 Sync tab so the log is visible
+  if (_cdActiveTab !== 'services') {
+    _cdActiveTab = 'services';
+    content.querySelectorAll('[data-cdtab]').forEach(b => b.classList.toggle('active', b.dataset.cdtab === 'services'));
+    content.querySelectorAll('.cd-panel').forEach(p => p.classList.toggle('hidden', p.id !== 'cd-panel-services'));
+  }
+
   const btn     = document.getElementById('btn-run-mapping');
   const logWrap = document.getElementById('cd-log-wrap');
   const logOut  = document.getElementById('mapping-log-output');
@@ -1773,30 +2111,224 @@ async function cdRunSync() {
       const svcMapped = r.stats.svcHigh + r.stats.svcLow;
       saveToolStat('company-mapping', `${coMapped} companies · ${svcMapped} services mapped`, 'ok');
       _cdCurrentData = r;
-      cdRenderAll(r);
+      // Also refresh hub data so Companies tab reflects any new platform mappings
+      window.api.cmGetHubData().then(hub => { _cdHubData = hub; cdRenderAll(); }).catch(() => cdRenderAll());
     }
   } catch {}
 
   btn.disabled = false;
-  btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 7a5 5 0 1 0 1.2-3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2 3v4h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg> Sync Now`;
+  btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 7a5 5 0 1 0 1.2-3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2 3v4h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg> Sync Pax8`;
 }
 
-// ── Event delegation — Accept / Exclude / Find Match ─────────────────────────
+// ── Event delegation ─────────────────────────────────────────────────────────
 content.addEventListener('click', async (e) => {
-  // Accept match (with optional manual AT ID)
+  // ── Hub companies tab: remove a platform mapping ──
+  const chipRemove = e.target.closest('.cd-chip-remove');
+  if (chipRemove) {
+    e.stopPropagation();
+    const { atid, platform, pname } = chipRemove.dataset;
+    chipRemove.textContent = '…';
+    try {
+      await window.api.cmRemovePlatformMapping({ atId: parseInt(atid, 10), platform, platformName: pname });
+      const hub = await window.api.cmGetHubData();
+      _cdHubData = hub; _cdEditCell = null; cdRenderCompaniesHub();
+    } catch { chipRemove.textContent = '×'; }
+    return;
+  }
+
+  // ── Hub companies tab: click chip to enter reassign mode ──
+  const chipClickable = e.target.closest('.cd-chip-clickable');
+  if (chipClickable && !e.target.closest('.cd-chip-remove')) {
+    const { atid, platform, pname } = chipClickable.dataset;
+    const key = `${atid}::${platform}::${pname}`;
+    _cdEditCell = _cdEditCell?.key === key ? null : { key, value: '' };
+    cdRenderCompaniesHub();
+    // Focus the input after render
+    setTimeout(() => {
+      const inp = document.querySelector(`.cd-platform-reassign-input[data-atid="${atid}"][data-platform="${platform}"][data-pname="${pname}"]`);
+      if (inp) { inp.focus(); cdPlatformStartReassign(inp); }
+    }, 0);
+    return;
+  }
+
+  // ── Hub companies tab: reassign select ──
+  const reassignItem = e.target.closest('.cd-reassign-item');
+  if (reassignItem) {
+    const { fromatid, toatid, toatname, platform, pname } = reassignItem.dataset;
+    reassignItem.textContent = 'Saving…';
+    try {
+      await window.api.cmReassignPlatform({ fromAtId: parseInt(fromatid, 10), toAtId: parseInt(toatid, 10), toAtName: toatname, platform, platformName: pname });
+      const hub = await window.api.cmGetHubData();
+      _cdHubData = hub; _cdEditCell = null; cdRenderCompaniesHub();
+    } catch { _cdEditCell = null; cdRenderCompaniesHub(); }
+    return;
+  }
+
+  // ── Hub companies tab: click + to add a new platform name ──
+  const addBtn = e.target.closest('.cd-platform-add-btn');
+  if (addBtn) {
+    const { atid, platform } = addBtn.dataset;
+    const key = `${atid}::${platform}::__add__`;
+    _cdEditCell = { key, value: '' };
+    cdRenderCompaniesHub();
+    setTimeout(() => {
+      const inp = document.querySelector(`.cd-platform-add-input`);
+      if (inp) inp.focus();
+    }, 0);
+    return;
+  }
+
+  // ── Hub companies tab: save new platform name ──
+  const addSaveBtn = e.target.closest('.cd-platform-add-save');
+  if (addSaveBtn) {
+    const atid = parseInt(addSaveBtn.dataset.atid, 10);
+    const platform = addSaveBtn.dataset.platform;
+    const wrap = addSaveBtn.closest('.cd-platform-edit-wrap');
+    const inp  = wrap?.querySelector('.cd-platform-add-input');
+    const name = inp?.value?.trim();
+    if (!name) return;
+    addSaveBtn.textContent = 'Saving…'; addSaveBtn.disabled = true;
+    try {
+      await window.api.cmAddPlatformMapping({ atId: atid, platform, platformName: name });
+      const hub = await window.api.cmGetHubData();
+      _cdHubData = hub; _cdEditCell = null; cdRenderCompaniesHub();
+    } catch { addSaveBtn.textContent = 'Save'; addSaveBtn.disabled = false; }
+    return;
+  }
+
+  // ── Hub companies tab: cancel add/reassign ──
+  const addCancelBtn = e.target.closest('.cd-platform-add-cancel');
+  if (addCancelBtn) {
+    _cdEditCell = null; cdRenderCompaniesHub();
+    return;
+  }
+
+  // ── Hub companies tab: toggle excluded ──
+  const exclToggle = e.target.closest('.cd-excl-toggle');
+  if (exclToggle) {
+    const atId    = parseInt(exclToggle.dataset.atid, 10);
+    const exclude = exclToggle.dataset.excl !== '1';
+    exclToggle.disabled = true; exclToggle.textContent = '…';
+    try {
+      await window.api.cmSetAtExcluded({ atId, excluded: exclude });
+      const hub = await window.api.cmGetHubData();
+      _cdHubData = hub;
+      cdRenderCompaniesHub();
+    } catch { exclToggle.disabled = false; }
+    return;
+  }
+
+  // ── Service mapping: enter edit mode ──
+  const svcEditBtn = e.target.closest('.cd-svc-edit-btn');
+  if (svcEditBtn) {
+    const { tool, mid } = svcEditBtn.dataset;
+    _cdSvcEditId = `${tool}::${mid}`;
+    const mappings = _cdHubData?.serviceMappings?.[tool] || [];
+    const m = mappings.find(x => x.id === mid);
+    if (m) {
+      _cdSvcEditDraft = {
+        vendorName: m.vendorName || m.vendorLabel || '',
+        atServices: [...cdSvcAtServices(m)],
+        contracts: (m.contracts || []).join(', '),
+      };
+    }
+    const groupEl = document.getElementById(`cd-svcmap-${tool}`);
+    if (groupEl && _cdHubData?.serviceMappings) {
+      cdRenderSvcMapGroup(groupEl, tool, _cdHubData.serviceMappings[tool] || []);
+    }
+    return;
+  }
+
+  // ── Service mapping: cancel edit ──
+  const svcCancelBtn = e.target.closest('.cd-svc-cancel-btn');
+  if (svcCancelBtn) {
+    const { tool } = svcCancelBtn.dataset;
+    _cdSvcEditId   = null;
+    _cdSvcEditDraft = null;
+    const groupEl = document.getElementById(`cd-svcmap-${tool}`);
+    if (groupEl && _cdHubData?.serviceMappings) {
+      cdRenderSvcMapGroup(groupEl, tool, _cdHubData.serviceMappings[tool] || []);
+    }
+    return;
+  }
+
+  // ── Service mapping: remove one AT service from draft ──
+  const svcRemoveSvc = e.target.closest('.cd-svc-remove-svc');
+  if (svcRemoveSvc) {
+    const { tool, mid, svcidx } = svcRemoveSvc.dataset;
+    if (_cdSvcEditDraft?.atServices) {
+      _cdSvcEditDraft.atServices.splice(parseInt(svcidx, 10), 1);
+    }
+    const groupEl = document.getElementById(`cd-svcmap-${tool}`);
+    if (groupEl && _cdHubData?.serviceMappings) {
+      cdRenderSvcMapGroup(groupEl, tool, _cdHubData.serviceMappings[tool] || []);
+    }
+    return;
+  }
+
+  // ── Service mapping: add AT service from search results (into draft) ──
+  const svcResultItem = e.target.closest('.cd-svc-result-item');
+  if (svcResultItem) {
+    const { tool, mid, svcid, svcname } = svcResultItem.dataset;
+    if (_cdSvcEditDraft) {
+      const id = parseInt(svcid, 10);
+      if (!_cdSvcEditDraft.atServices.some(s => s.id === id)) {
+        _cdSvcEditDraft.atServices.push({ id, name: svcname });
+      }
+    }
+    const groupEl = document.getElementById(`cd-svcmap-${tool}`);
+    if (groupEl && _cdHubData?.serviceMappings) {
+      cdRenderSvcMapGroup(groupEl, tool, _cdHubData.serviceMappings[tool] || []);
+    }
+    return;
+  }
+
+  // ── Service mapping: save draft ──
+  const svcSaveBtn = e.target.closest('.cd-svc-save-btn');
+  if (svcSaveBtn) {
+    const { tool, mid } = svcSaveBtn.dataset;
+    const isPax8 = tool === 'pax8';
+    const row = svcSaveBtn.closest('tr');
+    const vendorInput = row?.querySelector('.cd-svc-vendor-input');
+    const contractsInput = row?.querySelector('.cd-svc-contracts-input');
+    const vendorVal = vendorInput?.value.trim() || '';
+    const contractsVal = contractsInput?.value.trim() || '';
+    const atServices = _cdSvcEditDraft?.atServices || [];
+    const contracts = contractsVal ? contractsVal.split(',').map(s => s.trim()).filter(Boolean) : [];
+    const mapping = {
+      id: mid,
+      atServices,
+      contracts,
+      ...(isPax8 ? { vendorLabel: vendorVal } : { vendorName: vendorVal }),
+    };
+    svcSaveBtn.disabled = true; svcSaveBtn.textContent = 'Saving…';
+    try {
+      await window.api.cmSaveServiceMapping({ tool, mapping });
+      const hub = await window.api.cmGetHubData();
+      _cdHubData      = hub;
+      _cdSvcEditId    = null;
+      _cdSvcEditDraft = null;
+      const groupEl = document.getElementById(`cd-svcmap-${tool}`);
+      if (groupEl && hub?.serviceMappings) {
+        cdRenderSvcMapGroup(groupEl, tool, hub.serviceMappings[tool] || []);
+      }
+    } catch (err) { svcSaveBtn.disabled = false; svcSaveBtn.textContent = 'Save'; }
+    return;
+  }
+
+  // ── Pax8 Sync tab: accept match ──
   const acceptBtn = e.target.closest('.cd-accept-btn');
   if (acceptBtn) {
     const pax8Id = acceptBtn.dataset.pax8id;
     acceptBtn.disabled = true; acceptBtn.textContent = 'Saving…';
     try {
       await window.api.acceptCompanyMatch({ pax8Id });
-      acceptBtn.closest('.cd-review-row')?.closest('.cd-review-row, [data-pax8id]')?.parentElement?.parentElement?.remove();
       await cdLoadData();
     } catch { acceptBtn.disabled = false; acceptBtn.textContent = 'Accept'; }
     return;
   }
 
-  // Exclude
+  // ── Pax8 Sync tab: exclude company ──
   const excludeBtn = e.target.closest('.cd-exclude-btn');
   if (excludeBtn) {
     const pax8Id = excludeBtn.dataset.pax8id;
@@ -1808,7 +2340,7 @@ content.addEventListener('click', async (e) => {
     return;
   }
 
-  // Toggle inline Find Match box
+  // ── Pax8 Sync tab: toggle find match box ──
   const findBtn = e.target.closest('.cd-find-btn');
   if (findBtn) {
     const pax8Id  = findBtn.dataset.pax8id;
@@ -1824,8 +2356,8 @@ content.addEventListener('click', async (e) => {
     return;
   }
 
-  // Select a found AT company
-  const matchItem = e.target.closest('.cd-match-item');
+  // ── Pax8 Sync tab: select found AT company ──
+  const matchItem = e.target.closest('.cd-match-item:not(.cd-svc-result-item)');
   if (matchItem) {
     const pax8Id = matchItem.dataset.pax8id;
     const atId   = parseInt(matchItem.dataset.atid, 10);
@@ -1838,6 +2370,38 @@ content.addEventListener('click', async (e) => {
     return;
   }
 });
+
+// ── Platform mapping edit helpers ────────────────────────────────────────────
+
+function cdPlatformStartReassign(input) {
+  let timer;
+  const atId    = parseInt(input.dataset.atid, 10);
+  const platform = input.dataset.platform;
+  const pname   = input.dataset.pname;
+  const safeKey = `${atId}_${platform}_${pname}`.replace(/[^a-z0-9]/gi, '_');
+  const resultsEl = document.getElementById(`reassign-results-${safeKey}`);
+  if (!resultsEl) return;
+
+  // Search hub companies (already loaded) rather than making a network call
+  function doSearch() {
+    const q = input.value.trim().toLowerCase();
+    if (!q) { resultsEl.innerHTML = ''; return; }
+    const matches = (_cdHubData?.companies || [])
+      .filter(c => c.atId != null && (c.atName || '').toLowerCase().includes(q))
+      .slice(0, 10);
+    if (!matches.length) {
+      resultsEl.innerHTML = `<div style="padding:6px 10px;font-size:11px;color:var(--text-muted)">No matches</div>`;
+      return;
+    }
+    resultsEl.innerHTML = matches.map(r =>
+      `<div class="cd-match-item cd-reassign-item" data-fromatid="${atId}" data-toatid="${r.atId}" data-toatname="${escHtml(r.atName)}" data-platform="${platform}" data-pname="${escHtml(pname)}">${escHtml(r.atName)}</div>`
+    ).join('');
+  }
+
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(doSearch, 200); });
+  input.addEventListener('keydown', e => { if (e.key === 'Escape') { _cdEditCell = null; cdRenderCompaniesHub(); } });
+  doSearch();
+}
 
 // ── Inline AT search ─────────────────────────────────────────────────────────
 function cdSearchAt(input, wrap, pax8Id) {
@@ -6952,7 +7516,7 @@ function renderBlackpointProcessor() {
   content.innerHTML = `
     <div class="view-header">
       <div>
-        <h1 class="view-title">BlackPoint / CompassOne</h1>
+        <h1 class="view-title">BlackPoint Invoice Processor</h1>
         <p class="view-subtitle">Compare monthly Account Usage Report against Autotask billing and push unit changes</p>
       </div>
     </div>
@@ -6971,10 +7535,9 @@ function renderBlackpointProcessor() {
         <select id="bp-file-sel" class="field-input" style="width:360px;color-scheme:dark">
           <option value="">Select a CSV file…</option>
         </select>
-        <button class="btn btn-primary btn-sm" id="bp-load-btn" disabled>Load &amp; Compare</button>
+        <button class="btn btn-primary btn-sm" id="bp-load-btn" disabled>Process Invoice</button>
         <button class="btn btn-ghost btn-sm" id="bp-refresh-files-btn" title="Refresh file list from SharePoint" style="padding:4px 8px;font-size:13px">↻</button>
       </div>
-      <p class="field-hint" style="margin-bottom:16px">Files loaded from SharePoint: ANSVendors/Blackpoint/invoices/{year}/</p>
       <div id="bp-compare-status"></div>
       <div id="bp-compare-results" style="display:none">
         <div id="bp-compare-table-wrap"></div>
@@ -7923,7 +8486,7 @@ function renderHelp() {
     { name: 'Project Time Summary',           desc: 'Pulls time entries from Autotask for all active projects and summarizes hours per project. Supports notes, export, and emailing reports.',                   path: '/tool-guides/project-time-summary' },
     { name: 'Autotask Contract Changes',      desc: 'Audits recent changes made to Autotask contracts — showing who changed what field and when. Useful for tracking modifications and renewals.',                path: '/tool-guides/contract-changes' },
     { name: 'Autotask Contract Renewals',     desc: 'Finds active contracts expiring within your configured look-ahead window so you can proactively reach out to clients before agreements lapse.',              path: '/tool-guides/contract-renewals' },
-    { name: 'BlackPoint Usage',               desc: 'Fetches protected endpoint counts from BlackPoint CompassOne, compares against Autotask contract quantities, and lets you push updates directly.',           path: '/tool-guides/blackpoint' },
+    { name: 'BlackPoint Invoice Processor',    desc: 'Process BlackPoint Account Usage Report CSVs, compare against Autotask Security+ billing, and push unit changes directly.',                            path: '/tool-guides/blackpoint' },
     { name: 'MSC Agreements',                 desc: 'Revenue overview for managed service clients — MSA value, lifetime projected revenue, contract end dates, last signed year, and annual uplift percentage.',  path: '/tool-guides/msc-agreements' },
     { name: 'Duo Management',                 desc: 'Connects to the Duo Admin API to manage users, devices, and enrollment across all clients. Access level varies by your Hub role.',                          path: '/tool-guides/duo-management' },
     { name: 'Project Profitability',          desc: 'Compares budgeted vs. actual hours on Autotask projects to calculate labor cost, revenue, and margin. Helps catch over-budget projects early.',             path: '/tool-guides/project-profitability' },

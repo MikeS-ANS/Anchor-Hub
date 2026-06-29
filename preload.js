@@ -45,6 +45,15 @@ contextBridge.exposeInMainWorld('api', {
   setCompanyExcluded:     (d)       => ipcRenderer.invoke('set-company-excluded', d),
   acceptCompanyMatch:     (d)       => ipcRenderer.invoke('accept-company-match', d),
   cmSearchAtCompanies:    (name)    => ipcRenderer.invoke('cm-search-at-companies', name),
+  cmGetHubData:           ()        => ipcRenderer.invoke('cm-get-hub-data'),
+  cmSearchAtServices:     (name)    => ipcRenderer.invoke('cm-search-at-services', name),
+  cmSaveServiceMapping:   (opts)    => ipcRenderer.invoke('cm-save-service-mapping', opts),
+  cmDeleteServiceMapping: (opts)    => ipcRenderer.invoke('cm-delete-service-mapping', opts),
+  cmSetAtExcluded:        (d)       => ipcRenderer.invoke('cm-set-at-excluded', d),
+  cmUpdateAtClassifications: ()     => ipcRenderer.invoke('cm-update-at-classifications'),
+  cmRemovePlatformMapping:(d)       => ipcRenderer.invoke('cm-remove-platform-mapping', d),
+  cmReassignPlatform:     (d)       => ipcRenderer.invoke('cm-reassign-platform', d),
+  cmAddPlatformMapping:   (d)       => ipcRenderer.invoke('cm-add-platform-mapping', d),
 
   // Kaseya Invoice Processor
   kaseyaSpListYears:      ()     => ipcRenderer.invoke('kaseya-sp-list-years'),

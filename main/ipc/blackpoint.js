@@ -5,7 +5,7 @@ const { app, shell } = require('electron');
 const { atFetch, atQuery } = require('../shared/at');
 const { kvGetSecret }      = require('../shared/kv');
 const { USER_DATA, getMainWindow } = require('../shared/state');
-const { loadHubDirectory, saveHubDirectory } = require('../shared/hubDirectory');
+const { loadHubDirectory, saveHubDirectory, getServiceMappings, getSvcAtServiceIds } = require('../shared/hubDirectory');
 
 const BP_BASE          = 'https://api.blackpointcyber.com';
 const BP_SNAPSHOT_FILE = path.join(USER_DATA, 'anchor-bp-snapshot.json');
@@ -222,8 +222,8 @@ async function bpFindNextContract(companyId, excludeId, afterDate) {
     .sort((a, b) => new Date(a.startDate) - new Date(b.startDate))[0] || null;
 }
 
-async function bpFindCsSP(contractId) {
-  for (const svcId of [119, 263]) {
+async function bpFindCsSP(contractId, spServiceIds = [119, 263]) {
+  for (const svcId of spServiceIds) {
     const rows = await atQuery('/ContractServices', [
       { field: 'contractID', op: 'eq', value: contractId },
       { field: 'serviceID',  op: 'eq', value: svcId },
@@ -233,10 +233,10 @@ async function bpFindCsSP(contractId) {
   return null;
 }
 
-async function bpFindCsDef(contractId) {
+async function bpFindCsDef(contractId, defServiceId = 226) {
   const rows = await atQuery('/ContractServices', [
     { field: 'contractID', op: 'eq', value: contractId },
-    { field: 'serviceID',  op: 'eq', value: 226 },
+    { field: 'serviceID',  op: 'eq', value: defServiceId },
   ]);
   return rows[0] || null;
 }
@@ -307,7 +307,7 @@ async function loadSpMappings() {
     const hub = await loadHubDirectory();
     if (!hub) return { _version: 2, _hubRaw: null, mappings: {}, excluded: {} };
 
-    if (hub._version !== 2) return hub; // legacy format passthrough
+    if (hub._version < 2) return hub; // legacy flat format passthrough
 
     // Build BP compatibility layer from v2 hub
     const mappings = {}, excluded = {};
@@ -333,8 +333,14 @@ async function loadSpMappings() {
 }
 
 async function saveSpMappings(data) {
-  if (data._version !== 2 || !data._hubRaw) {
-    return saveHubDirectory(data);
+  if (data._version !== 2) {
+    return saveHubDirectory(data); // legacy format passthrough
+  }
+  if (!data._hubRaw) {
+    // Hub data unavailable — load a fresh copy rather than risk corrupting the file
+    const fresh = await loadHubDirectory();
+    if (!fresh) return; // SP truly unreachable; skip save
+    data = { ...data, _hubRaw: fresh };
   }
 
   // Merge BP changes back into the hub file
@@ -469,6 +475,12 @@ module.exports = function registerBlackpoint(ipcMain) {
     const spData   = await loadSpMappings();
     const mappings = spData.mappings || {};
     const excluded = spData.excluded || {};
+    const bpSvcMaps = getServiceMappings(spData._hubRaw, 'blackpoint');
+    const spEntry   = bpSvcMaps.find(m => m.id === 'sp' || m.id === 'sp-primary');
+    const spSvcIds  = spEntry ? getSvcAtServiceIds(spEntry)
+                     : bpSvcMaps.filter(m => m.id === 'sp-alt').flatMap(m => getSvcAtServiceIds(m));
+    const defEntry  = bpSvcMaps.find(m => m.id === '365-defense');
+    const defSvcId  = defEntry ? (getSvcAtServiceIds(defEntry)[0] ?? 226) : 226;
     const today    = new Date().toISOString();
 
     let bulk = force ? null : getBulkCache();
@@ -508,19 +520,19 @@ module.exports = function registerBlackpoint(ipcMain) {
       const servicesByContract = {};
       for (const s of allCsRows) {
         if (!servicesByContract[s.contractID]) servicesByContract[s.contractID] = {};
-        if ([119, 263].includes(s.serviceID) && !servicesByContract[s.contractID].sp)
+        if (spSvcIds.includes(s.serviceID) && !servicesByContract[s.contractID].sp)
           servicesByContract[s.contractID].sp = s;
-        else if (s.serviceID === 226 && !servicesByContract[s.contractID].def)
+        else if (s.serviceID === defSvcId && !servicesByContract[s.contractID].def)
           servicesByContract[s.contractID].def = s;
       }
 
       // Detect which Security+ service ID (119 vs 263) is more common across existing contracts
-      let count119 = 0, count263 = 0;
+      let count0 = 0, count1 = 0;
       for (const s of allCsRows) {
-        if (s.serviceID === 119) count119++;
-        else if (s.serviceID === 263) count263++;
+        if (spSvcIds[0] && s.serviceID === spSvcIds[0]) count0++;
+        else if (spSvcIds[1] && s.serviceID === spSvcIds[1]) count1++;
       }
-      _preferredSpServiceId = count263 > count119 ? 263 : 119;
+      _preferredSpServiceId = (spSvcIds[1] && count1 > count0) ? spSvcIds[1] : (spSvcIds[0] ?? 119);
 
       // ── 4. All ContractServiceUnits for those services (batched by 200 IDs)
       const allUnits = [];
@@ -681,6 +693,15 @@ module.exports = function registerBlackpoint(ipcMain) {
       if (mainWindow) mainWindow.webContents.send('bp-push-progress', { company, status, detail });
     };
 
+    const hub = await loadHubDirectory();
+    const bpMaps = getServiceMappings(hub, 'blackpoint');
+    const spEntry2     = bpMaps.find(m => m.id === 'sp' || m.id === 'sp-primary');
+    const spServiceIds = spEntry2 ? getSvcAtServiceIds(spEntry2)
+                         : bpMaps.filter(m => m.id === 'sp-alt').flatMap(m => getSvcAtServiceIds(m));
+    const defEntry2    = bpMaps.find(m => m.id === '365-defense');
+    const defServiceId = defEntry2 ? (getSvcAtServiceIds(defEntry2)[0] ?? 226) : 226;
+    const preferredSpId = spServiceIds[0] ?? _preferredSpServiceId;
+
     const isSP    = serviceType === 'security_plus';
     const results = [];
 
@@ -697,10 +718,10 @@ module.exports = function registerBlackpoint(ipcMain) {
           continue;
         }
 
-        let cs = isSP ? await bpFindCsSP(contract.id) : await bpFindCsDef(contract.id);
+        let cs = isSP ? await bpFindCsSP(contract.id, spServiceIds) : await bpFindCsDef(contract.id, defServiceId);
         if (!cs) {
           // Service line doesn't exist — create it from the catalog price
-          const serviceId = isSP ? _preferredSpServiceId : 226;
+          const serviceId = isSP ? preferredSpId : defServiceId;
           try {
             cs = await bpCreateContractService(contract, serviceId);
             emit(row.customer, 'working', `Created ${isSP ? 'Security+' : '365 Defense'} service line on contract`);
@@ -731,7 +752,7 @@ module.exports = function registerBlackpoint(ipcMain) {
           if (msg.includes('effectivedate must be between') || msg.includes('effective date must be between')) {
             const next = await bpFindNextContract(row.atCompanyId, contract.id, today);
             if (!next) throw new Error('Contract rollover: no next contract found');
-            const nextCs = isSP ? await bpFindCsSP(next.id) : await bpFindCsDef(next.id);
+            const nextCs = isSP ? await bpFindCsSP(next.id, spServiceIds) : await bpFindCsDef(next.id, defServiceId);
             if (!nextCs) throw new Error('Contract rollover: service line not on next contract');
             await atFetch('/ContractServiceAdjustments', {
               method: 'POST',

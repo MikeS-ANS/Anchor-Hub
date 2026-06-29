@@ -1,7 +1,7 @@
 /**
- * Shared access to the central hub-company-mappings.json (v2) on SharePoint.
- * Consumed by companyMapping.js, blackpoint.js, kaseyaProcessor.js, and any
- * future tool that needs to map its org names to Autotask companies.
+ * Shared access to the central hub-company-mappings.json on SharePoint.
+ * Consumed by companyMapping.js, blackpoint.js, kaseyaProcessor.js, atPush.js,
+ * and any future tool that needs to map its org names to Autotask companies.
  */
 
 const fetch = require('node-fetch');
@@ -90,6 +90,56 @@ async function hubGraphFetch(spPath, opts = {}) {
   return res.json();
 }
 
+// ─── Service mapping defaults ─────────────────────────────────────────────────
+// These mirror the hardcoded constants in kaseyaProcessor.js, atPush.js, and
+// blackpoint.js. They are seeded into hub.serviceMappings on first load so
+// that the Company Mapping UI can show and edit them without a code change.
+
+const DEFAULT_SERVICE_MAPPINGS = {
+  kaseya: [
+    { id: 'dwp-metered-user',   vendorName: 'DWP Metered Plan - User License',                  atServiceId: 58,  atServiceName: '', contracts: ['Managed Cloud Services'] },
+    { id: 'dwp-metered-server', vendorName: 'DWP Metered Plan - Server License',                atServiceId: 111, atServiceName: '', contracts: ['Managed Cloud Services'] },
+    { id: 'dwp-unlim-server',   vendorName: 'DWP Unlimited Plan - Server License',              atServiceId: 126, atServiceName: '', contracts: ['Managed Cloud Services'] },
+    { id: 'dwp-unlim-user',     vendorName: 'DWP Unlimited Plan - User License',                atServiceId: 125, atServiceName: '', contracts: ['Managed Cloud Services'] },
+    { id: 'dfp-unlim-server',   vendorName: 'DFP Unlimited Plan - Server License',              atServiceId: 253, atServiceName: '', contracts: ['Managed Cloud Services'] },
+    { id: 'saas-monthly',       vendorName: 'SaaS Protection Infinite Cloud Retention Monthly', atServiceId: 98,  atServiceName: '', contracts: ['Managed Cloud Services', 'Managed Security Services'] },
+    { id: 'saas-monthly-seat',  vendorName: 'SaaS Protection Infinite Cloud Retention Monthly', atServiceId: 88,  atServiceName: '', contracts: ['Managed Cloud Services', 'Managed Security Services'], note: 'Seat variant' },
+  ],
+  pax8: [
+    { id: 'azure',              vendorKey: 'azure',      vendorLabel: 'Azure',               atServiceId: 110, atServiceName: '', contracts: ['Azure'] },
+    { id: 'nerdio',             vendorKey: 'nerdio',     vendorLabel: 'Nerdio',              atServiceId: 159, atServiceName: '', contracts: ['Azure'] },
+    { id: 'exclaimer-cloud',    vendorKey: 'exclaimer',  vendorLabel: 'Exclaimer',           atServiceId: 262, atServiceName: '', contracts: ['Managed Cloud'] },
+    { id: 'exclaimer-security', vendorKey: 'exclaimer',  vendorLabel: 'Exclaimer (Security)',atServiceId: 288, atServiceName: '', contracts: ['Managed Security'] },
+    { id: 'ironscales',         vendorKey: 'ironscales', vendorLabel: 'Ironscales',          atServiceId: 275, atServiceName: '', contracts: ['Managed Cloud', 'Managed Security'] },
+    { id: 'printix',            vendorKey: 'printix',    vendorLabel: 'Printix',             atServiceId: 266, atServiceName: '', contracts: ['Managed Cloud'] },
+  ],
+  blackpoint: [
+    { id: 'sp', vendorName: 'Security Plus', atServices: [{ id: 119, name: '' }, { id: 263, name: '' }], contracts: ['Managed Security Services'] },
+    { id: '365-defense', vendorName: '365 Defense', atServices: [{ id: 226, name: '' }], contracts: ['Managed Security Services'] },
+  ],
+};
+
+// Seed hub.serviceMappings from defaults if not present (in-memory only; written on next save).
+function ensureServiceMappings(hub) {
+  if (!hub || hub.serviceMappings) return;
+  hub.serviceMappings = JSON.parse(JSON.stringify(DEFAULT_SERVICE_MAPPINGS));
+}
+
+// Return serviceMappings for a tool from hub, falling back to the built-in defaults.
+function getServiceMappings(hub, tool) {
+  return hub?.serviceMappings?.[tool] ?? DEFAULT_SERVICE_MAPPINGS[tool] ?? [];
+}
+
+// Get all AT service IDs for a mapping entry.
+// Handles both the old single-id format ({ atServiceId }) and the new array format ({ atServices }).
+// Also handles legacy sp-primary/sp-alt entries by treating them as single-service entries.
+function getSvcAtServiceIds(m) {
+  if (Array.isArray(m.atServices) && m.atServices.length)
+    return m.atServices.map(s => s.id).filter(Boolean);
+  if (m.atServiceId) return [m.atServiceId];
+  return [];
+}
+
 // Load hub-company-mappings.json from SharePoint. Returns null on failure.
 async function loadHubDirectory() {
   try {
@@ -97,7 +147,24 @@ async function loadHubDirectory() {
     if (!meta) return null;
     const dlUrl = meta['@microsoft.graph.downloadUrl'];
     if (!dlUrl) return null;
-    return JSON.parse(await spDownload(dlUrl));
+    const data = JSON.parse(await spDownload(dlUrl));
+
+    // Detect old Blackpoint compat format accidentally saved to the hub file.
+    // Shape: { _version: 2, _hubRaw: <hub|null>, mappings: {}, excluded: {} }
+    // If _hubRaw is a valid hub, extract it. Otherwise start with an empty hub.
+    // Either way, immediately overwrite SP to repair the file for next load.
+    if ('_hubRaw' in data && 'mappings' in data && 'excluded' in data) {
+      const recovered = (data._hubRaw && Array.isArray(data._hubRaw.companies))
+        ? data._hubRaw
+        : { _version: 3, companies: [] };
+      console.warn('[HubDirectory] Detected corrupted hub file (BP compat format). Recovering...');
+      ensureServiceMappings(recovered);
+      saveHubDirectory(recovered).catch(e => console.warn('[HubDirectory] Recovery overwrite failed:', e.message));
+      return recovered;
+    }
+
+    ensureServiceMappings(data);
+    return data;
   } catch (e) {
     console.warn('[HubDirectory] SP load failed:', e.message);
     return null;
@@ -210,6 +277,11 @@ module.exports = {
   upsertKaseyaEntry,
   setPlatformExcluded,
   buildPlatformLookup,
+  // Service mapping helpers
+  DEFAULT_SERVICE_MAPPINGS,
+  ensureServiceMappings,
+  getServiceMappings,
+  getSvcAtServiceIds,
   // Exported for other SP tools to reuse auth + drive lookup
   getGraphToken,
   getSpDriveBase,

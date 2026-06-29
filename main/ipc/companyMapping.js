@@ -2,7 +2,7 @@ const fs   = require('fs');
 const path = require('path');
 const { dialog, shell } = require('electron');
 const { USER_DATA, getMainWindow, loadMappings, saveMappingsFile } = require('../shared/state');
-const { loadHubDirectory, saveHubDirectory } = require('../shared/hubDirectory');
+const { loadHubDirectory, saveHubDirectory, ensureServiceMappings, DEFAULT_SERVICE_MAPPINGS } = require('../shared/hubDirectory');
 const { getPax8Token, pax8Paginate, resolveProductDetails } = require('../shared/pax8');
 const { atFetch, atQuery } = require('../shared/at');
 const { parseCSVLine, mkProductKey, termLabel } = require('../shared/csvMappings');
@@ -80,7 +80,7 @@ function findByPax8Id(companies, pax8Id) {
 }
 
 // Ensure data is in v2 format; if it's an old flat format, return as-is (no conversion).
-function isV2(data) { return data && data._version === 2; }
+function isV2(data) { return data && data._version >= 2; } // v2 = AT-centric; v3 = AT-centric + serviceMappings
 
 // ─── Name normalisation ───────────────────────────────────────────────────────
 const normName = s => (s || '').toLowerCase()
@@ -154,8 +154,8 @@ module.exports = function registerCompanyMapping(ipcMain) {
           if (prevPax8?.source === 'manual' && prevEntry.atId) {
             const entry = byAtId.get(prevEntry.atId) || (() => {
               const e = { atId: prevEntry.atId, atName: prevEntry.atName, excluded: prevEntry.excluded || false, platforms: {} };
-              // Carry over BP data from previous entry
               if (prevEntry.platforms?.blackpoint) e.platforms.blackpoint = prevEntry.platforms.blackpoint;
+              if (prevEntry.platforms?.kaseya)     e.platforms.kaseya     = prevEntry.platforms.kaseya;
               byAtId.set(prevEntry.atId, e);
               return e;
             })();
@@ -182,6 +182,7 @@ module.exports = function registerCompanyMapping(ipcMain) {
               platforms: {},
             };
             if (prev?.platforms?.blackpoint) e.platforms.blackpoint = prev.platforms.blackpoint;
+            if (prev?.platforms?.kaseya)     e.platforms.kaseya     = prev.platforms.kaseya;
             byAtId.set(atIdNum, e);
             return e;
           })();
@@ -202,6 +203,7 @@ module.exports = function registerCompanyMapping(ipcMain) {
                 platforms: {},
               };
               if (prev?.platforms?.blackpoint) e.platforms.blackpoint = prev.platforms.blackpoint;
+              if (prev?.platforms?.kaseya)     e.platforms.kaseya     = prev.platforms.kaseya;
               byAtId.set(matched.id, e);
               return e;
             })();
@@ -217,6 +219,7 @@ module.exports = function registerCompanyMapping(ipcMain) {
               const entry = byAtId.get(prev.atId) || (() => {
                 const e = { atId: prev.atId, atName: prev.atName || '', excluded: prev.excluded || false, platforms: {} };
                 if (prev.platforms?.blackpoint) e.platforms.blackpoint = prev.platforms.blackpoint;
+                if (prev.platforms?.kaseya)     e.platforms.kaseya     = prev.platforms.kaseya;
                 byAtId.set(prev.atId, e);
                 return e;
               })();
@@ -236,12 +239,12 @@ module.exports = function registerCompanyMapping(ipcMain) {
         }
       }
 
-      // Preserve AT/BP-only entries that have no Pax8 data
+      // Preserve AT-centric entries (Kaseya, Blackpoint) that have no Pax8 match
       if (isV2(existing)) {
         for (const entry of (existing.companies || [])) {
           if (!entry.atId) continue;
-          if (!byAtId.has(entry.atId) && entry.platforms?.blackpoint) {
-            byAtId.set(entry.atId, { ...entry, platforms: { ...entry.platforms, pax8: [] } });
+          if (!byAtId.has(entry.atId) && (entry.platforms?.blackpoint || entry.platforms?.kaseya)) {
+            byAtId.set(entry.atId, { ...entry, platforms: { ...entry.platforms, pax8: entry.platforms.pax8 || [] } });
           }
         }
       }
@@ -552,6 +555,238 @@ module.exports = function registerCompanyMapping(ipcMain) {
     }
     shell.showItemInFolder(coPath);
     return { success: true, coPath, svcPath, coCount, svcCount, hasRef: !!refRows };
+  });
+
+  // ── Refresh AT Classification labels from Autotask API ──────────────────────
+  // Reads the integer `classification` field directly on the Companies entity
+  // and writes the resolved label back to hub entries as atClassification.
+  // Only writes to hub when at least one value actually changes.
+  const AT_CLASSIFICATION_MAP = {
+    18: 'TC', 19: 'TC-Lite', 16: 'TC+', 20: 'Legacy',
+    200: 'Needs Some Love!', 13: 'At Risk Account', 15: 'Break Fix',
+    201: 'Co Managed', 9: 'Canceled', 10: 'Delinquent', 17: 'Vendor',
+    202: 'Onboarding', 203: 'Offboarding', 5: 'Block Hour',
+    6: 'Call List', 7: 'Target', 8: 'No Fit Now',
+  };
+
+  ipcMain.handle('cm-update-at-classifications', async () => {
+    try {
+      const hub = await loadMappingsCentral();
+
+      // Paginate through all active companies, reading only id + classification
+      const allCos = [];
+      let maxId = 0;
+      while (true) {
+        const r = await atFetch('/Companies/query', {
+          method: 'POST',
+          body: JSON.stringify({
+            filter: [
+              { field: 'isActive',       op: 'eq', value: true },
+              { field: 'id',             op: 'gt', value: maxId },
+            ],
+            includeFields: ['id', 'classification'],
+          }),
+        });
+        const items = r.items || [];
+        if (!items.length) break;
+        allCos.push(...items);
+        maxId = Math.max(...items.map(i => i.id));
+        if (items.length < 500) break;
+      }
+
+      const byId = new Map(allCos.map(c => [c.id, c]));
+      let changed = 0;
+      for (const entry of (hub.companies || [])) {
+        if (!entry.atId) continue;
+        const co = byId.get(entry.atId);
+        if (!co) continue;
+        const label = AT_CLASSIFICATION_MAP[co.classification] || null;
+        if (label !== (entry.atClassification || null)) {
+          if (label) entry.atClassification = label;
+          else        delete entry.atClassification;
+          changed++;
+        }
+      }
+      if (changed > 0) {
+        hub._updated = new Date().toISOString();
+        await saveMappingsCentral(hub);
+      }
+      return { ok: true, updated: changed };
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  // ── Get full hub data (AT-centric companies + serviceMappings) ───────────────
+  ipcMain.handle('cm-get-hub-data', async () => {
+    const hub = await loadMappingsCentral();
+    ensureServiceMappings(hub);
+
+    // Filter hub companies to only those with an active AT record.
+    // Query once, build a Set of active IDs, then filter.
+    let activeAtIds = null;
+    try {
+      const atCos = await atQuery('/Companies', [{ field: 'isActive', op: 'eq', value: true }]);
+      activeAtIds = new Set((atCos || []).map(c => c.id));
+    } catch { /* if AT is unavailable, show all */ }
+
+    const allCompanies = hub.companies || [];
+    // Only filter when we got a non-empty result — an empty Set means the query returned
+    // nothing useful (rate limit, transient error), so fall back to showing all.
+    const companies = (activeAtIds && activeAtIds.size > 0)
+      ? allCompanies.filter(c => !c.atId || activeAtIds.has(c.atId))
+      : allCompanies;
+
+    return {
+      companies,
+      serviceMappings: hub.serviceMappings || JSON.parse(JSON.stringify(DEFAULT_SERVICE_MAPPINGS)),
+      lastSync:        hub._updated || hub.lastSync || null,
+      _storageSource:  hub._storageSource,
+    };
+  });
+
+  // ── Search Autotask services by name (live search for mapping editor) ────────
+  ipcMain.handle('cm-search-at-services', async (_, name) => {
+    try {
+      const term = (name || '').trim().substring(0, 25);
+      if (!term) return [];
+      const services = await atQuery('/Services', [
+        { field: 'name', op: 'contains', value: term },
+      ]);
+      return (services || []).slice(0, 15).map(s => ({ id: s.id, name: s.name || '' }));
+    } catch { return []; }
+  });
+
+  // ── Save (upsert) a service mapping entry ───────────────────────────────────
+  ipcMain.handle('cm-save-service-mapping', async (_, { tool, mapping }) => {
+    try {
+      const hub = await loadMappingsCentral();
+      ensureServiceMappings(hub);
+      if (!hub.serviceMappings[tool]) hub.serviceMappings[tool] = [];
+      const idx = hub.serviceMappings[tool].findIndex(m => m.id === mapping.id);
+      if (idx >= 0) hub.serviceMappings[tool][idx] = { ...hub.serviceMappings[tool][idx], ...mapping };
+      else          hub.serviceMappings[tool].push(mapping);
+      hub._version = 3;
+      hub._updated = new Date().toISOString();
+      await saveMappingsCentral(hub);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  // ── Delete a service mapping entry ──────────────────────────────────────────
+  ipcMain.handle('cm-delete-service-mapping', async (_, { tool, id }) => {
+    try {
+      const hub = await loadMappingsCentral();
+      if (hub.serviceMappings?.[tool]) {
+        hub.serviceMappings[tool] = hub.serviceMappings[tool].filter(m => m.id !== id);
+      }
+      hub._updated = new Date().toISOString();
+      await saveMappingsCentral(hub);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  // ── Exclude / un-exclude an AT-centric company by atId ──────────────────────
+  ipcMain.handle('cm-set-at-excluded', async (_, { atId, excluded }) => {
+    try {
+      const hub = await loadMappingsCentral();
+      const entry = (hub.companies || []).find(e => e.atId === atId);
+      if (!entry) return { ok: false, error: `AT company ${atId} not found` };
+      if (excluded) entry.excluded = true;
+      else          delete entry.excluded;
+      hub._updated = new Date().toISOString();
+      await saveMappingsCentral(hub);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  // ── Remove a platform mapping from a hub entry ──────────────────────────────
+  // platform: 'kaseya' | 'blackpoint' | 'pax8'
+  // platformName: the name value used to identify the specific item to remove
+  ipcMain.handle('cm-remove-platform-mapping', async (_, { atId, platform, platformName }) => {
+    try {
+      const hub = await loadMappingsCentral();
+      const entry = (hub.companies || []).find(e => e.atId === atId);
+      if (!entry) return { ok: false, error: 'Entry not found' };
+      if (platform === 'blackpoint') {
+        delete entry.platforms.blackpoint;
+      } else if (platform === 'kaseya') {
+        const arr = Array.isArray(entry.platforms.kaseya) ? entry.platforms.kaseya : (entry.platforms.kaseya ? [entry.platforms.kaseya] : []);
+        entry.platforms.kaseya = arr.filter(k => k.name !== platformName);
+        if (!entry.platforms.kaseya.length) delete entry.platforms.kaseya;
+      } else if (platform === 'pax8') {
+        const arr = Array.isArray(entry.platforms.pax8) ? entry.platforms.pax8 : (entry.platforms.pax8 ? [entry.platforms.pax8] : []);
+        entry.platforms.pax8 = arr.filter(p => p.name !== platformName);
+      }
+      hub._updated = new Date().toISOString();
+      await saveMappingsCentral(hub);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  // ── Reassign a platform mapping to a different AT company ────────────────────
+  // Moves the platform entry from fromAtId to toAtId (creates toAtId entry if needed).
+  ipcMain.handle('cm-reassign-platform', async (_, { fromAtId, toAtId, toAtName, platform, platformName }) => {
+    try {
+      const hub = await loadMappingsCentral();
+      const companies = hub.companies || [];
+      const fromEntry = companies.find(e => e.atId === fromAtId);
+      if (!fromEntry) return { ok: false, error: 'Source entry not found' };
+
+      let toEntry = companies.find(e => e.atId === toAtId);
+      if (!toEntry) {
+        toEntry = { atId: toAtId, atName: toAtName || '', excluded: false, platforms: {} };
+        companies.push(toEntry);
+      } else if (toAtName && !toEntry.atName) {
+        toEntry.atName = toAtName;
+      }
+
+      if (platform === 'blackpoint') {
+        const data = fromEntry.platforms.blackpoint;
+        delete fromEntry.platforms.blackpoint;
+        toEntry.platforms.blackpoint = data;
+      } else if (platform === 'kaseya') {
+        const arr = Array.isArray(fromEntry.platforms.kaseya) ? fromEntry.platforms.kaseya : (fromEntry.platforms.kaseya ? [fromEntry.platforms.kaseya] : []);
+        const idx = arr.findIndex(k => k.name === platformName);
+        if (idx < 0) return { ok: false, error: 'Kaseya entry not found' };
+        const [item] = arr.splice(idx, 1);
+        fromEntry.platforms.kaseya = arr.length ? arr : undefined;
+        if (!fromEntry.platforms.kaseya) delete fromEntry.platforms.kaseya;
+        if (!Array.isArray(toEntry.platforms.kaseya)) toEntry.platforms.kaseya = toEntry.platforms.kaseya ? [toEntry.platforms.kaseya] : [];
+        toEntry.platforms.kaseya.push(item);
+      } else if (platform === 'pax8') {
+        const arr = Array.isArray(fromEntry.platforms.pax8) ? fromEntry.platforms.pax8 : [];
+        const idx = arr.findIndex(p => p.name === platformName);
+        if (idx < 0) return { ok: false, error: 'Pax8 entry not found' };
+        const [item] = arr.splice(idx, 1);
+        fromEntry.platforms.pax8 = arr;
+        if (!Array.isArray(toEntry.platforms.pax8)) toEntry.platforms.pax8 = [];
+        toEntry.platforms.pax8.push(item);
+      }
+
+      hub._updated = new Date().toISOString();
+      await saveMappingsCentral(hub);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  // ── Add a new platform name mapping to an AT company ────────────────────────
+  // For kaseya/blackpoint: platformName is the display name in that system.
+  ipcMain.handle('cm-add-platform-mapping', async (_, { atId, platform, platformName }) => {
+    try {
+      const hub = await loadMappingsCentral();
+      const entry = (hub.companies || []).find(e => e.atId === atId);
+      if (!entry) return { ok: false, error: 'Entry not found' };
+      if (!entry.platforms) entry.platforms = {};
+      const data = { name: platformName, confidence: 1, confirmedAt: new Date().toISOString() };
+      if (platform === 'blackpoint') {
+        entry.platforms.blackpoint = data;
+      } else if (platform === 'kaseya') {
+        if (!Array.isArray(entry.platforms.kaseya)) entry.platforms.kaseya = entry.platforms.kaseya ? [entry.platforms.kaseya] : [];
+        entry.platforms.kaseya.push(data);
+      }
+      hub._updated = new Date().toISOString();
+      await saveMappingsCentral(hub);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
   });
 
   // ── CSV Import ───────────────────────────────────────────────────────────────
