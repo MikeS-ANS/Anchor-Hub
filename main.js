@@ -5,6 +5,10 @@ const fs = require('fs');
 const keytar = require('keytar');
 const fetch = require('node-fetch');
 
+// ─── App identity (must be set before app.whenReady) ─────────────────────────
+app.setName('Anchor Hub');
+if (process.platform === 'win32') app.setAppUserModelId('Anchor Hub');
+
 // ─── User data directory ──────────────────────────────────────────────────────
 // In production (packaged app) __dirname is inside the read-only app.asar, so
 // all user-writable files (mappings, CSV exports, etc.) must live in userData.
@@ -15,12 +19,25 @@ if (app.isPackaged && !fs.existsSync(USER_DATA)) fs.mkdirSync(USER_DATA, { recur
 // ─── Microsoft SSO / Entra ID ─────────────────────────────────────────────────
 require('./main/ipc/auth')(ipcMain);
 
+// ─── AT current-user resource (M365 email → AT resource ID) ──────────────────
+const { resolveCurrentUserResource } = require('./main/shared/atHelpers');
+ipcMain.handle('at-get-current-resource', async () => {
+  try { return await resolveCurrentUserResource(); } catch { return null; }
+});
+
 // ─── Azure Key Vault ──────────────────────────────────────────────────────────
 const { kvGetSecret } = require('./main/shared/kv');
 require('./main/ipc/kv')(ipcMain);
 
 // ─── Duo Management API ───────────────────────────────────────────────────────
 require('./main/ipc/duo')(ipcMain);
+
+// ─── Meraki Admin Management ──────────────────────────────────────────────────
+require('./main/ipc/meraki')(ipcMain);
+
+// ─── Meraki License & EoL Expiration ──────────────────────────────────────────
+const merakiExpiration = require('./main/ipc/merakiExpiration');
+merakiExpiration(ipcMain);
 
 // ─── Datto RMM ────────────────────────────────────────────────────────────────
 require('./main/ipc/datto')(ipcMain);
@@ -84,8 +101,13 @@ function createWindow() {
   setMainWindow(mainWindow);
 }
 
-app.whenReady().then(() => {
+const scheduler = require('./main/shared/scheduler');
+merakiExpiration.registerWithScheduler(scheduler);
+
+app.whenReady().then(async () => {
   createWindow();
+  // Start the job scheduler — delayed 10s so the window is visible before any scan kicks off
+  setTimeout(() => scheduler.startScheduler(mainWindow), 10000);
   // Check for updates 8s after launch (non-blocking) — only in packaged builds
   if (app.isPackaged) {
     setTimeout(() => autoUpdater.checkForUpdates(), 8000);

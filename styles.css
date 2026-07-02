@@ -616,13 +616,15 @@ code.ph {
 }
 .metric-card.m-warn  { border-color: #fbbf2440; background: #fbbf2408; }
 .metric-card.m-clean { border-color: #34d39940; background: #34d39908; }
-.metric-card.m-orange{ border-color: var(--accent)40; background: var(--accent)08; }
-.metric-card.m-error { border-color: #f8717140; background: #f8717108; }
+.metric-card.m-orange   { border-color: var(--accent)40; background: var(--accent)08; }
+.metric-card.m-error    { border-color: #f8717140; background: #f8717108; }
+.metric-card.m-critical { border-color: #fb923c40; background: #fb923c08; }
 .metric-num, .metric-value { font-size: 22px; font-weight: 800; line-height: 1.1; color: var(--text); }
 .metric-card.m-warn   .metric-num, .metric-card.m-warn   .metric-value { color: var(--warn); }
 .metric-card.m-clean  .metric-num, .metric-card.m-clean  .metric-value { color: var(--success); }
-.metric-card.m-orange .metric-num, .metric-card.m-orange .metric-value { color: var(--accent); }
-.metric-card.m-error  .metric-num, .metric-card.m-error  .metric-value { color: var(--error); }
+.metric-card.m-orange    .metric-num, .metric-card.m-orange    .metric-value { color: var(--accent); }
+.metric-card.m-error     .metric-num, .metric-card.m-error     .metric-value { color: var(--error); }
+.metric-card.m-critical  .metric-num, .metric-card.m-critical  .metric-value { color: #fb923c; }
 .metric-label { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); }
 
 /* ─── Multi-select checkbox dropdown ───────────────────────────────────────── */
@@ -2175,4 +2177,32 @@ code.ph {
   border-radius: 6px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.18);
 }
+
+/* ── Meraki Expiration Report ───────────────────────────────────────────── */
+.mexp-badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:100px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; line-height:1.4; white-space:nowrap; }
+.mexp-badge.mexp-expired  { background:rgba(248,113,113,.15); color:#f87171; }
+.mexp-badge.mexp-critical { background:rgba(249,115,22,.14);  color:#fb923c; }
+.mexp-badge.mexp-warning  { background:rgba(251,191,36,.14);  color:#fbbf24; }
+.mexp-badge.mexp-notice   { background:rgba(99,102,241,.14);  color:#a5b4fc; }
+.mexp-badge.mexp-clean    { background:rgba(74,222,128,.1);   color:#4ade80; }
+.mexp-badge.mexp-coterm   { background:rgba(99,102,241,.1);   color:#a5b4fc; font-size:10px; padding:1px 6px; }
+
+.mexp-scheduler-strip { font-size:12px; color:var(--text-muted); padding:5px 0 14px; }
+
+.mexp-filter-tab { padding:5px 14px; border-radius:6px; cursor:pointer; font-size:13px; font-weight:500; border:1px solid var(--border); background:transparent; color:var(--text-muted); transition:all .15s; white-space:nowrap; }
+.mexp-filter-tab.active { border-color:var(--accent); background:rgba(99,102,241,.12); color:var(--accent); }
+.mexp-filter-tab:hover:not(.active) { border-color:var(--text-muted); color:var(--text-primary); }
+.mexp-filter-chip { padding:3px 10px; border-radius:20px; cursor:pointer; font-size:12px; font-weight:500; border:1px solid var(--border); background:transparent; color:var(--text-muted); transition:all .15s; white-space:nowrap; }
+.mexp-filter-chip.active { border-color:var(--accent); background:rgba(99,102,241,.18); color:var(--accent); }
+.mexp-filter-chip:hover:not(.active) { border-color:var(--text-muted); color:var(--text-primary); }
+
+.mexp-org-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; margin-bottom:8px; overflow:hidden; }
+.mexp-org-header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; cursor:pointer; user-select:none; gap:8px; }
+.mexp-org-header:hover { background:rgba(255,255,255,.03); }
+.mexp-org-devices { border-top:1px solid var(--border); overflow-x:auto; }
+
+.mexp-th { padding:8px 12px; font-size:11px; font-weight:600; color:var(--text-muted); text-align:left; text-transform:uppercase; letter-spacing:.04em; white-space:nowrap; background:var(--bg); }
+.mexp-device-row { border-bottom:1px solid var(--border); }
+.mexp-device-row:last-child { border-bottom:none; }
+.mexp-device-row:hover { background:rgba(255,255,255,.025); }
 

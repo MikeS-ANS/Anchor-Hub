@@ -715,6 +715,10 @@ module.exports = function registerCompanyMapping(ipcMain) {
       } else if (platform === 'pax8') {
         const arr = Array.isArray(entry.platforms.pax8) ? entry.platforms.pax8 : (entry.platforms.pax8 ? [entry.platforms.pax8] : []);
         entry.platforms.pax8 = arr.filter(p => p.name !== platformName);
+      } else if (platform === 'meraki') {
+        const arr = Array.isArray(entry.platforms.meraki) ? entry.platforms.meraki : [];
+        entry.platforms.meraki = arr.filter(m => m.name !== platformName);
+        if (!entry.platforms.meraki.length) delete entry.platforms.meraki;
       }
       hub._updated = new Date().toISOString();
       await saveMappingsCentral(hub);
@@ -782,6 +786,9 @@ module.exports = function registerCompanyMapping(ipcMain) {
       } else if (platform === 'kaseya') {
         if (!Array.isArray(entry.platforms.kaseya)) entry.platforms.kaseya = entry.platforms.kaseya ? [entry.platforms.kaseya] : [];
         entry.platforms.kaseya.push(data);
+      } else if (platform === 'meraki') {
+        if (!Array.isArray(entry.platforms.meraki)) entry.platforms.meraki = [];
+        if (!entry.platforms.meraki.find(m => m.name === platformName)) entry.platforms.meraki.push(data);
       }
       hub._updated = new Date().toISOString();
       await saveMappingsCentral(hub);
