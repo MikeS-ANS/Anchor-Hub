@@ -122,7 +122,8 @@ document.getElementById('btn-close').addEventListener('click', () => window.api.
 }());
 
 // ─── Auth / SSO ───────────────────────────────────────────────────────────────
-let _currentUser = null;
+let _currentUser        = null;
+let _currentAtResource  = null;  // { resourceId, roleId, firstName, lastName, email } or null
 
 function renderLogin(errorMsg) {
   document.getElementById('sidebar').style.display = 'none';
@@ -227,6 +228,63 @@ async function initApp() {
   document.getElementById('sidebar').style.display = '';
   renderUserChip(_currentUser);
   window.api.getSidebarConfig().then(cfg => { renderSidebar(cfg); navigate('home'); });
+  _initGlobalScanPill();
+  // Resolve AT resource for current user in background — used by time entry forms
+  window.api.atGetCurrentResource().then(r => { _currentAtResource = r || null; }).catch(() => {});
+}
+
+// ─── Global background-scan status pill ───────────────────────────────────────
+// Floats in the bottom-right corner whenever a scheduled scan is running,
+// regardless of which tool is currently open.
+function _initGlobalScanPill() {
+  const pill = document.createElement('div');
+  pill.id = 'global-scan-pill';
+  pill.style.cssText = `
+    position:fixed;bottom:20px;right:20px;z-index:9999;
+    background:#1e2130;border:1px solid var(--border);border-radius:999px;
+    padding:8px 16px;display:none;align-items:center;gap:10px;
+    font-size:12px;color:var(--text-muted);box-shadow:0 4px 20px rgba(0,0,0,.5);
+    transition:opacity .3s;
+  `;
+  pill.innerHTML = `
+    <span style="width:8px;height:8px;border-radius:50%;background:#3b82f6;
+      display:inline-block;animation:pulse-dot 1.4s ease-in-out infinite"></span>
+    <span id="global-scan-pill-text">Meraki scan running…</span>
+  `;
+  document.body.appendChild(pill);
+
+  // Inject keyframe if not already present
+  if (!document.getElementById('pulse-dot-style')) {
+    const s = document.createElement('style');
+    s.id = 'pulse-dot-style';
+    s.textContent = `@keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.3}}`;
+    document.head.appendChild(s);
+  }
+
+  let _scanHideTimer = null;
+
+  window.api.onMerakiExpProgress(data => {
+    const textEl = document.getElementById('global-scan-pill-text');
+    if (!textEl) return;
+
+    // Don't interfere if the user is already watching the Meraki tool's own progress UI
+    const onMerakiTool = !!document.getElementById('mexp-scan-progress');
+    if (onMerakiTool) { pill.style.display = 'none'; return; }
+
+    clearTimeout(_scanHideTimer);
+    pill.style.display = 'flex';
+
+    if (data.phase === 'complete' || data.phase === 'done') {
+      textEl.textContent = 'Meraki scan complete';
+      pill.style.borderColor = 'rgba(74,222,128,.4)';
+      pill.querySelector('span').style.background = '#4ade80';
+      _scanHideTimer = setTimeout(() => { pill.style.display = 'none'; pill.style.borderColor = ''; }, 5000);
+    } else if (data.orgsTotal > 0) {
+      textEl.textContent = `Meraki scan: ${data.orgsDone || 0} / ${data.orgsTotal} orgs`;
+    } else {
+      textEl.textContent = data.msg ? `Meraki scan: ${data.msg}` : 'Meraki scan running…';
+    }
+  });
 }
 
 // ─── Auth gate — check for existing session, show login if none ───────────────
@@ -355,6 +413,8 @@ function navigate(view) {
   else if (view === 'msc-agreements')      renderMscAgreements();
   else if (view === 'duo-management')      renderDuoManagement();
   else if (view === 'project-profitability') renderProjectProfitability();
+  else if (view === 'meraki-admin')         renderMerakiAdmin();
+  else if (view === 'meraki-expiration')   renderMerakiExpiration();
   else if (view === 'settings') renderSettings();
   else if (view === 'help')     renderHelp();
 }
@@ -383,6 +443,8 @@ const TOOL_DEFS = [
     icon: `<rect x="1" y="2" width="14" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M4 6h4M4 9h6M4 12h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M10 8l2 2 3-3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>` },
   { key: 'msc-agreements',      label: 'MSC Agreements',
     icon: `<rect x="2" y="1" width="12" height="14" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M5 4h6M5 7h6M5 10h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="11" cy="11" r="3" fill="var(--bg,#0d0f14)" stroke="currentColor" stroke-width="1.2"/><path d="M11 9.8v1.2l.8.8" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>` },
+  { key: 'meraki-admin',        label: 'Meraki Admin Management',
+    icon: `<path d="M8 1.5L2 4.5v4c0 3.3 2.4 5.5 6 6 3.6-.5 6-2.7 6-6v-4L8 1.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.8" stroke="currentColor" stroke-width="1.2"/><path d="M5.5 8h1M9.5 8h1M8 5.5v1M8 9.5v1" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>` },
   { key: 'duo-management',     label: 'Duo Management',
     icon: `<circle cx="8" cy="6" r="3" stroke="currentColor" stroke-width="1.4"/><path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="13" cy="5" r="2" fill="var(--bg,#0d0f14)" stroke="currentColor" stroke-width="1.2"/><path d="M12.3 5l.7.7 1.2-1.2" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>` },
   { key: 'contract-changes',    label: 'Autotask Contract Changes',
@@ -393,6 +455,8 @@ const TOOL_DEFS = [
     icon: `<path d="M8 1.5L2 4.5v4c0 3.3 2.4 5.5 6 6 3.6-.5 6-2.7 6-6v-4L8 1.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 8l1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>` },
   { key: 'project-profitability', label: 'Project Profitability',
     icon: `<path d="M2 12l3-4 3 2 3-5 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 14H2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>` },
+  { key: 'meraki-expiration', label: 'Meraki License Management',
+    icon: `<rect x="1" y="5" width="14" height="8" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M4 9h4M10 9h2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="12.5" cy="4.5" r="3" fill="var(--bg,#0d0f14)" stroke="currentColor" stroke-width="1.2"/><path d="M12.5 3.3v1.2l.9.9" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>` },
 ];
 
 let _sidebarConfig  = { visibility: {}, layout: [] };
@@ -541,6 +605,12 @@ const HOME_CARDS = [
     label: 'Project Profitability',
     desc:  'Analyze completed project margins, invoiced revenue vs cost of delivery, and lead performance.',
     icon:  `<svg width="24" height="24" viewBox="0 0 16 16" fill="none"><path d="M2 12l3-4 3 2 3-5 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 14H2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>`,
+  },
+  {
+    key:   'meraki-expiration',
+    label: 'Meraki License Management',
+    desc:  'Track Meraki license renewals and hardware end-of-life across all client orgs. Cross-references Autotask CI records and flags date mismatches.',
+    icon:  `<svg width="24" height="24" viewBox="0 0 16 16" fill="none"><rect x="1" y="5" width="14" height="8" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M4 9h4M10 9h2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="12.5" cy="4.5" r="3" fill="var(--surface,#141720)" stroke="currentColor" stroke-width="1.2"/><path d="M12.5 3.3v1.2l.9.9" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   },
 ];
 
@@ -1480,6 +1550,7 @@ function renderCompanyMapping() {
       <button class="stab ${_cdActiveTab==='services'?'active':''}" data-cdtab="services">
         Pax8 Sync <span class="cd-tab-badge" id="cd-svc-badge"></span>
       </button>
+      <button class="stab ${_cdActiveTab==='meraki'?'active':''}" data-cdtab="meraki">Meraki Orgs</button>
     </div>
 
     <!-- ── Tab 1: Companies (AT-centric hub view) ──────────────────── -->
@@ -1504,6 +1575,7 @@ function renderCompanyMapping() {
               <th>Kaseya</th>
               <th>Blackpoint</th>
               <th>Pax8</th>
+              <th>Meraki</th>
               <th style="width:90px;text-align:center">Status</th>
             </tr></thead>
             <tbody id="cd-hub-tbody"><tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-muted);font-size:12px">Loading…</td></tr></tbody>
@@ -1594,6 +1666,13 @@ function renderCompanyMapping() {
         </div>
       </div>
     </div>
+
+    <!-- ── Tab 4: Meraki Org Mapping ─────────────────────────────────── -->
+    <div class="cd-panel ${_cdActiveTab==='meraki'?'':'hidden'}" id="cd-panel-meraki">
+      <div style="max-width:900px;margin-top:16px" id="mk-org-map-wrap">
+        <div id="mk-org-map-content"><div style="color:var(--text-muted);font-size:12px;padding:16px">Click the tab to load Meraki orgs…</div></div>
+      </div>
+    </div>
   `;
 
   // Tab switching
@@ -1603,8 +1682,11 @@ function renderCompanyMapping() {
       _cdSvcEditId = null;
       content.querySelectorAll('[data-cdtab]').forEach(b => b.classList.toggle('active', b === btn));
       content.querySelectorAll('.cd-panel').forEach(p => p.classList.toggle('hidden', p.id !== `cd-panel-${_cdActiveTab}`));
+      if (_cdActiveTab === 'meraki') renderMerakiOrgMapping();
     });
   });
+
+  if (_cdActiveTab === 'meraki') renderMerakiOrgMapping();
 
   // Admin buttons (now inside Pax8 Sync tab — wired after tab switch renders them)
   // We use event delegation on content for clicks, but these buttons exist on initial render:
@@ -1764,11 +1846,14 @@ function cdRenderCompaniesHub() {
     const p8 = c.platforms?.pax8;
     const p8Names = Array.isArray(p8) ? p8.map(p => p.name || '') : (p8?.name ? [p8.name] : []);
     if (p8Names.some(n => n.toLowerCase().includes(query))) return true;
+    const mk = c.platforms?.meraki;
+    const mkNames = Array.isArray(mk) ? mk.map(m => m.name || '') : (mk?.name ? [mk.name] : []);
+    if (mkNames.some(n => n.toLowerCase().includes(query))) return true;
     return false;
   }) : withExcl;
 
   if (!companies.length) {
-    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--text-muted);font-size:12px">${query ? `No results for "${escHtml(query)}"` : 'No companies in hub directory.'}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-muted);font-size:12px">${query ? `No results for "${escHtml(query)}"` : 'No companies in hub directory.'}</td></tr>`;
     return;
   }
 
@@ -1785,6 +1870,10 @@ function cdRenderCompaniesHub() {
     const p8Items = Array.isArray(p8) ? p8 : (p8 ? [p8] : []);
     const p8Html = cdChipsHtml('pax8', p8Items, c.atId, '#3b82f6');
 
+    const mk = c.platforms?.meraki;
+    const mkItems = Array.isArray(mk) ? mk : (mk ? [mk] : []);
+    const mkHtml = cdChipsHtml('meraki', mkItems, c.atId, '#10b981');
+
     const classLabel = c.atClassification
       ? `<span class="cd-classification-chip">${escHtml(c.atClassification)}</span>`
       : '';
@@ -1794,6 +1883,7 @@ function cdRenderCompaniesHub() {
       <td>${ksHtml}</td>
       <td>${bpHtml}</td>
       <td>${p8Html}</td>
+      <td>${mkHtml}</td>
       <td style="text-align:center">
         <button class="cd-excl-toggle ${c.excluded ? 'cd-excl-on' : ''}" data-atid="${c.atId}" data-excl="${c.excluded ? '1' : '0'}" title="${c.excluded ? 'Excluded — click to re-include' : 'Active — click to exclude'}">
           ${c.excluded ? 'Excluded' : 'Active'}
@@ -8472,6 +8562,2386 @@ function showSupportModal() {
   setTimeout(() => document.getElementById('sm-subject')?.focus(), 60);
 }
 
+// ─── Meraki License Management ─────────────────────────────────────────────────
+function renderMerakiExpiration() {
+  const content = document.getElementById('content');
+
+  // ── Module state ──────────────────────────────────────────────────────────
+  let _cache         = null;
+  let _settings      = null;
+  let _filters        = new Set();   // include filters — OR within row, AND between rows
+  let _excludeFilters = new Set();   // exclude filters — globally AND NOT, always wins
+  let _search        = '';
+  let _sortCol       = 'severity';  // default sort
+  let _sortDir       = 'asc';
+  let _scanning      = false;
+  let _scanLog       = [];
+  let _scanDone      = 0;
+  let _scanTotal     = 0;
+  let _expandedOrgs  = new Set();
+  let _orgDevicesMap = new Map();  // orgId → devices array; avoids JSON-in-attribute quoting bugs
+  let _showSettings  = false;
+  let _progressUnsub = null;
+  let _batchMode     = false;
+  let _batchSelected = new Set();  // orgIds checked for batch ticket creation
+
+  // ── Severity helpers ──────────────────────────────────────────────────────
+  const SEV_ORDER = { expired: 0, critical: 1, warning: 2, notice: 3, clean: 4 };
+  const SEV_LABEL = { expired: 'Expired', critical: 'Critical', warning: 'Warning', notice: 'Notice', clean: 'Clean' };
+  const SEV_CSS   = { expired: 'mexp-expired', critical: 'mexp-critical', warning: 'mexp-warning', notice: 'mexp-notice', clean: 'mexp-clean' };
+
+  function sevBadge(sev) {
+    return `<span class="mexp-badge ${SEV_CSS[sev] || 'mexp-clean'}">${SEV_LABEL[sev] || sev}</span>`;
+  }
+
+  function fmtDate(ds) {
+    if (!ds) return '—';
+    try {
+      // ISO path (YYYY-MM-DD…): parse as local midnight to avoid UTC-to-local shift
+      if (/^\d{4}-\d{2}-\d{2}/.test(ds)) {
+        const [y, m, d] = ds.slice(0, 10).split('-').map(Number);
+        return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      }
+      // Non-ISO path (e.g. Meraki co-term "Sep 25, 2026"): let the browser parse it
+      const date = new Date(ds);
+      if (!isNaN(date)) return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      return ds;
+    } catch { return ds; }
+  }
+
+  function fmtScanDate(iso) {
+    if (!iso) return 'never';
+    try {
+      return new Date(iso).toLocaleString('en-US', {
+        month: 'short', day: 'numeric', year: 'numeric',
+        hour: 'numeric', minute: '2-digit', hour12: true,
+      });
+    } catch { return iso; }
+  }
+
+  function daysLabel(d) {
+    if (d === null || d === undefined) return '';
+    return d < 0 ? `${Math.abs(d)}d ago` : `in ${d}d`;
+  }
+
+  function statusDot(s) {
+    const c = s === 'online' ? '#4ade80' : s === 'alerting' ? '#fbbf24' : s === 'dormant' ? '#6b7280' : '#ef4444';
+    return `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${c};margin-right:4px;vertical-align:middle;flex-shrink:0"></span>`;
+  }
+
+  function statusLabel(d) {
+    if (d.isUnclaimed) return 'Shelf spare';
+    const s = d.deviceStatus;
+    if (s === 'online')   return 'Online';
+    if (s === 'alerting') return 'Alerting';
+    if (s === 'dormant')  return 'Dormant';
+    return 'Offline';  // offline or unknown both display as Offline
+  }
+
+  function worstSev(devices) {
+    let best = 4;
+    for (const d of devices) best = Math.min(best, SEV_ORDER[d.severity] ?? 4);
+    return Object.keys(SEV_ORDER)[best] || 'clean';
+  }
+
+  function computeSummary(orgs) {
+    let expired = 0, critical = 0, warning = 0, notice = 0, orgsScanned = 0;
+    let online = 0, offline = 0, dormant = 0, alerting = 0, shelfSpare = 0;
+    let endOfSale = 0, endOfSupport = 0, noAtMatch = 0, dateMismatch = 0, hasUnused = 0;
+    for (const org of (orgs || [])) {
+      if (org.skipped || org.error) continue;
+      orgsScanned++;
+      if ((org.unusedLicenses?.length || 0) > 0) hasUnused++;
+      for (const d of (org.devices || [])) {
+        if      (d.severity === 'expired')  expired++;
+        else if (d.severity === 'critical') critical++;
+        else if (d.severity === 'warning')  warning++;
+        else if (d.severity === 'notice')   notice++;
+        if (d.isUnclaimed) shelfSpare++;
+        else if (d.deviceStatus === 'online')   online++;
+        else if (d.deviceStatus === 'offline' || d.deviceStatus === 'unknown') offline++;
+        else if (d.deviceStatus === 'dormant')  dormant++;
+        else if (d.deviceStatus === 'alerting') alerting++;
+        if (d.eosaleDate) endOfSale++;
+        if (d.eosDate) endOfSupport++;
+        if (!d.atMatch || d.atMatch.error) noAtMatch++;
+        else {
+          const atDate = d.atMatch?.warrantyExpirationDate;
+          const toYmd2 = s => { if (!s) return ''; const dt = new Date(s); return isNaN(dt) ? s.slice(0,10) : dt.toISOString().slice(0,10); };
+          if (d.licenseExpiry && toYmd2(d.licenseExpiry) !== toYmd2(atDate)) dateMismatch++;
+        }
+      }
+    }
+    return { expired, critical, warning, notice, orgsScanned,
+             online, offline, dormant, alerting, shelfSpare,
+             endOfSale, endOfSupport, noAtMatch, dateMismatch, hasUnused };
+  }
+
+  function matchesSearch(device, orgName) {
+    if (!_search) return true;
+    const q = _search.toLowerCase();
+    return (device.serial || '').toLowerCase().includes(q)
+        || (device.name   || '').toLowerCase().includes(q)
+        || (device.model  || '').toLowerCase().includes(q)
+        || (orgName       || '').toLowerCase().includes(q);
+  }
+
+  // Maps each filter key to its group — within a group it's OR, between groups it's AND.
+  // 'has-unused' is handled at the org level in buildOrgsHtml, not here.
+  const FILTER_KEY_GROUP = {
+    'expired': 'severity', 'critical': 'severity', 'warning': 'severity', 'notice': 'severity',
+    'online': 'status', 'offline': 'status', 'dormant': 'status', 'alerting': 'status', 'shelf-spare': 'status',
+    'end-of-sale': 'eol', 'end-of-support': 'eol',
+    'no-at-match': 'at', 'date-mismatch': 'at',
+  };
+
+  function _deviceMatchesFilter(d, f) {
+    const atDate = d.atMatch?.warrantyExpirationDate;
+    const toYmd = s => { const dt = new Date(s); return isNaN(dt) ? s.slice(0,10) : dt.toISOString().slice(0,10); };
+    if (f === 'expired')        return d.severity === 'expired';
+    if (f === 'critical')       return d.severity === 'critical';
+    if (f === 'warning')        return d.severity === 'warning';
+    if (f === 'notice')         return d.severity === 'notice';
+    if (f === 'online')         return d.deviceStatus === 'online'   && !d.isUnclaimed;
+    if (f === 'offline')        return (d.deviceStatus === 'offline' || d.deviceStatus === 'unknown') && !d.isUnclaimed;
+    if (f === 'dormant')        return d.deviceStatus === 'dormant'  && !d.isUnclaimed;
+    if (f === 'alerting')       return d.deviceStatus === 'alerting' && !d.isUnclaimed;
+    if (f === 'shelf-spare')    return !!d.isUnclaimed;
+    if (f === 'end-of-sale')    return !!d.eosaleDate;
+    if (f === 'end-of-support') return !!d.eosDate;
+    if (f === 'no-at-match')    return !d.atMatch || !!d.atMatch.error;
+    if (f === 'date-mismatch')  return !!(d.licenseExpiry && d.atMatch && !d.atMatch.error && toYmd(d.licenseExpiry) !== toYmd(atDate));
+    return true;
+  }
+
+  function filterDevice(d) {
+    // Excludes always win globally (AND NOT)
+    for (const f of _excludeFilters) {
+      if (f === 'has-unused') continue;  // org-level
+      if (_deviceMatchesFilter(d, f)) return false;
+    }
+
+    // Includes: OR within group, AND between groups
+    const includeDeviceFilters = [..._filters].filter(f => f !== 'has-unused');
+    if (includeDeviceFilters.length === 0) return true;
+
+    const byGroup = {};
+    for (const f of includeDeviceFilters) {
+      const g = FILTER_KEY_GROUP[f] || f;
+      if (!byGroup[g]) byGroup[g] = [];
+      byGroup[g].push(f);
+    }
+    for (const group of Object.values(byGroup)) {
+      if (!group.some(f => _deviceMatchesFilter(d, f))) return false;
+    }
+    return true;
+  }
+
+  function computeVisibleCounts() {
+    let devices = 0, orgs = 0;
+    for (const org of (_cache?.orgs || [])) {
+      if (org.skipped || org.error) continue;
+      if (_filters.has('has-unused')        && !(org.unusedLicenses?.length > 0)) continue;
+      if (_excludeFilters.has('has-unused') &&  (org.unusedLicenses?.length > 0)) continue;
+      const visible = (org.devices || []).filter(d => filterDevice(d) && matchesSearch(d, org.orgName));
+      if (!visible.length && !_filters.has('has-unused')) continue;
+      orgs++;
+      devices += visible.length;
+    }
+    return { devices, orgs };
+  }
+
+  // ── Render switch ─────────────────────────────────────────────────────────
+  function render() {
+    if (_scanning) { renderScanning(); return; }
+    if (!_cache)   { renderEmpty();    return; }
+    renderReport();
+  }
+
+  // ── Scanning progress view ────────────────────────────────────────────────
+  function renderScanning() {
+    const pct = _scanTotal > 0 ? Math.round((_scanDone / _scanTotal) * 100) : 0;
+    content.innerHTML = `
+      <div class="tool-header">
+        <h2>Meraki License Management</h2>
+        <p class="tool-subtitle">Scan in progress — do not close the app</p>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:620px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <span style="font-size:14px;font-weight:600;color:var(--text-primary)">Scanning Meraki organizations…</span>
+          <span style="font-size:12px;color:var(--text-muted)">${_scanDone} / ${_scanTotal || '?'}</span>
+        </div>
+        <div style="height:4px;background:var(--border);border-radius:2px;margin-bottom:20px;overflow:hidden">
+          <div style="height:100%;width:${pct}%;background:var(--accent);border-radius:2px;transition:width .3s"></div>
+        </div>
+        <div id="mexp-scan-log" style="font-family:monospace;font-size:12px;max-height:300px;overflow-y:auto;
+          background:var(--bg);border-radius:6px;padding:12px;color:var(--text-muted)">
+          ${_scanLog.map(l => `<div style="margin-bottom:2px">${escHtml(l)}</div>`).join('')}
+        </div>
+      </div>`;
+    const logEl = document.getElementById('mexp-scan-log');
+    if (logEl) logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  // ── Empty / first-run view ────────────────────────────────────────────────
+  function renderEmpty() {
+    content.innerHTML = `
+      <div class="tool-header">
+        <h2>Meraki License Management</h2>
+        <p class="tool-subtitle">License &amp; End-of-Life tracking across all client Meraki orgs</p>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+                  height:280px;gap:16px;color:var(--text-muted)">
+        <div style="font-size:40px">📡</div>
+        <div style="font-size:15px;font-weight:600;color:var(--text-primary)">No scan data yet</div>
+        <div style="font-size:13px;text-align:center;max-width:380px;line-height:1.6">
+          Run a scan to pull license &amp; EoL data from all client Meraki orgs and cross-reference with Autotask CIs.
+        </div>
+        <button class="btn btn-primary" id="mexp-btn-first-scan" style="margin-top:8px">Run First Scan</button>
+      </div>`;
+    document.getElementById('mexp-btn-first-scan')?.addEventListener('click', startScan);
+  }
+
+  // ── Full report view ──────────────────────────────────────────────────────
+  function renderReport() {
+    const { expired, critical, warning, notice, orgsScanned,
+            online, offline, dormant, alerting, shelfSpare,
+            endOfSale, endOfSupport, noAtMatch, dateMismatch, hasUnused } = computeSummary(_cache.orgs);
+    const totalFlagged = expired + critical + warning + notice;
+
+    const FILTER_GROUPS = [
+      { label: 'Severity', filters: [
+        { key: 'expired',  label: `Expired`,  count: expired  },
+        { key: 'critical', label: `Critical`, count: critical },
+        { key: 'warning',  label: `Warning`,  count: warning  },
+        { key: 'notice',   label: `Notice`,   count: notice   },
+      ]},
+      { label: 'Status', filters: [
+        { key: 'online',      label: 'Online',      count: online     },
+        { key: 'offline',     label: 'Offline',     count: offline    },
+        { key: 'dormant',     label: 'Dormant',     count: dormant    },
+        { key: 'alerting',    label: 'Alerting',    count: alerting   },
+        { key: 'shelf-spare', label: 'Shelf spare', count: shelfSpare },
+      ]},
+      { label: 'End of Life', filters: [
+        { key: 'end-of-sale',    label: 'End of Sale',    count: endOfSale    },
+        { key: 'end-of-support', label: 'End of Support', count: endOfSupport },
+      ]},
+      { label: 'AT', filters: [
+        { key: 'no-at-match',   label: 'No AT match',     count: noAtMatch   },
+        { key: 'date-mismatch', label: 'Date mismatch',   count: dateMismatch },
+      ]},
+      { label: 'Licenses', filters: [
+        { key: 'has-unused', label: 'Unused licenses', count: hasUnused },
+      ]},
+    ];
+
+    function chipHtml(f) {
+      const included = _filters.has(f.key);
+      const excluded = _excludeFilters.has(f.key);
+      const countStr = f.count !== undefined ? ` (${f.count})` : '';
+      const extraStyle = included
+        ? 'border-color:#4ade80;background:rgba(74,222,128,.15);color:#4ade80'
+        : excluded
+          ? 'border-color:#f87171;background:rgba(248,113,113,.12);color:#f87171;text-decoration:line-through'
+          : '';
+      const prefix = excluded ? '✕ ' : '';
+      return `<button class="mexp-filter-chip${included || excluded ? ' active' : ''}"
+        data-filter="${f.key}"
+        title="${excluded ? 'Excluding' : included ? 'Including' : 'Click to include, click again to exclude'}"
+        style="${extraStyle}">${prefix}${escHtml(f.label)}${countStr}</button>`;
+    }
+
+    function _nextRunLabel(settings) {
+      if (!settings?.scheduleEnabled) return `Scheduler disabled · Threshold: ${settings?.thresholdDays || 90}d`;
+      const time = settings.scheduleTime || '08:00';
+      const [h, m] = time.split(':').map(Number);
+      const now = new Date();
+      let next;
+      if (settings.scheduleType === 'weekly') {
+        const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+        const target = DAYS.indexOf(settings.scheduleDay || 'Monday');
+        next = new Date(now);
+        next.setHours(h, m, 0, 0);
+        let diff = (target - now.getDay() + 7) % 7;
+        if (diff === 0 && next <= now) diff = 7;
+        next.setDate(next.getDate() + diff);
+      } else {
+        next = new Date(now);
+        next.setHours(h, m, 0, 0);
+        if (next <= now) next.setDate(next.getDate() + 1);
+      }
+      const opts = { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' };
+      return `Next scan: ${next.toLocaleString('en-US', opts)} · Threshold: ${settings.thresholdDays || 90}d`;
+    }
+    const schedLabel = _nextRunLabel(_settings);
+
+    const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+    const s = _settings || {};
+
+    const settingsHtml = `
+      <div id="mexp-settings-panel" style="display:${_showSettings ? '' : 'none'};
+        background:var(--surface);border:1px solid var(--border);border-radius:12px;
+        padding:20px;margin-bottom:20px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <span style="font-size:14px;font-weight:600">Scan Settings</span>
+          <button id="mexp-settings-close" style="background:none;border:none;cursor:pointer;
+            color:var(--text-muted);font-size:20px;padding:0 4px;line-height:1">×</button>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px">
+          <div class="field-group">
+            <label class="field-label">Expiration Threshold (days)</label>
+            <input class="field-input" id="mexp-threshold" type="number" min="1" max="730"
+              value="${s.thresholdDays || 90}" style="width:80px" />
+            <p class="field-hint">Devices expiring within this window are flagged.</p>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Concurrent AT Lookups</label>
+            <input class="field-input" id="mexp-concurrency" type="number" min="1" max="15"
+              value="${s.concurrency || 5}" style="width:80px" />
+            <p class="field-hint">Parallel CI queries per org (1–15).</p>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Schedule Type</label>
+            <select class="field-input" id="mexp-sched-type" style="width:130px;color-scheme:dark">
+              <option value="weekly"  ${s.scheduleType === 'weekly'  ? 'selected' : ''}>Weekly</option>
+              <option value="monthly" ${s.scheduleType === 'monthly' ? 'selected' : ''}>Monthly</option>
+            </select>
+          </div>
+          <div class="field-group" id="mexp-day-group">
+            <label class="field-label" id="mexp-day-label">${s.scheduleType === 'monthly' ? 'Day of Month' : 'Day of Week'}</label>
+            ${s.scheduleType === 'monthly'
+              ? `<input class="field-input" id="mexp-sched-day" type="number" min="1" max="28" value="${s.scheduleDay || 1}" style="width:80px" />`
+              : `<select class="field-input" id="mexp-sched-day" style="width:130px;color-scheme:dark">${DAYS.map(d => `<option value="${d}" ${s.scheduleDay === d ? 'selected' : ''}>${d}</option>`).join('')}</select>`
+            }
+          </div>
+          <div class="field-group">
+            <label class="field-label">Scan Time</label>
+            <input class="field-input" id="mexp-sched-time" type="time"
+              value="${s.scheduleTime || '08:00'}" style="width:100px" />
+          </div>
+          <div class="field-group" style="display:flex;align-items:flex-end;padding-bottom:6px">
+            <label class="dry-run-toggle" style="cursor:pointer">
+              <input type="checkbox" id="mexp-sched-enabled" ${s.scheduleEnabled ? 'checked' : ''} />
+              Enable scheduled scan
+            </label>
+          </div>
+        </div>
+        <div style="margin-top:16px;display:flex;gap:10px;align-items:center">
+          <button class="btn btn-primary btn-sm" id="mexp-save-settings">Save Settings</button>
+          <span class="save-status" id="mexp-settings-status"></span>
+        </div>
+      </div>`;
+
+    content.innerHTML = `
+      <div class="tool-header" style="margin-bottom:8px">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+          <div>
+            <h2>Meraki License Management</h2>
+            <p class="tool-subtitle">Last scanned: ${fmtScanDate(_cache.scannedAt)} · ${orgsScanned} orgs</p>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-shrink:0;padding-top:4px">
+            <button class="btn btn-secondary btn-sm" id="mexp-btn-rescan">Re-scan All</button>
+            <button class="btn btn-secondary btn-sm" id="mexp-btn-export-html">Export Report</button>
+            <button class="btn btn-secondary btn-sm" id="mexp-btn-export">Export CSV</button>
+            <button class="btn btn-secondary btn-sm" id="mexp-btn-batch"
+              style="${_batchMode ? 'background:rgba(99,102,241,.2);border-color:var(--accent);color:var(--accent)' : ''}">
+              🎫 Batch Tickets${_batchMode ? ` (${_batchSelected.size})` : ''}
+            </button>
+            <button class="btn btn-secondary btn-sm" id="mexp-btn-settings"
+              title="Scan settings" style="${_showSettings ? 'background:rgba(99,102,241,.2);border-color:var(--accent);color:var(--accent)' : ''}">⚙</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="mexp-scheduler-strip">📅 ${escHtml(schedLabel)}</div>
+
+      ${settingsHtml}
+
+      <div class="metric-strip" style="margin-bottom:6px">
+        <div class="metric-card m-error">    <span class="metric-num">${expired}</span>  <span class="metric-label">Expired</span></div>
+        <div class="metric-card m-critical"> <span class="metric-num">${critical}</span> <span class="metric-label">Critical</span></div>
+        <div class="metric-card m-warn">     <span class="metric-num">${warning}</span>  <span class="metric-label">Warning</span></div>
+        <div class="metric-card">            <span class="metric-num">${notice}</span>   <span class="metric-label">Notice</span></div>
+        <div class="metric-card m-clean">    <span class="metric-num">${orgsScanned}</span> <span class="metric-label">Orgs Scanned</span></div>
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px;font-size:11px;color:var(--text-muted);padding:0 2px">
+        ${[
+          { css:'mexp-expired',  label:'Expired',  desc:'Past expiration date' },
+          { css:'mexp-critical', label:'Critical', desc:`< ${Math.round((_settings?.thresholdDays||90)*0.33)}d remaining` },
+          { css:'mexp-warning',  label:'Warning',  desc:`${Math.round((_settings?.thresholdDays||90)*0.33)}–${Math.round((_settings?.thresholdDays||90)*0.67)}d remaining` },
+          { css:'mexp-notice',   label:'Notice',   desc:`${Math.round((_settings?.thresholdDays||90)*0.67)}–${_settings?.thresholdDays||90}d remaining` },
+          { css:'mexp-clean',    label:'Clean',    desc:`Beyond ${_settings?.thresholdDays||90}d threshold` },
+        ].map(s => `<span style="display:flex;align-items:center;gap:5px">
+          <span class="mexp-badge ${s.css}" style="font-size:10px;padding:1px 6px">${s.label}</span>
+          <span>${s.desc}</span>
+        </span>`).join('')}
+      </div>
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;
+                  padding:12px 16px;margin-bottom:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:12px">
+          <input id="mexp-search" class="field-input" placeholder="Search serial, name, model, org…"
+            value="${escHtml(_search)}"
+            style="flex:1;min-width:180px;max-width:380px;padding:6px 10px;font-size:13px" />
+          <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+            ${(() => { const { devices, orgs } = computeVisibleCounts();
+              return `<span id="mexp-visible-count" style="font-size:12px;color:var(--text-muted)">
+                ${devices} device${devices !== 1 ? 's' : ''} · ${orgs} org${orgs !== 1 ? 's' : ''}
+              </span>`; })()}
+            ${(_filters.size + _excludeFilters.size) > 0 ? `<button id="mexp-clear-filters" style="font-size:11px;padding:2px 8px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer">Clear filters</button>` : ''}
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${FILTER_GROUPS.map(g => `
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span style="font-size:11px;color:var(--text-muted);min-width:80px;flex-shrink:0">${escHtml(g.label)}</span>
+              <div style="display:flex;gap:4px;flex-wrap:wrap">
+                ${g.filters.map(chipHtml).join('')}
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:flex-end;gap:6px;margin-bottom:8px">
+        <button id="mexp-expand-all" style="font-size:11px;padding:2px 10px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer">Expand all</button>
+        <button id="mexp-collapse-all" style="font-size:11px;padding:2px 10px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer">Collapse all</button>
+      </div>
+
+      ${_batchMode ? `
+      <div id="mexp-batch-bar" style="position:sticky;top:0;z-index:50;background:var(--surface);
+            border:1px solid var(--accent);border-radius:8px;padding:10px 16px;margin-bottom:12px;
+            display:flex;align-items:center;gap:12px;box-shadow:0 2px 8px rgba(0,0,0,.3)">
+        <span style="font-size:13px;font-weight:600;color:var(--accent)">🎫 Batch mode</span>
+        <span id="mexp-batch-count" style="font-size:13px;color:var(--text-muted)">
+          ${_batchSelected.size === 0 ? 'Select orgs below' : `${_batchSelected.size} org${_batchSelected.size !== 1 ? 's' : ''} selected`}
+        </span>
+        <div style="flex:1"></div>
+        <button id="mexp-batch-create" ${_batchSelected.size === 0 ? 'disabled' : ''}
+          style="padding:6px 16px;border-radius:6px;border:none;
+                 background:${_batchSelected.size > 0 ? 'var(--accent)' : 'var(--border)'};
+                 color:${_batchSelected.size > 0 ? '#fff' : 'var(--text-muted)'};
+                 font-weight:600;cursor:${_batchSelected.size > 0 ? 'pointer' : 'default'};font-size:13px">
+          Create ${_batchSelected.size > 0 ? _batchSelected.size : ''} Ticket${_batchSelected.size !== 1 ? 's' : ''}
+        </button>
+        <button id="mexp-batch-cancel"
+          style="padding:6px 14px;border-radius:6px;border:1px solid var(--border);
+                 background:none;color:var(--text-muted);cursor:pointer;font-size:13px">
+          Cancel
+        </button>
+      </div>` : ''}
+
+      <div id="mexp-orgs-container">
+        ${buildOrgsHtml() || '<div style="color:var(--text-muted);padding:20px;text-align:center;font-size:14px">No devices match the current filter.</div>'}
+      </div>
+
+      <div id="mexp-audit-section" style="margin-top:24px"></div>`;
+
+    wireEvents();
+    renderAuditSection();
+  }
+
+  function sortedDevices(devices) {
+    const col = _sortCol;
+    const dir = _sortDir === 'asc' ? 1 : -1;
+    const SEV = { expired: 0, critical: 1, warning: 2, notice: 3, clean: 4 };
+    return [...devices].sort((a, b) => {
+      let va, vb;
+      if (col === 'severity')      { va = SEV[a.severity] ?? 5;       vb = SEV[b.severity] ?? 5; }
+      else if (col === 'name')     { va = (a.name || a.serial).toLowerCase(); vb = (b.name || b.serial).toLowerCase(); }
+      else if (col === 'model')    { va = (a.model || '').toLowerCase();      vb = (b.model || '').toLowerCase(); }
+      else if (col === 'status')   { va = (a.deviceStatus || '').toLowerCase(); vb = (b.deviceStatus || '').toLowerCase(); }
+      else if (col === 'license')  { va = a.licenseExpiry || 'zzz'; vb = b.licenseExpiry || 'zzz'; }
+      else if (col === 'eol')      { va = a.eosDate || a.eosaleDate || 'zzz'; vb = b.eosDate || b.eosaleDate || 'zzz'; }
+      else if (col === 'at')       { va = a.atMatch && !a.atMatch.error ? 0 : 1; vb = b.atMatch && !b.atMatch.error ? 0 : 1; }
+      else return 0;
+      if (va < vb) return -1 * dir;
+      if (va > vb) return  1 * dir;
+      return 0;
+    });
+  }
+
+  // ── Build org cards HTML ──────────────────────────────────────────────────
+  function buildOrgsHtml() {
+    if (!_cache?.orgs?.length) return '';
+    let html = '';
+    _orgDevicesMap.clear();
+
+    const orgs = [..._cache.orgs].sort((a, b) => (a.orgName || '').localeCompare(b.orgName || ''));
+
+    for (const org of orgs) {
+      if (org.skipped) continue;
+
+      if (org.error) {
+        html += `<div class="mexp-org-card" style="border-left:3px solid var(--error,#f87171)">
+          <div class="mexp-org-header" style="cursor:default">
+            <span style="font-weight:600">${escHtml(org.orgName)}</span>
+            <span class="mexp-badge mexp-expired" style="margin-left:auto">Error</span>
+          </div>
+          <div style="padding:8px 16px 12px;font-size:12px;color:var(--text-muted)">${escHtml(org.error)}</div>
+        </div>`;
+        continue;
+      }
+
+      // Org-level filter: "Unused licenses" can include or exclude orgs with unassigned licenses
+      if (_filters.has('has-unused')        && !(org.unusedLicenses?.length > 0)) continue;
+      if (_excludeFilters.has('has-unused') &&  (org.unusedLicenses?.length > 0)) continue;
+
+      const visible = sortedDevices((org.devices || []).filter(d => filterDevice(d) && matchesSearch(d, org.orgName)));
+      if (!visible.length && !_filters.has('has-unused')) continue;
+      // When "Unused licenses" filter is active, show org even if all devices pass (show org header + assign btn)
+      if (!visible.length) {
+        // Org matches filter but no devices visible — show a compact card with just the header
+        const unusedCount = org.unusedLicenses?.length || 0;
+        const orgLicBtnMin = `<button class="mexp-org-assign-btn"
+          data-org-id="${escHtml(org.orgId)}"
+          data-org-name="${escHtml(org.orgName)}"
+          title="${unusedCount} unassigned license${unusedCount !== 1 ? 's' : ''}"
+          style="font-size:11px;padding:3px 10px;border-radius:5px;
+                 border:1px solid #f59e0b;background:rgba(245,158,11,.1);
+                 color:#f59e0b;cursor:pointer;white-space:nowrap">
+          ⚠ ${unusedCount} Unused
+        </button>`;
+        html += `<div class="mexp-org-card" data-org-id="${escHtml(org.orgId)}">
+          <div class="mexp-org-header" style="cursor:default">
+            <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0">
+              <span style="font-weight:600;font-size:14px">${escHtml(org.orgName)}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;margin-left:12px">
+              <span style="font-size:12px;color:var(--text-muted)">${escHtml(org.atCompanyName || 'No AT match')}</span>
+              ${orgLicBtnMin}
+            </div>
+          </div>
+        </div>`;
+        continue;
+      }
+
+      // Store device list in a Map — avoids putting JSON in an HTML attribute (double-quote quoting issue)
+      _orgDevicesMap.set(org.orgId, visible.map(d => ({
+        serial:        d.serial,
+        name:          d.name || d.serial,
+        model:         d.model || '',
+        ciId:          String(d.atMatch?.id || ''),
+        severity:      d.severity,
+        licenseExpiry: d.licenseExpiry || '',
+        eosDate:       d.eosDate || '',
+      })));
+
+      const worst    = worstSev(visible);
+      const expanded = _expandedOrgs.has(org.orgId);
+      const cotermBadge = org.isCoterm
+        ? `<span class="mexp-badge mexp-coterm" style="margin-left:6px">CO-TERM</span>`
+        : '';
+
+      const ticketBtn = org.atCompanyId
+        ? `<button class="mexp-ticket-btn"
+              data-org-id="${escHtml(org.orgId)}"
+              data-org-name="${escHtml(org.orgName)}"
+              data-at-company-id="${escHtml(String(org.atCompanyId))}"
+              data-at-company-name="${escHtml(org.atCompanyName || '')}"
+              style="font-size:11px;padding:3px 10px;border-radius:5px;border:1px solid #10b981;
+                     background:rgba(16,185,129,.1);color:#10b981;cursor:pointer;white-space:nowrap">
+              🎫 Ticket
+           </button>`
+        : '';
+
+      const unusedCount = !org.isCoterm ? (org.unusedLicenses?.length || 0) : 0;
+      const orgLicBtn = !org.isCoterm
+        ? `<button class="mexp-org-lic-btn"
+              data-org-id="${escHtml(org.orgId)}"
+              data-org-name="${escHtml(org.orgName)}"
+              data-at-company-id="${escHtml(String(org.atCompanyId || ''))}"
+              data-at-company-name="${escHtml(org.atCompanyName || '')}"
+              style="font-size:11px;padding:3px 10px;border-radius:5px;border:1px solid var(--accent);
+                     background:rgba(99,102,241,.1);color:var(--accent);cursor:pointer;white-space:nowrap">
+              + License
+           </button>
+           ${unusedCount > 0
+             ? `<button class="mexp-org-assign-btn"
+                  data-org-id="${escHtml(org.orgId)}"
+                  data-org-name="${escHtml(org.orgName)}"
+                  title="${unusedCount} unassigned license${unusedCount !== 1 ? 's' : ''} — click to auto-assign"
+                  style="font-size:11px;padding:3px 10px;border-radius:5px;
+                         border:1px solid #f59e0b;background:rgba(245,158,11,.1);
+                         color:#f59e0b;cursor:pointer;white-space:nowrap">
+                  ⚠ ${unusedCount} Unused
+               </button>`
+             : ''}`
+        : '';
+
+      // In batch mode: auto-expand selected orgs; hide individual ticket/license buttons
+      const isBatchSelected = _batchMode && _batchSelected.has(org.orgId);
+      const showExpanded    = expanded || isBatchSelected;
+      const batchCb         = _batchMode
+        ? `<input type="checkbox" class="mexp-batch-cb" data-org-id="${escHtml(org.orgId)}"
+              ${isBatchSelected ? 'checked' : ''}
+              style="width:15px;height:15px;cursor:pointer;flex-shrink:0;accent-color:var(--accent)">`
+        : '';
+
+      html += `
+        <div class="mexp-org-card" data-org-id="${escHtml(org.orgId)}"
+          style="${isBatchSelected ? 'border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)' : ''}">
+          <div class="mexp-org-header" data-toggle-org="${escHtml(org.orgId)}">
+            <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;overflow:hidden">
+              ${batchCb}
+              <span class="mexp-expand-icon" style="transition:transform .15s;transform:rotate(${showExpanded ? 90 : 0}deg);flex-shrink:0">▸</span>
+              <span style="font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(org.orgName)}</span>
+              ${cotermBadge}
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;margin-left:12px">
+              <span style="font-size:12px;color:var(--text-muted);white-space:nowrap">
+                ${escHtml(org.atCompanyName || 'No AT match')} · ${visible.length} device${visible.length !== 1 ? 's' : ''}
+              </span>
+              ${_batchMode ? '' : orgLicBtn}
+              ${_batchMode ? '' : ticketBtn}
+              ${worst !== 'clean' ? sevBadge(worst) : ''}
+            </div>
+          </div>
+          <div class="mexp-org-devices" style="display:${showExpanded ? '' : 'none'}">
+            ${buildDeviceTable(visible, org)}
+          </div>
+        </div>`;
+    }
+    return html;
+  }
+
+  // Compute days-left fresh from a date string at render time (not from cached scan value).
+  // d.daysLeft in the cache is the worst-case figure and may come from EoS, not license expiry.
+  function freshDays(dateStr) {
+    if (!dateStr) return null;
+    return Math.ceil((new Date(dateStr) - Date.now()) / 86400000);
+  }
+
+  function buildDeviceTable(devices, org) {
+    const orgIsCoterm    = org?.isCoterm || false;
+    const orgId          = org?.orgId          || '';
+    const orgName        = org?.orgName        || '';
+    const atCompanyId    = org?.atCompanyId    || '';
+    const atCompanyName  = org?.atCompanyName  || '';
+
+    const rows = devices.map(d => {
+      const cotermOrDevice = orgIsCoterm || d.isCoterm;
+
+      // Compute days fresh per-date so each column shows its own countdown
+      const licDays    = freshDays(d.licenseExpiry);
+      const eosDays    = freshDays(d.eosDate);
+      const eosaleDays = freshDays(d.eosaleDate);
+
+      const licCell = d.licenseExpiry
+        ? `${escHtml(fmtDate(d.licenseExpiry))} <span style="color:var(--text-muted);font-size:11px">(${daysLabel(licDays)})</span>`
+        : '<span style="color:var(--text-muted)">—</span>';
+
+      const eosCell = `<div>${d.eosaleDate
+        ? `<span style="color:var(--text-muted);font-size:10px">Sale: </span>${escHtml(fmtDate(d.eosaleDate))} <span style="color:var(--text-muted);font-size:11px">(${daysLabel(eosaleDays)})</span>`
+        : `<span style="color:var(--text-muted)">Sale: —</span>`
+      }</div><div style="margin-top:3px">${d.eosDate
+        ? `<span style="color:var(--text-muted);font-size:10px">Support: </span>${escHtml(fmtDate(d.eosDate))} <span style="color:var(--text-muted);font-size:11px">(${daysLabel(eosDays)})</span>`
+        : `<span style="color:var(--text-muted)">Support: —</span>`
+      }</div>`;
+
+      let atCell;
+      if (d.atMatch && !d.atMatch.error) {
+        const ciUrl    = `https://ww5.autotask.net/Autotask/AutotaskExtend/ExecuteCommand.aspx?Code=OpenInstalledProduct&InstalledProductID=${d.atMatch.id}`;
+        const atDate   = d.atMatch.warrantyExpirationDate;
+        const atDateFmt = atDate ? fmtDate(atDate) : '—';
+        // Mismatch when dates differ OR when AT date is blank but Meraki has one
+        const toYmd = s => { if (!s) return ''; const d2 = new Date(s); return isNaN(d2) ? s.slice(0,10) : d2.toISOString().slice(0,10); };
+        const liveMismatch = !!(d.licenseExpiry && toYmd(d.licenseExpiry) !== toYmd(atDate));
+        const syncBtn  = liveMismatch
+          ? `<button class="mexp-sync-at-btn"
+                data-serial="${escHtml(d.serial)}"
+                data-device-name="${escHtml(d.name || d.serial)}"
+                data-ci-id="${escHtml(String(d.atMatch.id))}"
+                data-ci-is-active="${d.atMatch.isActive === false ? 'false' : 'true'}"
+                data-new-date="${escHtml(d.licenseExpiry || '')}"
+                data-old-date="${escHtml(atDate || '')}"
+                data-org-name="${escHtml(orgName)}"
+                data-at-company-name="${escHtml(atCompanyName)}"
+                style="margin-left:5px;font-size:10px;padding:2px 6px;border-radius:4px;
+                       border:1px solid #fbbf24;background:rgba(251,191,36,.12);
+                       color:#fbbf24;cursor:pointer;white-space:nowrap"
+                title="Update AT warranty date to match Meraki (${escHtml(fmtDate(d.licenseExpiry))})">
+                Sync ↑
+             </button>`
+          : '';
+        atCell = `<div>
+          <a class="mexp-ci-link" href="#" data-url="${escHtml(ciUrl)}"
+             style="color:var(--success,#4ade80);font-size:12px;text-decoration:none;cursor:pointer"
+             title="Open CI ${d.atMatch.id} in Autotask">Matched</a>
+          ${liveMismatch ? `<span style="color:#fbbf24;font-size:10px;margin-left:3px" title="AT date differs from Meraki">⚠</span>` : ''}
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;display:flex;align-items:center">
+          AT: ${escHtml(atDateFmt)}${syncBtn}
+        </div>`;
+      } else {
+        const reason = d.atMatch?.error ? d.atMatch.error : d.isUnclaimed ? 'Device not in a network' : 'No CI found for this serial';
+        atCell = `<span style="color:var(--text-muted);font-size:12px" title="${escHtml(reason)}">Not matched</span>`;
+      }
+
+      return `<tr class="mexp-device-row">
+        <td style="padding:8px 12px">${sevBadge(d.severity)}</td>
+        <td style="padding:8px 12px">
+          <div style="font-weight:500;font-size:13px">${escHtml(d.name || d.serial)}</div>
+          <div style="font-size:11px;color:var(--text-muted);font-family:monospace">${escHtml(d.serial)}</div>
+        </td>
+        <td style="padding:8px 12px;font-size:12px">${escHtml(d.model || '—')}</td>
+        <td style="padding:8px 12px;font-size:12px">
+          <div style="display:flex;align-items:center">${statusDot(d.isUnclaimed ? 'dormant' : d.deviceStatus)}${escHtml(statusLabel(d))}${d.isUnclaimed ? `<span style="margin-left:5px;font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(107,114,128,.2);color:var(--text-muted)">shelf spare</span>` : ''}</div>
+        </td>
+        <td style="padding:8px 12px;font-size:12px">${licCell}</td>
+        <td style="padding:8px 12px;font-size:12px">${eosCell}</td>
+        <td style="padding:8px 12px">${atCell}</td>
+      </tr>`;
+    }).join('');
+
+    const sortIcon = col => {
+      if (_sortCol !== col) return `<span style="opacity:.35;margin-left:4px">⇅</span>`;
+      return `<span style="margin-left:4px">${_sortDir === 'asc' ? '▲' : '▼'}</span>`;
+    };
+    const th = (col, label) =>
+      `<th class="mexp-th mexp-th-sort" data-sort-col="${col}" style="cursor:pointer;user-select:none">${label}${sortIcon(col)}</th>`;
+
+    return `<table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr>
+          ${th('severity', 'Severity')}
+          ${th('name',     'Device')}
+          ${th('model',    'Model')}
+          ${th('status',   'Status')}
+          ${th('license',  'License Expiry')}
+          ${th('eol',      'End of Life')}
+          ${th('at',       'AT Match')}
+          <th class="mexp-th">Actions</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  }
+
+  // ── Event wiring ──────────────────────────────────────────────────────────
+  function wireEvents() {
+    document.getElementById('mexp-btn-rescan')?.addEventListener('click', startScan);
+    document.getElementById('mexp-btn-export-html')?.addEventListener('click', exportHtmlReport);
+    document.getElementById('mexp-btn-export')?.addEventListener('click', exportCsv);
+
+    // Batch ticket mode toggle
+    document.getElementById('mexp-btn-batch')?.addEventListener('click', () => {
+      _batchMode = !_batchMode;
+      if (!_batchMode) _batchSelected.clear();
+      renderReport();
+    });
+    document.getElementById('mexp-batch-cancel')?.addEventListener('click', () => {
+      _batchMode = false;
+      _batchSelected.clear();
+      renderReport();
+    });
+    document.getElementById('mexp-batch-create')?.addEventListener('click', () => {
+      if (_batchSelected.size === 0) return;
+      showBatchTicketModal();
+    });
+
+    document.getElementById('mexp-btn-settings')?.addEventListener('click', () => {
+      _showSettings = !_showSettings;
+      render();
+    });
+    document.getElementById('mexp-settings-close')?.addEventListener('click', () => {
+      _showSettings = false;
+      render();
+    });
+
+    document.getElementById('mexp-save-settings')?.addEventListener('click', saveSettings);
+
+    // Schedule type dropdown changes day widget between select and number input
+    document.getElementById('mexp-sched-type')?.addEventListener('change', e => {
+      const dayGroup = document.getElementById('mexp-day-group');
+      const dayLabel = document.getElementById('mexp-day-label');
+      if (!dayGroup || !dayLabel) return;
+      const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+      if (e.target.value === 'monthly') {
+        dayLabel.textContent = 'Day of Month';
+        const inp = Object.assign(document.createElement('input'), {
+          id: 'mexp-sched-day', type: 'number', min: '1', max: '28',
+          value: '1', className: 'field-input',
+        });
+        inp.style.width = '80px';
+        dayGroup.querySelector('input,select')?.replaceWith(inp);
+      } else {
+        dayLabel.textContent = 'Day of Week';
+        const sel = document.createElement('select');
+        sel.id = 'mexp-sched-day'; sel.className = 'field-input'; sel.style.width = '130px';
+        sel.style.colorScheme = 'dark';
+        DAYS.forEach(d => {
+          const o = document.createElement('option');
+          o.value = d; o.textContent = d;
+          if ((_settings?.scheduleDay || 'Monday') === d) o.selected = true;
+          sel.appendChild(o);
+        });
+        dayGroup.querySelector('input,select')?.replaceWith(sel);
+      }
+    });
+
+    // Multi-select filter chips — 3-state: off → include (green) → exclude (red) → off
+    content.querySelectorAll('.mexp-filter-chip').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const f = btn.dataset.filter;
+        if (_filters.has(f)) {
+          // include → exclude
+          _filters.delete(f);
+          _excludeFilters.add(f);
+        } else if (_excludeFilters.has(f)) {
+          // exclude → off
+          _excludeFilters.delete(f);
+        } else {
+          // off → include
+          _filters.add(f);
+        }
+        // Changing filters invalidates batch selections — orgs may no longer be visible
+        if (_batchMode) _batchSelected.clear();
+        renderReport();
+      });
+    });
+
+    // Clear all filters
+    document.getElementById('mexp-clear-filters')?.addEventListener('click', () => {
+      _filters.clear();
+      _excludeFilters.clear();
+      if (_batchMode) _batchSelected.clear();
+      renderReport();
+    });
+
+    // Expand / collapse all org cards
+    document.getElementById('mexp-expand-all')?.addEventListener('click', () => {
+      (_cache?.orgs || []).forEach(o => { if (!o.skipped && !o.error) _expandedOrgs.add(o.orgId); });
+      refreshOrgs();
+    });
+    document.getElementById('mexp-collapse-all')?.addEventListener('click', () => {
+      _expandedOrgs.clear();
+      refreshOrgs();
+    });
+
+    // Search (debounced)
+    const searchEl = document.getElementById('mexp-search');
+    if (searchEl) {
+      let timer;
+      searchEl.addEventListener('input', e => {
+        clearTimeout(timer);
+        timer = setTimeout(() => { _search = e.target.value; refreshOrgs(); }, 200);
+      });
+    }
+
+    // Org expand/collapse + "Add License" button — event delegation on the container
+    const container = document.getElementById('mexp-orgs-container');
+    if (container) {
+      container.addEventListener('click', async e => {
+        // Column sort
+        const sortTh = e.target.closest('.mexp-th-sort');
+        if (sortTh) {
+          const col = sortTh.dataset.sortCol;
+          if (_sortCol === col) _sortDir = _sortDir === 'asc' ? 'desc' : 'asc';
+          else { _sortCol = col; _sortDir = 'asc'; }
+          refreshOrgs();
+          return;
+        }
+
+        // AT CI link — open in browser
+        const ciLink = e.target.closest('.mexp-ci-link');
+        if (ciLink) {
+          e.preventDefault();
+          e.stopPropagation();
+          const url = ciLink.dataset.url;
+          if (url) window.api.homeOpenUrl(url);
+          return;
+        }
+
+        // Sync AT date button
+        const syncBtn = e.target.closest('.mexp-sync-at-btn');
+        if (syncBtn) {
+          e.stopPropagation();
+          syncBtn.disabled = true;
+          syncBtn.textContent = '…';
+          const res = await window.api.merakiExpSyncAtDate({
+            ciId:          syncBtn.dataset.ciId,
+            ciIsActive:    syncBtn.dataset.ciIsActive !== 'false',
+            newDate:       syncBtn.dataset.newDate,
+            oldDate:       syncBtn.dataset.oldDate,
+            deviceSerial:  syncBtn.dataset.serial,
+            deviceName:    syncBtn.dataset.deviceName,
+            orgName:       syncBtn.dataset.orgName,
+            atCompanyName: syncBtn.dataset.atCompanyName,
+          });
+          if (res.ok) {
+            // Visual feedback — replace the whole AT cell inline
+            const td = syncBtn.closest('td');
+            if (td) {
+              const link = td.querySelector('.mexp-ci-link');
+              if (link) link.nextElementSibling?.remove(); // remove ⚠
+              syncBtn.closest('div')?.remove(); // remove the AT date row
+              const dateRow = document.createElement('div');
+              dateRow.style.cssText = 'font-size:11px;color:var(--text-muted);margin-top:2px';
+              dateRow.textContent = `AT: ${syncBtn.dataset.newDate ? new Date(syncBtn.dataset.newDate).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—'}`;
+              td.appendChild(dateRow);
+            }
+          } else {
+            syncBtn.disabled = false;
+            syncBtn.textContent = 'Sync ↑';
+            syncBtn.title = `Failed: ${res.error || 'unknown error'}`;
+            syncBtn.style.borderColor = 'var(--error)';
+            syncBtn.style.color = 'var(--error)';
+          }
+          return;
+        }
+
+        // "Ticket" button
+        const ticketBtn2 = e.target.closest('.mexp-ticket-btn');
+        if (ticketBtn2) {
+          e.stopPropagation();
+          const devices = _orgDevicesMap.get(ticketBtn2.dataset.orgId) || [];
+          showTicketModal({
+            orgId:         ticketBtn2.dataset.orgId,
+            orgName:       ticketBtn2.dataset.orgName,
+            atCompanyId:   ticketBtn2.dataset.atCompanyId,
+            atCompanyName: ticketBtn2.dataset.atCompanyName,
+            devices,
+          });
+          return;
+        }
+
+        // "+ License" org-level button
+        const licBtn = e.target.closest('.mexp-org-lic-btn');
+        if (licBtn) {
+          e.stopPropagation();
+          showRenewModal({
+            orgId:         licBtn.dataset.orgId,
+            orgName:       licBtn.dataset.orgName,
+            atCompanyId:   licBtn.dataset.atCompanyId,
+            atCompanyName: licBtn.dataset.atCompanyName,
+          });
+          return;
+        }
+
+        // "Assign Unused" button — assign already-claimed unassigned licenses
+        const assignBtn = e.target.closest('.mexp-org-assign-btn');
+        if (assignBtn) {
+          e.stopPropagation();
+          await showAssignLicensesModal({
+            orgId:   assignBtn.dataset.orgId,
+            orgName: assignBtn.dataset.orgName,
+            btn:     assignBtn,
+          });
+          return;
+        }
+
+        // Batch mode checkbox — toggle org selection, auto-expand, update bar
+        const batchCb = e.target.closest('.mexp-batch-cb');
+        if (batchCb) {
+          const orgId = batchCb.dataset.orgId;
+          if (batchCb.checked) {
+            _batchSelected.add(orgId);
+            _expandedOrgs.add(orgId);  // auto-expand so devices are visible
+          } else {
+            _batchSelected.delete(orgId);
+          }
+          refreshOrgs();
+          // Update batch bar count + button without full re-render
+          const countEl  = document.getElementById('mexp-batch-count');
+          const createEl = document.getElementById('mexp-batch-create');
+          if (countEl) countEl.textContent = _batchSelected.size === 0
+            ? 'Select orgs below'
+            : `${_batchSelected.size} org${_batchSelected.size !== 1 ? 's' : ''} selected`;
+          if (createEl) {
+            createEl.disabled  = _batchSelected.size === 0;
+            createEl.textContent = `Create ${_batchSelected.size > 0 ? _batchSelected.size : ''} Ticket${_batchSelected.size !== 1 ? 's' : ''}`;
+            createEl.style.background = _batchSelected.size > 0 ? 'var(--accent)' : 'var(--border)';
+            createEl.style.color      = _batchSelected.size > 0 ? '#fff' : 'var(--text-muted)';
+            createEl.style.cursor     = _batchSelected.size > 0 ? 'pointer' : 'default';
+          }
+          // Update header button label
+          const batchBtn = document.getElementById('mexp-btn-batch');
+          if (batchBtn) batchBtn.textContent = `🎫 Batch Tickets (${_batchSelected.size})`;
+          return;
+        }
+
+        // Org expand/collapse
+        const header = e.target.closest('[data-toggle-org]');
+        if (!header) return;
+        const orgId = header.dataset.toggleOrg;
+        if (_expandedOrgs.has(orgId)) _expandedOrgs.delete(orgId);
+        else _expandedOrgs.add(orgId);
+        const card    = container.querySelector(`.mexp-org-card[data-org-id="${orgId}"]`);
+        const devices = card?.querySelector('.mexp-org-devices');
+        const icon    = card?.querySelector('.mexp-expand-icon');
+        const open    = _expandedOrgs.has(orgId);
+        if (devices) devices.style.display = open ? '' : 'none';
+        if (icon)    icon.style.transform  = open ? 'rotate(90deg)' : 'rotate(0deg)';
+      });
+    }
+  }
+
+  // ── Refresh just the org cards (filter/search changed) ───────────────────
+  function refreshOrgs() {
+    const el = document.getElementById('mexp-orgs-container');
+    if (!el) return;
+    el.innerHTML = buildOrgsHtml()
+      || '<div style="color:var(--text-muted);padding:20px;text-align:center;font-size:14px">No devices match the current filter.</div>';
+    // Update the live device/org count label without full re-render
+    const countEl = document.getElementById('mexp-visible-count');
+    if (countEl) {
+      const { devices, orgs } = computeVisibleCounts();
+      countEl.textContent = `${devices} device${devices !== 1 ? 's' : ''} · ${orgs} org${orgs !== 1 ? 's' : ''}`;
+    }
+  }
+
+  // ── Scan ──────────────────────────────────────────────────────────────────
+  async function startScan() {
+    if (_scanning) return;
+    _scanning  = true;
+    _scanLog   = ['Initializing scan…'];
+    _scanDone  = 0;
+    _scanTotal = 0;
+    render();
+
+    if (_progressUnsub) { _progressUnsub(); _progressUnsub = null; }
+    _progressUnsub = window.api.onMerakiExpProgress(data => {
+      if (data.msg) _scanLog.push(data.msg);
+      if (_scanLog.length > 300) _scanLog = _scanLog.slice(-250);
+      if (data.orgsDone !== undefined) _scanDone  = data.orgsDone;
+      if (data.orgsTotal)              _scanTotal = data.orgsTotal;
+      renderScanning();
+    });
+
+    try {
+      const res = await window.api.merakiExpScan();
+      if (res.ok) _cache = res.data;
+      else _scanLog.push(`Scan failed: ${res.error || 'Unknown error'}`);
+    } catch (e) {
+      _scanLog.push(`Error: ${e.message}`);
+    } finally {
+      if (_progressUnsub) { _progressUnsub(); _progressUnsub = null; }
+      _scanning = false;
+      const sr = await window.api.merakiExpGetSettings().catch(() => null);
+      if (sr?.ok) _settings = sr.data;
+      render();
+    }
+  }
+
+  // ── Save settings ─────────────────────────────────────────────────────────
+  async function saveSettings() {
+    const get   = id => document.getElementById(id);
+    const threshold   = parseInt(get('mexp-threshold')?.value, 10);
+    const concurrency = parseInt(get('mexp-concurrency')?.value, 10);
+    const payload = {
+      thresholdDays:   isNaN(threshold)   ? (_settings?.thresholdDays || 90) : threshold,
+      concurrency:     isNaN(concurrency) ? (_settings?.concurrency   || 5)  : concurrency,
+      scheduleType:    get('mexp-sched-type')?.value    || 'weekly',
+      scheduleDay:     get('mexp-sched-day')?.value     || 'Monday',
+      scheduleTime:    get('mexp-sched-time')?.value    || '08:00',
+      scheduleEnabled: get('mexp-sched-enabled')?.checked ?? true,
+    };
+    const statusEl = get('mexp-settings-status');
+    if (statusEl) statusEl.textContent = 'Saving…';
+    const res = await window.api.merakiExpSaveSettings(payload);
+    if (res.ok) {
+      _settings = payload;
+      if (statusEl) { statusEl.textContent = 'Saved ✓'; statusEl.style.color = 'var(--success,#4ade80)'; }
+      setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2000);
+    } else {
+      if (statusEl) { statusEl.textContent = `Error: ${res.error}`; statusEl.style.color = 'var(--error,#f87171)'; }
+    }
+  }
+
+  // ── Export CSV ────────────────────────────────────────────────────────────
+  function exportCsv() {
+    if (!_cache?.orgs) return;
+    const header = ['Org','AT Company','Serial','Device Name','Model','Product Type',
+                    'Device Status','Severity','Days Left','Issue Type',
+                    'License Expiry','EoS Date','EoSale Date',
+                    'Co-Term','Unclaimed','AT CI ID','AT Warranty Date','AT Date Mismatch'];
+    const rows = [header];
+    for (const org of _cache.orgs) {
+      if (org.skipped || org.error) continue;
+      for (const d of (org.devices || [])) {
+        rows.push([
+          org.orgName, org.atCompanyName || '',
+          d.serial, d.name || '', d.model || '', d.productType || '', d.deviceStatus || '',
+          d.severity, d.daysLeft ?? '', d.issueType || '',
+          d.licenseExpiry || '', d.eosDate || '', d.eosaleDate || '',
+          d.isCoterm ? 'Yes' : 'No', d.isUnclaimed ? 'Yes' : 'No',
+          d.atMatch?.id || '', d.atMatch?.warrantyExpirationDate || '',
+          d.atDateMismatch ? 'Yes' : 'No',
+        ]);
+      }
+    }
+    const csv  = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url  = URL.createObjectURL(blob);
+    const a    = Object.assign(document.createElement('a'), {
+      href: url,
+      download: `meraki-expiration-${new Date().toISOString().slice(0,10)}.csv`,
+    });
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 500);
+  }
+
+  // ── Export HTML Report ────────────────────────────────────────────────────
+  function exportHtmlReport() {
+    if (!_cache?.orgs) return;
+
+    const orgs     = _cache.orgs.filter(o => !o.skipped && !o.error);
+    const scanDate = _cache.scannedAt ? new Date(_cache.scannedAt).toLocaleString('en-US', { dateStyle: 'long', timeStyle: 'short' }) : 'Unknown';
+    const genDate  = new Date().toLocaleString('en-US', { dateStyle: 'long', timeStyle: 'short' });
+
+    // ── Aggregate stats ──
+    let totalDevices = 0, expired = 0, critical = 0, warning = 0, notice = 0, clean = 0, mismatch = 0;
+    const orgStats = [];
+    for (const org of orgs) {
+      const s = { name: org.atCompanyName || org.orgName, orgName: org.orgName, isCoterm: org.isCoterm,
+                  expired: 0, critical: 0, warning: 0, notice: 0, clean: 0, devices: [], nextExpiry: null };
+      for (const d of (org.devices || [])) {
+        if (d.isUnclaimed) continue;
+        totalDevices++;
+        s[d.severity] = (s[d.severity] || 0) + 1;
+        if (d.severity === 'expired')  expired++;
+        else if (d.severity === 'critical') critical++;
+        else if (d.severity === 'warning')  warning++;
+        else if (d.severity === 'notice')   notice++;
+        else clean++;
+        if (d.atDateMismatch) mismatch++;
+        if (d.severity !== 'clean') s.devices.push(d);
+        if (d.licenseExpiry && d.severity !== 'clean') {
+          if (!s.nextExpiry || d.licenseExpiry < s.nextExpiry) s.nextExpiry = d.licenseExpiry;
+        }
+      }
+      s.total = s.expired + s.critical + s.warning + s.notice + s.clean;
+      if (s.expired + s.critical + s.warning + s.notice > 0) orgStats.push(s);
+    }
+    orgStats.sort((a, b) => (b.expired * 10 + b.critical * 4 + b.warning) - (a.expired * 10 + a.critical * 4 + a.warning));
+
+    const flagged   = expired + critical + warning + notice;
+    const pctClean  = totalDevices > 0 ? Math.round((clean / totalDevices) * 100) : 100;
+
+    // Health score: weighted deduction per flagged device
+    const deductions = expired * 10 + critical * 5 + warning * 2 + notice * 0.5;
+    const maxDeduct  = totalDevices * 10;
+    const score      = maxDeduct > 0 ? Math.max(0, Math.round(100 - (deductions / maxDeduct) * 100)) : 100;
+    const grade      = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : score >= 40 ? 'D' : 'F';
+    const gradeColor = score >= 90 ? '#16a34a' : score >= 75 ? '#2563eb' : score >= 60 ? '#d97706' : score >= 40 ? '#ea580c' : '#dc2626';
+    const gradeLabel = score >= 90 ? 'Excellent' : score >= 75 ? 'Good' : score >= 60 ? 'Needs Attention' : score >= 40 ? 'At Risk' : 'Critical';
+
+    const fmtDate = s => { if (!s) return '—'; const d = new Date(s); return isNaN(d) ? s : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); };
+    const severityBadge = (sev, count) => {
+      if (!count) return '';
+      const colors = { expired: '#dc2626', critical: '#ea580c', warning: '#d97706', notice: '#2563eb' };
+      return `<span style="display:inline-block;padding:2px 8px;border-radius:4px;background:${colors[sev]}1a;color:${colors[sev]};border:1px solid ${colors[sev]}40;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">${count} ${sev}</span>`;
+    };
+
+    const barPct = k => totalDevices > 0 ? ((({ expired, critical, warning, notice, clean })[k] / totalDevices) * 100).toFixed(1) : 0;
+    const barSegment = (color, pct, label) => pct > 0
+      ? `<div title="${label}: ${pct}%" style="width:${pct}%;background:${color};height:100%;display:inline-block;vertical-align:top"></div>` : '';
+
+    // ── Per-org sections ──
+    const orgSections = orgStats.map(s => {
+      const rows = s.devices.map(d => {
+        const sevColors = { expired: '#dc2626', critical: '#ea580c', warning: '#d97706', notice: '#2563eb' };
+        const c = sevColors[d.severity] || '#64748b';
+        const daysLabel = d.daysLeft < 0 ? `${Math.abs(d.daysLeft)}d ago` : d.daysLeft != null ? `${d.daysLeft}d` : '—';
+        return `<tr>
+          <td>${escHtml(d.name || d.serial)}</td>
+          <td style="color:#64748b;font-size:12px">${escHtml(d.model || '—')}</td>
+          <td style="font-family:monospace;font-size:12px;color:#64748b">${escHtml(d.serial)}</td>
+          <td><span style="padding:1px 7px;border-radius:3px;background:${c}1a;color:${c};border:1px solid ${c}40;font-size:11px;font-weight:700;text-transform:uppercase">${escHtml(d.severity)}</span></td>
+          <td style="font-weight:600;color:${c}">${escHtml(daysLabel)}</td>
+          <td>${escHtml(fmtDate(d.licenseExpiry))}</td>
+          <td>${escHtml(d.issueType === 'eos' ? 'End of Support' : d.issueType === 'both' ? 'License + EoS' : 'License Renewal')}</td>
+          <td style="color:${d.atMatch ? (d.atDateMismatch ? '#d97706' : '#16a34a') : '#94a3b8'}">${d.atMatch ? (d.atDateMismatch ? '⚠ Mismatch' : '✓ Synced') : 'Not in AT'}</td>
+        </tr>`;
+      }).join('');
+      const coterm = s.isCoterm ? `<span style="margin-left:6px;padding:1px 8px;border-radius:3px;background:#6366f11a;color:#6366f1;border:1px solid #6366f140;font-size:11px;font-weight:600">CO-TERM</span>` : '';
+      return `
+      <div style="margin-bottom:28px;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
+        <div style="background:#f8fafc;padding:12px 18px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-weight:700;font-size:15px;color:#1e293b">${escHtml(s.name)}</span>
+          ${coterm}
+          <span style="color:#94a3b8;font-size:12px;margin-left:4px">${escHtml(s.orgName !== s.name ? '· ' + s.orgName : '')}</span>
+          <span style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">
+            ${severityBadge('expired', s.expired)}${severityBadge('critical', s.critical)}${severityBadge('warning', s.warning)}${severityBadge('notice', s.notice)}
+          </span>
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <thead><tr style="background:#f1f5f9;color:#475569;font-size:11px;text-transform:uppercase;letter-spacing:.5px">
+              <th style="padding:8px 14px;text-align:left;font-weight:600">Device</th>
+              <th style="padding:8px 14px;text-align:left;font-weight:600">Model</th>
+              <th style="padding:8px 14px;text-align:left;font-weight:600">Serial</th>
+              <th style="padding:8px 14px;text-align:left;font-weight:600">Severity</th>
+              <th style="padding:8px 14px;text-align:left;font-weight:600">Days Left</th>
+              <th style="padding:8px 14px;text-align:left;font-weight:600">License Expiry</th>
+              <th style="padding:8px 14px;text-align:left;font-weight:600">Issue</th>
+              <th style="padding:8px 14px;text-align:left;font-weight:600">AT Status</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
+    }).join('');
+
+    const noIssuesMsg = orgStats.length === 0
+      ? `<div style="text-align:center;padding:48px;color:#64748b;font-size:15px">✓ No flagged devices across any monitored org.</div>` : '';
+
+    // ── Full HTML ──
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Meraki License Health Report — ${genDate}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f1f5f9;color:#1e293b;font-size:14px;line-height:1.5}
+  @media print{body{background:#fff}.no-print{display:none!important}@page{margin:1.5cm}}
+  table td,table th{padding:9px 14px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
+  table tbody tr:last-child td{border-bottom:none}
+  table tbody tr:hover{background:#f8fafc}
+  h2{font-size:18px;font-weight:700;margin-bottom:16px;color:#1e293b}
+  h3{font-size:14px;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div style="background:#1e293b;color:#fff;padding:24px 40px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+  <div>
+    <div style="font-size:11px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;color:#94a3b8;margin-bottom:4px">Anchor Network Solutions</div>
+    <div style="font-size:22px;font-weight:700">Meraki License Health Report</div>
+  </div>
+  <div style="text-align:right;font-size:12px;color:#94a3b8;line-height:1.8">
+    <div>Generated: <strong style="color:#e2e8f0">${escHtml(genDate)}</strong></div>
+    <div>Scan data: <strong style="color:#e2e8f0">${escHtml(scanDate)}</strong></div>
+    <div>${escHtml(String(orgs.length))} orgs · ${escHtml(String(totalDevices))} devices monitored</div>
+  </div>
+</div>
+
+<div style="max-width:1100px;margin:0 auto;padding:32px 24px">
+
+<!-- EXECUTIVE SUMMARY -->
+<div style="margin-bottom:32px">
+  <h2>Executive Summary</h2>
+  <div style="display:grid;grid-template-columns:200px 1fr;gap:24px;align-items:start">
+
+    <!-- Health score -->
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px;text-align:center">
+      <div style="font-size:64px;font-weight:800;color:${gradeColor};line-height:1">${escHtml(grade)}</div>
+      <div style="font-size:28px;font-weight:700;color:${gradeColor};margin:4px 0">${escHtml(String(score))}</div>
+      <div style="font-size:12px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px">${escHtml(gradeLabel)}</div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:8px">Health Score</div>
+    </div>
+
+    <!-- Metric cards -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px">
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px">
+        <div style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Expired</div>
+        <div style="font-size:32px;font-weight:800;color:${expired > 0 ? '#dc2626' : '#16a34a'}">${escHtml(String(expired))}</div>
+        <div style="font-size:11px;color:#94a3b8;margin-top:2px">Immediate action</div>
+      </div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px">
+        <div style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Critical</div>
+        <div style="font-size:32px;font-weight:800;color:${critical > 0 ? '#ea580c' : '#16a34a'}">${escHtml(String(critical))}</div>
+        <div style="font-size:11px;color:#94a3b8;margin-top:2px">Expiring &lt; ${escHtml(String(Math.round((_settings?.thresholdDays||90)*0.33)))}d</div>
+      </div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px">
+        <div style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Warning</div>
+        <div style="font-size:32px;font-weight:800;color:${warning > 0 ? '#d97706' : '#16a34a'}">${escHtml(String(warning))}</div>
+        <div style="font-size:11px;color:#94a3b8;margin-top:2px">Expiring &lt; ${escHtml(String(Math.round((_settings?.thresholdDays||90)*0.67)))}d</div>
+      </div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px">
+        <div style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Notice</div>
+        <div style="font-size:32px;font-weight:800;color:${notice > 0 ? '#2563eb' : '#16a34a'}">${escHtml(String(notice))}</div>
+        <div style="font-size:11px;color:#94a3b8;margin-top:2px">Expiring &lt; ${escHtml(String(_settings?.thresholdDays||90))}d</div>
+      </div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px">
+        <div style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">AT Mismatches</div>
+        <div style="font-size:32px;font-weight:800;color:${mismatch > 0 ? '#d97706' : '#16a34a'}">${escHtml(String(mismatch))}</div>
+        <div style="font-size:11px;color:#94a3b8;margin-top:2px">Dates out of sync</div>
+      </div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px">
+        <div style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Clients Affected</div>
+        <div style="font-size:32px;font-weight:800;color:${orgStats.length > 0 ? '#6366f1' : '#16a34a'}">${escHtml(String(orgStats.length))}</div>
+        <div style="font-size:11px;color:#94a3b8;margin-top:2px">of ${escHtml(String(orgs.length))} total</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- RISK DISTRIBUTION BAR -->
+<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:20px;margin-bottom:32px">
+  <h3>Fleet Risk Distribution</h3>
+  <div style="height:20px;border-radius:6px;overflow:hidden;background:#f1f5f9;margin-bottom:12px">
+    ${barSegment('#dc2626', barPct('expired'),  'Expired')}
+    ${barSegment('#ea580c', barPct('critical'), 'Critical')}
+    ${barSegment('#d97706', barPct('warning'),  'Warning')}
+    ${barSegment('#2563eb', barPct('notice'),   'Notice')}
+    ${barSegment('#16a34a', barPct('clean'),    'Clean')}
+  </div>
+  <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:#64748b">
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#dc2626;margin-right:5px;vertical-align:middle"></span>Expired ${barPct('expired')}% (${expired})</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#ea580c;margin-right:5px;vertical-align:middle"></span>Critical ${barPct('critical')}% (${critical})</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#d97706;margin-right:5px;vertical-align:middle"></span>Warning ${barPct('warning')}% (${warning})</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#2563eb;margin-right:5px;vertical-align:middle"></span>Notice ${barPct('notice')}% (${notice})</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#16a34a;margin-right:5px;vertical-align:middle"></span>Clean ${barPct('clean')}% (${clean})</span>
+  </div>
+</div>
+
+<!-- CLIENT RISK SUMMARY TABLE -->
+${orgStats.length > 0 ? `
+<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:32px">
+  <div style="padding:16px 20px;border-bottom:1px solid #e2e8f0">
+    <h2 style="margin:0">Client Risk Summary</h2>
+  </div>
+  <div style="overflow-x:auto">
+  <table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:#f8fafc;color:#475569;font-size:11px;text-transform:uppercase;letter-spacing:.5px">
+      <th style="padding:10px 16px;text-align:left;font-weight:600">Client</th>
+      <th style="padding:10px 16px;text-align:center;font-weight:600;color:#dc2626">Expired</th>
+      <th style="padding:10px 16px;text-align:center;font-weight:600;color:#ea580c">Critical</th>
+      <th style="padding:10px 16px;text-align:center;font-weight:600;color:#d97706">Warning</th>
+      <th style="padding:10px 16px;text-align:center;font-weight:600;color:#2563eb">Notice</th>
+      <th style="padding:10px 16px;text-align:left;font-weight:600">Next Expiry</th>
+      <th style="padding:10px 16px;text-align:left;font-weight:600">Flagged Devices</th>
+    </tr></thead>
+    <tbody>
+      ${orgStats.map(s => `<tr>
+        <td style="font-weight:600">${escHtml(s.name)}${s.isCoterm ? ' <span style="font-size:10px;color:#6366f1;font-weight:600">CO-TERM</span>' : ''}</td>
+        <td style="text-align:center;font-weight:700;color:${s.expired > 0 ? '#dc2626' : '#94a3b8'}">${s.expired || '—'}</td>
+        <td style="text-align:center;font-weight:700;color:${s.critical > 0 ? '#ea580c' : '#94a3b8'}">${s.critical || '—'}</td>
+        <td style="text-align:center;font-weight:700;color:${s.warning > 0 ? '#d97706' : '#94a3b8'}">${s.warning || '—'}</td>
+        <td style="text-align:center;font-weight:700;color:${s.notice > 0 ? '#2563eb' : '#94a3b8'}">${s.notice || '—'}</td>
+        <td style="font-size:12px;color:#475569">${escHtml(fmtDate(s.nextExpiry))}</td>
+        <td style="font-size:12px;color:#64748b">${escHtml(String(s.devices.length))} device${s.devices.length !== 1 ? 's' : ''}</td>
+      </tr>`).join('')}
+    </tbody>
+  </table>
+  </div>
+</div>` : ''}
+
+<!-- PER-CLIENT DEVICE DETAIL -->
+${orgStats.length > 0 ? `<h2 style="margin-bottom:16px">Device Detail by Client</h2>${orgSections}` : noIssuesMsg}
+
+</div>
+
+<!-- FOOTER -->
+<div style="background:#1e293b;color:#64748b;padding:16px 40px;font-size:11px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+  <span>Generated by <strong style="color:#94a3b8">Anchor Hub</strong> · Meraki Expiration Report</span>
+  <span>CONFIDENTIAL — For internal use only</span>
+  <span>${escHtml(genDate)}</span>
+</div>
+
+</body>
+</html>`;
+
+    const blob = new Blob([html], { type: 'text/html' });
+    const url  = URL.createObjectURL(blob);
+    const a    = Object.assign(document.createElement('a'), {
+      href: url,
+      download: `meraki-license-health-${new Date().toISOString().slice(0,10)}.html`,
+    });
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 500);
+  }
+
+  // ── Batch ticket creation modal ───────────────────────────────────────────
+  async function showBatchTicketModal() {
+    // Build the list of orgs + their filtered devices
+    const selectedOrgs = (_cache?.orgs || [])
+      .filter(o => _batchSelected.has(o.orgId) && !o.skipped && !o.error)
+      .map(o => ({
+        orgId:         o.orgId,
+        orgName:       o.orgName,
+        atCompanyId:   o.atCompanyId,
+        atCompanyName: o.atCompanyName,
+        devices:       _orgDevicesMap.get(o.orgId) || [],
+      }))
+      .filter(o => o.devices.length > 0 && o.atCompanyId);
+
+    if (!selectedOrgs.length) {
+      alert('No qualifying orgs selected.\n\nOrgs need an AT company match and at least one visible device under the current filters.');
+      return;
+    }
+
+    const modal = document.createElement('div');
+    modal.id = 'mexp-batch-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9999;display:flex;align-items:center;justify-content:center';
+
+    const selStyle = `background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text);font-size:13px;color-scheme:dark`;
+
+    modal.innerHTML = `
+      <div style="background:var(--surface);border:1px solid var(--border-2);border-radius:10px;
+                  width:640px;max-width:calc(100vw - 32px);max-height:90vh;display:flex;flex-direction:column;overflow:hidden">
+        <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+          <div>
+            <div style="font-weight:600;font-size:15px">🎫 Batch Ticket Creation</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${selectedOrgs.length} org${selectedOrgs.length !== 1 ? 's' : ''} · ${selectedOrgs.reduce((n,o) => n + o.devices.length, 0)} devices</div>
+          </div>
+          <button id="mexp-batch-modal-close" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;line-height:1;padding:4px">✕</button>
+        </div>
+        <div style="padding:16px 20px;border-bottom:1px solid var(--border);flex-shrink:0">
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;font-weight:600">SHARED SETTINGS</div>
+          <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+            <div>
+              <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Assign to</label>
+              ${_currentAtResource
+                ? `<div style="display:flex;align-items:center;height:34px;background:var(--bg);
+                               border:1px solid var(--border);border-radius:6px;padding:0 10px;
+                               color:var(--text);font-size:13px;gap:8px">
+                     <span style="flex:1">${escHtml(_currentAtResource.firstName + ' ' + _currentAtResource.lastName)}</span>
+                     <button id="mexp-batch-assignto-change"
+                       style="background:none;border:none;color:var(--text-muted);font-size:11px;
+                              cursor:pointer;padding:0;text-decoration:underline">change</button>
+                   </div>
+                   <input type="hidden" id="mexp-batch-assignto" value="${escHtml(_currentAtResource.firstName)}">`
+                : `<select id="mexp-batch-assignto" style="${selStyle}">
+                     <option value="">No assignment</option>
+                     <option value="Gary">Gary</option>
+                     <option value="Shawn">Shawn</option>
+                   </select>`
+              }
+            </div>
+          </div>
+        </div>
+        <div style="padding:16px 20px;overflow-y:auto;flex:1">
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;font-weight:600">SUMMARY — 1 ticket will be created per org</div>
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <thead>
+              <tr style="border-bottom:1px solid var(--border)">
+                <th style="text-align:left;padding:6px 8px;font-weight:600;color:var(--text-muted)">Org / AT Company</th>
+                <th style="text-align:left;padding:6px 8px;font-weight:600;color:var(--text-muted)">Devices in ticket</th>
+                <th style="text-align:center;padding:6px 8px;font-weight:600;color:var(--text-muted);width:80px">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${selectedOrgs.map((o, i) => `
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td style="padding:8px">
+                    <div style="font-weight:600">${escHtml(o.orgName)}</div>
+                    <div style="font-size:11px;color:var(--text-muted)">${escHtml(o.atCompanyName || '')}</div>
+                  </td>
+                  <td style="padding:8px">
+                    <div style="font-size:12px;color:var(--text-muted)">${o.devices.map(d => `${escHtml(d.name)} (${escHtml(d.model)})`).join(', ')}</div>
+                  </td>
+                  <td style="padding:8px;text-align:center" id="mexp-batch-row-${i}">
+                    <span style="font-size:11px;color:var(--text-muted)">—</span>
+                  </td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+        <div style="padding:14px 20px;border-top:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-shrink:0">
+          <button id="mexp-batch-confirm" style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-size:13px">
+            Create ${selectedOrgs.length} Ticket${selectedOrgs.length !== 1 ? 's' : ''}
+          </button>
+          <button id="mexp-batch-close-btn" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text);cursor:pointer;font-size:13px">Cancel</button>
+          <div id="mexp-batch-summary-status" style="flex:1;font-size:12px;color:var(--text-muted);text-align:right"></div>
+        </div>
+      </div>`;
+
+    document.body.appendChild(modal);
+
+    // "change" link — swap locked assignee display for the dropdown
+    document.getElementById('mexp-batch-assignto-change')?.addEventListener('click', () => {
+      const hidden = document.getElementById('mexp-batch-assignto');
+      const wrap   = hidden?.closest('div');
+      if (!wrap) return;
+      wrap.innerHTML = `
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Assign to</label>
+        <select id="mexp-batch-assignto" style="${selStyle}">
+          <option value="">No assignment</option>
+          <option value="Gary">Gary</option>
+          <option value="Shawn">Shawn</option>
+        </select>`;
+    });
+
+    const close = () => modal.remove();
+    document.getElementById('mexp-batch-modal-close').addEventListener('click', close);
+    document.getElementById('mexp-batch-close-btn').addEventListener('click', close);
+    modal.addEventListener('click', e => { if (e.target === modal) close(); });
+
+    document.getElementById('mexp-batch-confirm').addEventListener('click', async () => {
+      const confirmBtn  = document.getElementById('mexp-batch-confirm');
+      const closeBtn    = document.getElementById('mexp-batch-close-btn');
+      const statusEl    = document.getElementById('mexp-batch-summary-status');
+      const assignTo    = document.getElementById('mexp-batch-assignto')?.value || null;
+
+      confirmBtn.disabled = true;
+      closeBtn.disabled   = true;
+      confirmBtn.textContent = 'Creating…';
+
+      let done = 0, failed = 0;
+
+      for (let i = 0; i < selectedOrgs.length; i++) {
+        const o    = selectedOrgs[i];
+        const rowEl = document.getElementById(`mexp-batch-row-${i}`);
+        if (rowEl) rowEl.innerHTML = `<span style="font-size:11px;color:var(--text-muted)">…</span>`;
+
+        try {
+          const res = await window.api.merakiExpCreateTicket({
+            atCompanyId:   o.atCompanyId,
+            atCompanyName: o.atCompanyName,
+            orgName:       o.orgName,
+            devices:       o.devices,
+            assignTo,
+          });
+          if (res.ok) {
+            done++;
+            if (rowEl) rowEl.innerHTML = `
+              <span style="font-size:11px;color:#4ade80" title="Ticket ${escHtml(res.ticketNumber || String(res.ticketId))}">
+                ✓ #${escHtml(res.ticketNumber || String(res.ticketId))}
+              </span>`;
+          } else {
+            failed++;
+            if (rowEl) rowEl.innerHTML = `<span style="font-size:11px;color:#f87171" title="${escHtml(res.error || '')}">✗ Failed</span>`;
+          }
+        } catch (err) {
+          failed++;
+          if (rowEl) rowEl.innerHTML = `<span style="font-size:11px;color:#f87171" title="${escHtml(err.message)}">✗ Error</span>`;
+        }
+
+        if (statusEl) statusEl.textContent = `${done + failed} / ${selectedOrgs.length} done${failed > 0 ? ` · ${failed} failed` : ''}`;
+      }
+
+      confirmBtn.style.display = 'none';
+      closeBtn.disabled = false;
+      closeBtn.textContent = 'Close';
+      if (statusEl) statusEl.textContent = done === selectedOrgs.length
+        ? `✓ All ${done} tickets created`
+        : `${done} created · ${failed} failed`;
+
+      // Exit batch mode after successful run
+      if (done > 0) {
+        _batchMode = false;
+        _batchSelected.clear();
+      }
+    });
+  }
+
+  // ── Assign unused licenses modal ──────────────────────────────────────────
+  async function showAssignLicensesModal({ orgId, orgName, btn }) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center';
+
+    overlay.innerHTML = `
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;
+                  padding:24px;min-width:540px;max-width:700px;max-height:80vh;overflow-y:auto;position:relative">
+        <h3 style="margin:0 0 4px;font-size:16px">Assign Unused Licenses</h3>
+        <p style="margin:0 0 16px;font-size:13px;color:var(--text-muted)">${escHtml(orgName)}</p>
+        <div id="assign-body" style="font-size:13px;color:var(--text-muted)">Loading…</div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px">
+          <button id="assign-cancel-btn" class="btn btn-ghost">Cancel</button>
+          <button id="assign-confirm-btn" class="btn btn-primary" disabled>Assign</button>
+        </div>
+      </div>`;
+
+    document.body.appendChild(overlay);
+
+    const bodyEl   = overlay.querySelector('#assign-body');
+    const confirmBtn = overlay.querySelector('#assign-confirm-btn');
+    overlay.querySelector('#assign-cancel-btn').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', ev => { if (ev.target === overlay) overlay.remove(); });
+
+    // Load candidates
+    let licenses = [], devices = [];
+    try {
+      const res = await window.api.merakiExpGetAssignCandidates({ orgId });
+      if (!res.ok) throw new Error(res.error || 'Failed to load licenses');
+      licenses = res.licenses;
+      devices  = res.devices;
+    } catch (err) {
+      bodyEl.innerHTML = `<span style="color:var(--error,#f87171)">${escHtml(err.message)}</span>`;
+      return;
+    }
+
+    if (!licenses.length) {
+      bodyEl.innerHTML = '<p style="color:var(--text-muted)">No unassigned licenses found for this org.</p>';
+      return;
+    }
+
+    // Build the picker: one row per license, device dropdown
+    const SEV_COLOR = { expired: '#ef4444', critical: '#f59e0b', warning: '#eab308', notice: '#3b82f6', clean: '#10b981' };
+    const eligibleDevices = devices; // already filtered in backend
+
+    bodyEl.innerHTML = `
+      <p style="margin:0 0 12px;color:var(--text-primary)">
+        Match each license to a device. Leave a row set to "— skip —" to skip that license.
+      </p>
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border)">
+            <th style="text-align:left;padding:6px 8px;font-weight:600;color:var(--text-muted)">License</th>
+            <th style="text-align:left;padding:6px 8px;font-weight:600;color:var(--text-muted)">Duration</th>
+            <th style="text-align:left;padding:6px 8px;font-weight:600;color:var(--text-muted)">Assign to device</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${licenses.map((lic, i) => {
+            // Pre-select a compatible device
+            const compatible = eligibleDevices.filter(d => {
+              if (lic.licenseType === d.model) return true;
+              if (lic.licenseType.startsWith(d.model + '-')) return true;
+              if ((lic.licenseType === 'ENT' || lic.licenseType === 'ENT-PLUS') && d.model.startsWith('MR')) return true;
+              return false;
+            });
+            const options = [
+              `<option value="">— skip —</option>`,
+              ...eligibleDevices.map(d => {
+                const isCompat = compatible.some(c => c.serial === d.serial);
+                const sevDot = SEV_COLOR[d.severity] ? `●` : '';
+                return `<option value="${escHtml(d.serial)}" ${isCompat && compatible.length === 1 ? 'selected' : ''}
+                  style="color:${SEV_COLOR[d.severity] || 'inherit'}"
+                  ${!isCompat ? 'style="color:var(--text-muted)"' : ''}>
+                  ${isCompat ? '✓ ' : ''}${escHtml(d.name)} (${escHtml(d.model)}) — ${d.severity}
+                </option>`;
+              }),
+            ].join('');
+            return `<tr style="border-bottom:1px solid var(--border)">
+              <td style="padding:8px;font-weight:600;color:var(--text-primary)">${escHtml(lic.licenseType)}</td>
+              <td style="padding:8px;color:var(--text-muted)">${lic.durationInDays ? Math.round(lic.durationInDays / 365) + ' yr' : '—'}</td>
+              <td style="padding:8px">
+                <select class="assign-device-select field-input" data-lic-id="${escHtml(lic.id)}"
+                  style="width:100%;font-size:12px;padding:4px 6px;color-scheme:dark;background:var(--bg);color:var(--text-primary);border:1px solid var(--border);border-radius:4px">
+                  ${options}
+                </select>
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
+
+    // Enable Assign when at least one device is selected
+    function updateConfirmState() {
+      const anySelected = [...overlay.querySelectorAll('.assign-device-select')].some(s => s.value);
+      confirmBtn.disabled = !anySelected;
+    }
+    overlay.querySelectorAll('.assign-device-select').forEach(s => s.addEventListener('change', updateConfirmState));
+    updateConfirmState();
+
+    confirmBtn.addEventListener('click', async () => {
+      const assignments = [...overlay.querySelectorAll('.assign-device-select')]
+        .filter(s => s.value)
+        .map(s => ({ licenseId: s.dataset.licId, deviceSerial: s.value }));
+
+      confirmBtn.disabled  = true;
+      confirmBtn.textContent = 'Assigning…';
+
+      try {
+        const res = await window.api.merakiExpAssignUnusedLicenses({ orgId, orgName, assignments });
+        overlay.remove();
+
+        if (res.ok) {
+          const msg = res.assigned > 0
+            ? `Assigned ${res.assigned} license${res.assigned !== 1 ? 's' : ''}${res.skipped > 0 ? ` (${res.skipped} failed)` : ''}.`
+            : 'No licenses were assigned.';
+          if (btn && document.contains(btn)) {
+            btn.textContent = '✓ Done';
+            btn.style.borderColor = '#10b981';
+            btn.style.color       = '#10b981';
+            btn.title = msg;
+            if (_cache?.orgs) {
+              const org = _cache.orgs.find(o => o.orgId === orgId);
+              if (org) org.unusedLicenses = (org.unusedLicenses || []).slice(res.assigned);
+            }
+          }
+        } else {
+          if (btn && document.contains(btn)) {
+            btn.disabled = false;
+            btn.textContent = '⚠ Error';
+            btn.style.borderColor = '#ef4444';
+            btn.style.color       = '#ef4444';
+            btn.title = res.error || 'Unknown error';
+          }
+        }
+      } catch (err) {
+        confirmBtn.disabled  = false;
+        confirmBtn.textContent = 'Assign';
+        bodyEl.insertAdjacentHTML('afterbegin',
+          `<p style="color:var(--error,#f87171);margin-bottom:8px">${escHtml(err.message)}</p>`);
+      }
+    });
+  }
+
+  // ── License renewal modal ─────────────────────────────────────────────────
+  function showRenewModal(opts) {
+    // opts from data-* attributes on the button:
+    // { serial, deviceName, model, orgId, orgName, atCompanyId, atCompanyName,
+    //   ciId, currentMeraki, currentAt }
+    document.getElementById('mexp-renew-modal')?.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'mexp-renew-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9999;display:flex;align-items:center;justify-content:center';
+
+    modal.innerHTML = `
+      <div style="background:var(--surface);border:1px solid var(--border-2);border-radius:10px;
+                  width:520px;max-width:calc(100vw - 32px);max-height:90vh;display:flex;flex-direction:column;overflow:hidden">
+        <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+          <div>
+            <div style="font-weight:600;font-size:15px">Add License</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${escHtml(opts.orgName)}</div>
+          </div>
+          <button id="mexp-renew-close" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;line-height:1;padding:4px">✕</button>
+        </div>
+
+        <div id="mexp-renew-body" style="padding:20px;overflow-y:auto;flex:1">
+          <div style="padding:8px 12px;background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.2);
+            border-radius:6px;font-size:12px;color:var(--text-muted);margin-bottom:14px">
+            License keys are claimed at the org level — one key covers all APs &amp; switches, one key covers all firewalls.
+            Run a rescan after claiming to see updated expiry dates.
+          </div>
+
+          <div class="field-group" style="margin-bottom:14px">
+            <label class="field-label">License Key(s)</label>
+            <textarea id="mexp-renew-keys"
+              style="width:100%;box-sizing:border-box;min-height:80px;resize:vertical;background:var(--bg);
+                     border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text);
+                     font-family:monospace;font-size:12px;outline:none"
+              placeholder="One key per line&#10;e.g. XXXX-XXXX-XXXX-XXXX"></textarea>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Paste one or more license keys, one per line.</div>
+          </div>
+
+          <div id="mexp-renew-steps" style="display:none;margin-top:16px">
+            <div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">Progress</div>
+          </div>
+        </div>
+
+        <div style="padding:14px 20px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px">
+          <button id="mexp-renew-confirm"
+            style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent);color:#fff;
+                   font-weight:600;cursor:pointer;font-size:13px">
+            Confirm Renewal
+          </button>
+          <button id="mexp-renew-cancel"
+            style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:none;
+                   color:var(--text);cursor:pointer;font-size:13px">
+            Cancel
+          </button>
+          <div id="mexp-renew-status" style="flex:1;font-size:12px;color:var(--text-muted)"></div>
+        </div>
+      </div>`;
+
+    document.body.appendChild(modal);
+
+    const close = () => modal.remove();
+    document.getElementById('mexp-renew-close').addEventListener('click', close);
+    document.getElementById('mexp-renew-cancel').addEventListener('click', close);
+    modal.addEventListener('click', e => { if (e.target === modal) close(); });
+
+    document.getElementById('mexp-renew-confirm').addEventListener('click', async () => {
+      const rawKeys = document.getElementById('mexp-renew-keys').value.trim();
+      const keys    = rawKeys.split('\n').map(k => k.trim()).filter(Boolean);
+      if (!keys.length) {
+        document.getElementById('mexp-renew-status').textContent = 'Enter at least one license key.';
+        return;
+      }
+
+      // Disable form, show steps panel
+      document.getElementById('mexp-renew-confirm').disabled = true;
+      document.getElementById('mexp-renew-cancel').disabled  = true;
+      document.getElementById('mexp-renew-keys').disabled    = true;
+      document.getElementById('mexp-renew-status').textContent = '';
+      const stepsEl = document.getElementById('mexp-renew-steps');
+      stepsEl.style.display = '';
+      stepsEl.innerHTML = '<div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">Progress</div>';
+
+      const addStepRow = (label) => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px';
+        row.innerHTML = `<span style="width:16px;text-align:center">⏳</span><span>${escHtml(label)}</span>`;
+        stepsEl.appendChild(row);
+        return row;
+      };
+      const setStepRow = (row, ok, msg) => {
+        row.querySelector('span').textContent = ok === true ? '✓' : ok === false ? '✕' : '—';
+        row.querySelector('span').style.color = ok === true ? 'var(--success,#4ade80)' : ok === false ? 'var(--error,#f87171)' : 'var(--text-muted)';
+        if (msg) {
+          const msgEl = document.createElement('span');
+          msgEl.style.cssText = `font-size:11px;color:${ok === false ? 'var(--error,#f87171)' : 'var(--text-muted)'}`;
+          msgEl.textContent = ` — ${msg}`;
+          row.appendChild(msgEl);
+        }
+      };
+
+      const STEP_LABELS = {
+        'claim':  'Claim license key(s) in Meraki',
+        'assign': 'Assign licenses to devices',
+      };
+      const stepRows = {};
+      for (const [k, label] of Object.entries(STEP_LABELS)) {
+        stepRows[k] = addStepRow(label);
+      }
+
+      const res = await window.api.merakiExpRenewLicense({
+        orgId:         opts.orgId,
+        orgName:       opts.orgName,
+        atCompanyId:   opts.atCompanyId,
+        atCompanyName: opts.atCompanyName,
+        keys,
+      });
+
+      // Update step rows from result
+      for (const s of (res.steps || [])) {
+        const row = stepRows[s.step];
+        if (!row) continue;
+        const msg = s.ok === false ? (s.error || 'Failed')
+                  : s.ok === null  ? (s.skipped || 'Skipped')
+                  : s.assigned != null ? `${s.assigned} assigned${s.skipped ? `, ${s.skipped} unmatched` : ''}`
+                  : null;
+        setStepRow(row, s.ok, msg);
+      }
+
+      if (res.ok) {
+        const assignStep = (res.steps || []).find(s => s.step === 'assign');
+        const assignMsg  = assignStep?.assigned > 0
+          ? `${assignStep.assigned} license${assignStep.assigned !== 1 ? 's' : ''} assigned`
+          : 'Run a rescan to see updated expiry dates';
+        document.getElementById('mexp-renew-status').style.color = 'var(--success,#4ade80)';
+        document.getElementById('mexp-renew-status').textContent = `Done — ${assignMsg}`;
+        // Reload cache into view
+        const cacheRes = await window.api.merakiExpGetCache().catch(() => null);
+        if (cacheRes?.ok && cacheRes.data) { _cache = cacheRes.data; refreshOrgs(); }
+        // Swap confirm button to "Close"
+        document.getElementById('mexp-renew-confirm').style.display = 'none';
+        document.getElementById('mexp-renew-cancel').disabled = false;
+        document.getElementById('mexp-renew-cancel').textContent = 'Close';
+      } else {
+        document.getElementById('mexp-renew-status').style.color = 'var(--error,#f87171)';
+        document.getElementById('mexp-renew-status').textContent = res.error || 'One or more steps failed — review details above.';
+        document.getElementById('mexp-renew-confirm').disabled = false;
+        document.getElementById('mexp-renew-cancel').disabled  = false;
+        document.getElementById('mexp-renew-keys').disabled    = false;
+        document.getElementById('mexp-renew-confirm').textContent = 'Retry';
+      }
+    });
+  }
+
+  // ── Ticket creation modal ─────────────────────────────────────────────────
+  function showTicketModal(opts) {
+    // opts: { orgId, orgName, atCompanyId, atCompanyName, devices }
+    document.getElementById('mexp-ticket-modal')?.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'mexp-ticket-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9999;display:flex;align-items:center;justify-content:center';
+
+    modal.innerHTML = `
+      <div style="background:var(--surface);border:1px solid var(--border-2);border-radius:10px;
+                  width:560px;max-width:calc(100vw - 32px);max-height:90vh;display:flex;flex-direction:column;overflow:hidden">
+        <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+          <div>
+            <div style="font-weight:600;font-size:15px">🎫 Create Ticket</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${escHtml(opts.atCompanyName)}</div>
+          </div>
+          <button id="mexp-ticket-close" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;line-height:1;padding:4px">✕</button>
+        </div>
+        <div id="mexp-ticket-body" style="padding:20px;overflow-y:auto;flex:1">
+          <div style="text-align:center;padding:20px;color:var(--text-muted);font-size:13px">Checking existing tickets…</div>
+        </div>
+        <div id="mexp-ticket-footer" style="padding:14px 20px;border-top:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-shrink:0;display:none"></div>
+      </div>`;
+
+    document.body.appendChild(modal);
+
+    const close = () => modal.remove();
+    document.getElementById('mexp-ticket-close').addEventListener('click', close);
+    modal.addEventListener('click', e => { if (e.target === modal) close(); });
+
+    const btnStyle   = (accent) => `padding:7px 16px;border-radius:6px;border:none;background:${accent};color:#fff;font-weight:600;cursor:pointer;font-size:13px`;
+    const ghostStyle = `padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text);cursor:pointer;font-size:13px`;
+
+    // ── Time entry sub-view ────────────────────────────────────────────────
+    // presetStatusLabel: if set, status dropdown pre-selects that label (e.g. 'Complete')
+    function showAddNoteView(ticket, presetStatusLabel) {
+      const bodyEl   = document.getElementById('mexp-ticket-body');
+      const footerEl = document.getElementById('mexp-ticket-footer');
+      const selStyle = `background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text);font-size:13px;color-scheme:dark`;
+      const title    = presetStatusLabel === 'Complete'
+        ? `Completing ticket <strong style="color:var(--text)">#${escHtml(String(ticket.ticketNumber || ticket.id))}</strong>`
+        : `Logging time on <strong style="color:var(--text)">#${escHtml(String(ticket.ticketNumber || ticket.id))} — ${escHtml(ticket.title || '')}</strong>`;
+
+      bodyEl.innerHTML = `
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px">${title}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+          <div>
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Resource</label>
+            ${_currentAtResource
+              ? `<div style="display:flex;align-items:center;height:36px;background:var(--bg);
+                             border:1px solid var(--border);border-radius:6px;padding:0 10px;
+                             color:var(--text);font-size:13px;gap:8px">
+                   <span style="flex:1">${escHtml(_currentAtResource.firstName + ' ' + _currentAtResource.lastName)}</span>
+                   <button id="mexp-te-resource-change"
+                     style="background:none;border:none;color:var(--text-muted);font-size:11px;
+                            cursor:pointer;padding:0;text-decoration:underline">change</button>
+                 </div>
+                 <input type="hidden" id="mexp-te-resource" value="${escHtml(_currentAtResource.firstName)}">`
+              : `<select id="mexp-te-resource" style="${selStyle};width:100%">
+                   <option value="Gary">Gary</option>
+                   <option value="Shawn">Shawn</option>
+                 </select>`
+            }
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Hours</label>
+            <select id="mexp-te-hours" style="${selStyle};width:100%">
+              <option value="0.25">0.25 (15 min)</option>
+              <option value="0.5" selected>0.5 (30 min)</option>
+              <option value="1">1.0 (1 hr)</option>
+              <option value="1.5">1.5 (1.5 hr)</option>
+              <option value="2">2.0 (2 hr)</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-bottom:12px">
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Update Status</label>
+          <select id="mexp-te-status" style="${selStyle};width:100%">
+            <option value="">— No change —</option>
+          </select>
+        </div>
+        <div style="margin-bottom:12px">
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Notes</label>
+          <textarea id="mexp-te-notes" placeholder="Meraki license renewal follow-up…"
+            style="width:100%;box-sizing:border-box;min-height:70px;resize:vertical;
+                   background:var(--bg);border:1px solid var(--border);border-radius:6px;
+                   padding:8px 10px;color:var(--text);font-size:13px;font-family:inherit"></textarea>
+        </div>
+        <div id="mexp-te-result" style="display:none"></div>`;
+
+      // "change" button — swap the locked display for a text input
+      document.getElementById('mexp-te-resource-change')?.addEventListener('click', () => {
+        const hiddenInput = document.getElementById('mexp-te-resource');
+        const display     = hiddenInput?.previousElementSibling?.closest('div[style]');
+        const parent      = hiddenInput?.parentElement;
+        if (!parent) return;
+        const sel = document.createElement('select');
+        sel.id = 'mexp-te-resource';
+        sel.style.cssText = `${selStyle};width:100%`;
+        ['Gary', 'Shawn'].forEach(name => {
+          const opt = document.createElement('option');
+          opt.value = name; opt.textContent = name;
+          sel.appendChild(opt);
+        });
+        parent.innerHTML = `<label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Resource</label>`;
+        parent.appendChild(sel);
+      });
+
+      // Load status picklist async and populate dropdown
+      window.api.merakiExpGetTicketStatuses().then(res => {
+        const sel = document.getElementById('mexp-te-status');
+        if (!sel) return;
+        (res.statuses || []).forEach(s => {
+          const opt = document.createElement('option');
+          opt.value       = s.value;
+          opt.textContent = s.label;
+          if (presetStatusLabel && s.label.toLowerCase().includes(presetStatusLabel.toLowerCase())) {
+            opt.selected = true;
+          }
+          sel.appendChild(opt);
+        });
+      });
+
+      const submitLabel = presetStatusLabel === 'Complete' ? 'Complete & Log Time' : 'Log Time Entry';
+      footerEl.style.display = 'flex';
+      footerEl.innerHTML = `
+        <button id="mexp-te-submit" style="${btnStyle('var(--accent)')}">${escHtml(submitLabel)}</button>
+        <button id="mexp-te-back" style="${ghostStyle}">← Back</button>
+        <div style="flex:1"></div>`;
+
+      document.getElementById('mexp-te-back').addEventListener('click', () => renderMainView(openTickets));
+      document.getElementById('mexp-te-submit').addEventListener('click', async () => {
+        const resourceFirstName = document.getElementById('mexp-te-resource')?.value;
+        const hours     = document.getElementById('mexp-te-hours')?.value;
+        const notes     = document.getElementById('mexp-te-notes')?.value?.trim();
+        const statusVal = document.getElementById('mexp-te-status')?.value;
+        const btn = document.getElementById('mexp-te-submit');
+        btn.disabled = true; btn.textContent = '…';
+        const res = await window.api.merakiExpAddTimeEntry({
+          ticketId:      ticket.id,
+          resourceName:  resourceFirstName,
+          hoursWorked:   hours,
+          summaryNotes:  notes || 'Meraki license renewal follow-up',
+          newStatus:     statusVal ? parseInt(statusVal) : undefined,
+          atCompanyName: opts.atCompanyName,
+        });
+        const resultEl = document.getElementById('mexp-te-result');
+        if (resultEl) {
+          resultEl.style.display = '';
+          const displayName = (_currentAtResource && _currentAtResource.firstName === resourceFirstName)
+            ? `${_currentAtResource.firstName} ${_currentAtResource.lastName}`
+            : resourceFirstName;
+          const statusNote = statusVal ? ` · status updated` : '';
+          resultEl.innerHTML = res.ok
+            ? `<div style="padding:8px 12px;background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.25);border-radius:6px;font-size:13px;color:#4ade80">✓ Time entry logged (${escHtml(hours)}h for ${escHtml(displayName)})${escHtml(statusNote)}</div>`
+            : `<div style="padding:8px 12px;background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.25);border-radius:6px;font-size:13px;color:#f87171">Failed: ${escHtml(res.error || 'Unknown error')}</div>`;
+        }
+        if (res.ok) { btn.style.display = 'none'; document.getElementById('mexp-te-back').textContent = '← Back'; }
+        else { btn.disabled = false; btn.textContent = 'Retry'; }
+      });
+    }
+
+    // ── Main create view ───────────────────────────────────────────────────
+    let openTickets = [];
+    function renderMainView(tickets) {
+      const bodyEl   = document.getElementById('mexp-ticket-body');
+      const footerEl = document.getElementById('mexp-ticket-footer');
+      if (!bodyEl) return;
+      openTickets = tickets;
+
+      // Existing tickets section
+      const existingHtml = tickets.length > 0 ? `
+        <div style="background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.25);border-radius:8px;padding:12px 14px;margin-bottom:16px">
+          <div style="font-size:12px;font-weight:600;color:#fbbf24;margin-bottom:10px">
+            ${tickets.length} open ticket${tickets.length !== 1 ? 's' : ''} already exist for this company
+          </div>
+          ${tickets.map(t => `
+            <div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid rgba(251,191,36,.15);flex-wrap:wrap">
+              <span style="font-size:13px;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                #${escHtml(String(t.ticketNumber || t.id))} — ${escHtml(t.title || '')}
+              </span>
+              <button class="mexp-t-open" data-tid="${escHtml(String(t.id))}"
+                style="padding:3px 10px;border-radius:4px;border:1px solid rgba(251,191,36,.4);background:none;color:#fbbf24;font-size:11px;cursor:pointer;white-space:nowrap">
+                Open ↗
+              </button>
+              <button class="mexp-t-note" data-tidx="${escHtml(String(tickets.indexOf(t)))}"
+                style="padding:3px 10px;border-radius:4px;border:1px solid rgba(99,102,241,.4);background:none;color:#818cf8;font-size:11px;cursor:pointer;white-space:nowrap">
+                Log Time
+              </button>
+              <button class="mexp-t-complete" data-tidx="${escHtml(String(tickets.indexOf(t)))}"
+                style="padding:3px 10px;border-radius:4px;border:1px solid rgba(74,222,128,.4);background:none;color:#4ade80;font-size:11px;cursor:pointer;white-space:nowrap">
+                Mark Complete
+              </button>
+            </div>`).join('')}
+          <div style="font-size:11px;color:var(--text-muted);margin-top:8px">You can still create a new ticket below.</div>
+        </div>` : '';
+
+      // Device checkboxes
+      const deviceCheckboxes = (opts.devices || []).map((d, i) => {
+        const sev = d.severity || 'clean';
+        const c = sev === 'expired' ? '#f87171' : sev === 'critical' ? '#f97316' : sev === 'warning' ? '#fbbf24' : sev === 'notice' ? '#60a5fa' : 'var(--text-muted)';
+        return `<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;font-size:13px">
+          <input type="checkbox" class="mexp-device-cb" data-idx="${i}" checked style="width:14px;height:14px;cursor:pointer;accent-color:var(--accent)">
+          <span style="flex:1">${escHtml(d.name || d.serial)}${d.model ? ` <span style="color:var(--text-muted);font-size:11px">${escHtml(d.model)}</span>` : ''}</span>
+          <span style="font-size:11px;font-weight:600;color:${c};text-transform:uppercase">${escHtml(sev)}</span>
+        </label>`;
+      }).join('');
+
+      // Advanced options fields (collapsed by default)
+      const advFields = [
+        { id: 'adv-queue',      label: 'Queue',          val: 'CS - Subscription Procurement' },
+        { id: 'adv-issuetype',  label: 'Issue Type',     val: 'Sales Ordering' },
+        { id: 'adv-subissue',   label: 'Sub-Issue Type', val: 'Software Order' },
+        { id: 'adv-sla',        label: 'SLA',            val: 'Sales & Procurement' },
+        { id: 'adv-source',     label: 'Source',         val: 'Other' },
+        { id: 'adv-priority',   label: 'Priority',       val: 'Standard - 3' },
+        { id: 'adv-hours',      label: 'Est. Hours',     val: '0.5' },
+      ];
+      const advRows = advFields.map(f =>
+        `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <label style="font-size:12px;color:var(--text-muted);width:120px;flex-shrink:0">${escHtml(f.label)}</label>
+          <input id="${f.id}" type="text" value="${escHtml(f.val)}" disabled
+            style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:4px;
+                   padding:4px 8px;color:var(--text);font-size:12px;opacity:.6">
+        </div>`
+      ).join('');
+
+      bodyEl.innerHTML = `
+        ${existingHtml}
+
+        <div style="margin-bottom:14px">
+          <div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">Devices to include</div>
+          <div style="border:1px solid var(--border);border-radius:6px;padding:8px 12px;max-height:160px;overflow-y:auto">
+            ${deviceCheckboxes || '<div style="color:var(--text-muted);font-size:12px">No devices</div>'}
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px;flex-wrap:wrap">
+          <div id="mexp-ticket-assignto-wrap">
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Assign to</label>
+            ${_currentAtResource
+              ? `<div style="display:flex;align-items:center;height:34px;background:var(--bg);
+                             border:1px solid var(--border);border-radius:6px;padding:0 10px;
+                             color:var(--text);font-size:13px;gap:8px">
+                   <span style="flex:1">${escHtml(_currentAtResource.firstName + ' ' + _currentAtResource.lastName)}</span>
+                   <button id="mexp-ticket-assignto-change"
+                     style="background:none;border:none;color:var(--text-muted);font-size:11px;
+                            cursor:pointer;padding:0;text-decoration:underline">change</button>
+                 </div>
+                 <input type="hidden" id="mexp-ticket-assignto" value="${escHtml(_currentAtResource.firstName)}">`
+              : `<select id="mexp-ticket-assignto"
+                   style="background:var(--bg);border:1px solid var(--border);border-radius:6px;
+                          padding:6px 8px;color:var(--text);font-size:13px;color-scheme:dark">
+                   <option value="">Unassigned</option>
+                   <option value="Gary">Gary</option>
+                   <option value="Shawn">Shawn</option>
+                 </select>`
+            }
+          </div>
+        </div>
+
+        <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:rgba(99,102,241,.06)">
+            <span style="font-size:12px;font-weight:600;color:var(--text)">Ticket defaults</span>
+            <button id="mexp-adv-toggle"
+              style="padding:3px 10px;border-radius:4px;border:1px solid rgba(99,102,241,.35);background:none;
+                     color:#818cf8;font-size:11px;cursor:pointer">
+              Customize ▼
+            </button>
+          </div>
+          <div id="mexp-adv-panel" style="display:none;padding:12px 14px;border-top:1px solid var(--border)">
+            ${advRows}
+            <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Values are resolved by name at creation time.</div>
+          </div>
+        </div>
+
+        <div id="mexp-ticket-result" style="display:none"></div>
+      `;
+
+      // Wire existing ticket buttons
+      bodyEl.querySelectorAll('.mexp-t-open').forEach(btn => {
+        btn.addEventListener('click', () => {
+          window.api.homeOpenUrl(`https://ww5.autotask.net/Autotask/AutotaskExtend/ExecuteCommand.aspx?Code=OpenTicketDetail&TicketID=${encodeURIComponent(btn.dataset.tid)}`);
+        });
+      });
+      bodyEl.querySelectorAll('.mexp-t-note').forEach(btn => {
+        btn.addEventListener('click', () => showAddNoteView(tickets[parseInt(btn.dataset.tidx)]));
+      });
+      bodyEl.querySelectorAll('.mexp-t-complete').forEach(btn => {
+        btn.addEventListener('click', () => showAddNoteView(tickets[parseInt(btn.dataset.tidx)], 'Complete'));
+      });
+
+      // "change" link — swap locked assignee display for the dropdown
+      document.getElementById('mexp-ticket-assignto-change')?.addEventListener('click', () => {
+        const wrap = document.getElementById('mexp-ticket-assignto-wrap');
+        if (!wrap) return;
+        wrap.innerHTML = `
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Assign to</label>
+          <select id="mexp-ticket-assignto"
+            style="background:var(--bg);border:1px solid var(--border);border-radius:6px;
+                   padding:6px 8px;color:var(--text);font-size:13px;color-scheme:dark">
+            <option value="">Unassigned</option>
+            <option value="Gary">Gary</option>
+            <option value="Shawn">Shawn</option>
+          </select>`;
+      });
+
+      // Advanced options toggle
+      document.getElementById('mexp-adv-toggle')?.addEventListener('click', () => {
+        const panel = document.getElementById('mexp-adv-panel');
+        const btn   = document.getElementById('mexp-adv-toggle');
+        const open  = panel.style.display === 'none';
+        panel.style.display = open ? '' : 'none';
+        btn.textContent = open ? 'Collapse ▲' : 'Customize ▼';
+        // Unlock fields when panel opens
+        panel.querySelectorAll('input').forEach(inp => {
+          inp.disabled = !open;
+          inp.style.opacity = open ? '1' : '.6';
+        });
+      });
+
+      // Footer
+      footerEl.style.display = 'flex';
+      footerEl.innerHTML = `
+        <button id="mexp-ticket-confirm" style="${btnStyle('var(--accent)')}">Create Ticket</button>
+        <button id="mexp-ticket-cancel" style="${ghostStyle}">Cancel</button>
+        <div id="mexp-ticket-status" style="flex:1;font-size:12px;color:var(--text-muted)"></div>`;
+
+      document.getElementById('mexp-ticket-cancel').addEventListener('click', close);
+
+      document.getElementById('mexp-ticket-confirm').addEventListener('click', async () => {
+        const checkedIdxs     = [...bodyEl.querySelectorAll('.mexp-device-cb:checked')].map(cb => parseInt(cb.dataset.idx));
+        const selectedDevices = (opts.devices || []).filter((_, i) => checkedIdxs.includes(i));
+        if (!selectedDevices.length) {
+          document.getElementById('mexp-ticket-status').textContent = 'Select at least one device.';
+          return;
+        }
+
+        const confirmBtn = document.getElementById('mexp-ticket-confirm');
+        const cancelBtn  = document.getElementById('mexp-ticket-cancel');
+        confirmBtn.disabled = true; cancelBtn.disabled = true; confirmBtn.textContent = '…';
+
+        // Collect advanced overrides only if the panel is open (user customised)
+        const advOpen = document.getElementById('mexp-adv-panel')?.style.display !== 'none';
+        const advOpts = advOpen ? {
+          queueName:       document.getElementById('adv-queue')?.value?.trim()     || undefined,
+          issueTypeName:   document.getElementById('adv-issuetype')?.value?.trim() || undefined,
+          subIssueType:    document.getElementById('adv-subissue')?.value?.trim()  || undefined,
+          slaName:         document.getElementById('adv-sla')?.value?.trim()       || undefined,
+          sourceName:      document.getElementById('adv-source')?.value?.trim()    || undefined,
+          priorityName:    document.getElementById('adv-priority')?.value?.trim()  || undefined,
+          estimatedHours:  parseFloat(document.getElementById('adv-hours')?.value) || undefined,
+        } : {};
+
+        const res = await window.api.merakiExpCreateTicket({
+          atCompanyId:   opts.atCompanyId,
+          atCompanyName: opts.atCompanyName,
+          orgName:       opts.orgName,
+          devices:       selectedDevices,
+          assignTo:      document.getElementById('mexp-ticket-assignto')?.value || null,
+          ...advOpts,
+        });
+
+        const resultEl = document.getElementById('mexp-ticket-result');
+        if (resultEl) resultEl.style.display = '';
+
+        if (res.ok) {
+          const ticketUrl = `https://ww5.autotask.net/Autotask/AutotaskExtend/ExecuteCommand.aspx?Code=OpenTicketDetail&TicketID=${encodeURIComponent(String(res.ticketId))}`;
+          if (resultEl) resultEl.innerHTML = `
+            <div style="padding:10px 12px;background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.25);border-radius:6px;font-size:13px;color:#4ade80">
+              <div style="margin-bottom:8px">
+                ✓ Ticket ${escHtml(res.ticketNumber || String(res.ticketId))} created
+                <a href="#" class="mexp-new-ticket-link" data-url="${escHtml(ticketUrl)}"
+                  style="color:#4ade80;text-decoration:underline;margin-left:8px">Open in AT ↗</a>
+                ${res.ciNotesAdded > 0 ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">(${res.ciNotesAdded} CI note${res.ciNotesAdded !== 1 ? 's' : ''} added)</span>` : ''}
+              </div>
+              <button id="mexp-mark-complete" data-tid="${escHtml(String(res.ticketId))}" data-tnum="${escHtml(String(res.ticketNumber || res.ticketId))}"
+                style="padding:4px 12px;border-radius:4px;border:1px solid rgba(74,222,128,.4);background:none;color:#4ade80;font-size:11px;cursor:pointer">
+                Mark Complete when done
+              </button>
+            </div>`;
+          resultEl?.querySelector('.mexp-new-ticket-link')?.addEventListener('click', e => {
+            e.preventDefault(); window.api.homeOpenUrl(ticketUrl);
+          });
+          resultEl?.querySelector('#mexp-mark-complete')?.addEventListener('click', function() {
+            showAddNoteView(
+              { id: this.dataset.tid, ticketNumber: this.dataset.tnum },
+              'Complete'
+            );
+          });
+          confirmBtn.style.display = 'none';
+          cancelBtn.disabled = false; cancelBtn.textContent = 'Close';
+        } else {
+          if (resultEl) resultEl.innerHTML = `
+            <div style="padding:10px 12px;background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.25);border-radius:6px;font-size:13px;color:#f87171">
+              Failed: ${escHtml(res.error || 'Unknown error')}
+            </div>`;
+          confirmBtn.disabled = false; cancelBtn.disabled = false; confirmBtn.textContent = 'Retry';
+        }
+      });
+    }
+
+    // Initial load — check tickets then render
+    window.api.merakiExpCheckTicket({ atCompanyId: opts.atCompanyId })
+      .then(res => renderMainView(res.ok ? (res.tickets || []) : []))
+      .catch(() => renderMainView([]));
+  }
+
+  // ── Audit trail viewer ────────────────────────────────────────────────────
+  let _auditExpanded = false;
+
+  async function renderAuditSection() {
+    const el = document.getElementById('mexp-audit-section');
+    if (!el) return;
+
+    const ACTION_LABELS = {
+      SCAN_STARTED:     { icon: '🔍', label: 'Scan started' },
+      SCAN_COMPLETED:   { icon: '✅', label: 'Scan completed' },
+      LICENSE_RENEWED:  { icon: '🔑', label: 'License renewed' },
+      AT_DATE_SYNCED:   { icon: '🔄', label: 'AT date synced' },
+      TICKET_CREATED:   { icon: '🎫', label: 'Ticket created' },
+      EXCLUSION_ADDED:  { icon: '🚫', label: 'Exclusion added' },
+      EXCLUSION_REMOVED:{ icon: '♻',  label: 'Exclusion removed' },
+    };
+
+    const headerHtml = `
+      <button id="mexp-audit-toggle"
+        style="width:100%;display:flex;align-items:center;justify-content:space-between;
+               background:var(--surface);border:1px solid var(--border);border-radius:${_auditExpanded ? '10px 10px 0 0' : '10px'};
+               padding:12px 16px;cursor:pointer;color:var(--text);font-size:13px;
+               text-align:left">
+        <span style="font-weight:600;display:flex;align-items:center;gap:8px">
+          📋 Audit Log
+          <span id="mexp-audit-count" style="font-size:11px;color:var(--text-muted);font-weight:400"></span>
+        </span>
+        <span style="color:var(--text-muted);font-size:16px;transition:transform .2s;
+                     transform:rotate(${_auditExpanded ? '180' : '0'}deg)">▼</span>
+      </button>
+      <div id="mexp-audit-body" style="display:${_auditExpanded ? 'block' : 'none'};
+           border:1px solid var(--border);border-top:none;border-radius:0 0 10px 10px;
+           background:var(--surface);overflow:hidden">
+        <div style="padding:16px;color:var(--text-muted);font-size:13px">Loading…</div>
+      </div>`;
+
+    el.innerHTML = headerHtml;
+
+    document.getElementById('mexp-audit-toggle').addEventListener('click', () => {
+      _auditExpanded = !_auditExpanded;
+      renderAuditSection();
+    });
+
+    if (_auditExpanded) populateAudit();
+
+    async function populateAudit() {
+      const bodyEl = document.getElementById('mexp-audit-body');
+      if (!bodyEl) return;
+
+      const res = await window.api.merakiExpGetAudit().catch(() => ({ ok: false }));
+      const entries = res.ok ? (res.data?.entries || []) : [];
+
+      const countEl = document.getElementById('mexp-audit-count');
+      if (countEl) countEl.textContent = `(${entries.length} entries)`;
+
+      if (!entries.length) {
+        bodyEl.innerHTML = '<div style="padding:20px;color:var(--text-muted);font-size:13px;text-align:center">No audit entries yet.</div>';
+        return;
+      }
+
+      const rows = entries.slice(0, 200).map(e => {
+        const meta  = ACTION_LABELS[e.actionType] || { icon: '•', label: e.actionType || '—' };
+        const ts    = e.timestamp ? new Date(e.timestamp).toLocaleString('en-US', { month:'short', day:'numeric', year:'numeric', hour:'numeric', minute:'2-digit' }) : '—';
+        const who   = [e.atCompanyName, e.orgName].filter(Boolean).join(' / ') || '—';
+        const device= [e.deviceName, e.deviceSerial].filter(Boolean).join(' · ') || '';
+        const detail= e.newValue ? (e.newValue.length > 80 ? e.newValue.slice(0, 80) + '…' : e.newValue) : '';
+        const resultColor = e.result === 'error' ? '#f87171' : e.result === 'success' ? '#4ade80' : 'var(--text-muted)';
+        return `<tr style="border-top:1px solid var(--border)">
+          <td style="padding:8px 12px;font-size:12px;color:var(--text-muted);white-space:nowrap">${escHtml(ts)}</td>
+          <td style="padding:8px 12px;font-size:12px;white-space:nowrap">${escHtml(meta.icon)} ${escHtml(meta.label)}</td>
+          <td style="padding:8px 12px;font-size:12px;color:var(--text-muted)">${escHtml(who)}</td>
+          <td style="padding:8px 12px;font-size:12px;color:var(--text-muted)">${escHtml(device)}</td>
+          <td style="padding:8px 12px;font-size:12px;color:var(--text-muted)">${escHtml(detail)}</td>
+          <td style="padding:8px 12px;font-size:11px;font-weight:600;color:${resultColor};text-transform:uppercase;white-space:nowrap">${escHtml(e.result || '')}</td>
+        </tr>`;
+      }).join('');
+
+      bodyEl.innerHTML = `
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead>
+              <tr style="background:rgba(0,0,0,.15)">
+                <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;white-space:nowrap">Time</th>
+                <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Action</th>
+                <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Company / Org</th>
+                <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Device</th>
+                <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Details</th>
+                <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Result</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        ${entries.length > 200 ? `<div style="padding:10px 16px;font-size:11px;color:var(--text-muted);border-top:1px solid var(--border)">Showing 200 of ${entries.length} entries (newest first)</div>` : ''}
+      `;
+    }
+  }
+
+  // ── Initial load ──────────────────────────────────────────────────────────
+  async function loadData() {
+    content.innerHTML = `<div style="padding:40px;color:var(--text-muted);font-size:14px">Loading…</div>`;
+    const [cacheRes, settingsRes] = await Promise.all([
+      window.api.merakiExpGetCache(),
+      window.api.merakiExpGetSettings(),
+    ]);
+    _cache    = cacheRes.ok && cacheRes.data ? cacheRes.data : null;
+    _settings = settingsRes.ok ? settingsRes.data : null;
+    render();
+  }
+
+  loadData();
+}
+
 // ─── Help ─────────────────────────────────────────────────────────────────────
 function renderHelp() {
   const GITBOOK = 'https://anchor-network-solutions-1.gitbook.io/anchor-hub-help-center';
@@ -11461,3 +13931,1150 @@ async function profExport() {
     btn.innerHTML = origHtml;
   }
 }
+// ─── Meraki Admin Management ──────────────────────────────────────────────────
+
+let _mkAuditData      = null;
+let _mkActiveTab      = 'audit';
+let _mkExpandedOrgId  = null;
+let _mkAuditSorted    = null;
+let _mkLastRefreshed  = null;
+let _mkAuditFilter    = '';
+
+function renderMerakiAdmin() {
+  const isAllowed = _currentUser?.isAdmin || _currentUser?.roles?.some(r => ['hub.admin','hub.it'].includes(r));
+  if (!isAllowed) {
+    content.innerHTML = `<div class="view-header"><div><h1 class="view-title">Meraki Admin Management</h1></div></div><div class="glass-card" style="padding:32px;text-align:center;color:var(--text-muted)">Access restricted to IT staff.</div>`;
+    return;
+  }
+
+  content.innerHTML = `
+    <div class="view-header">
+      <div>
+        <h1 class="view-title">Meraki Admin Management</h1>
+        <p class="view-subtitle">Audit and manage Cisco Meraki dashboard administrators across all client organizations</p>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:20px">
+      <button class="mk-tab ${_mkActiveTab==='audit'?'mk-tab-active':''}" data-tab="audit" style="padding:8px 18px;border:none;background:none;cursor:pointer;font-size:13px;font-weight:500;margin-bottom:-1px;border-bottom:2px solid transparent">Audit</button>
+      <button class="mk-tab ${_mkActiveTab==='add'?'mk-tab-active':''}" data-tab="add" style="padding:8px 18px;border:none;background:none;cursor:pointer;font-size:13px;font-weight:500;margin-bottom:-1px;border-bottom:2px solid transparent">Add Employee</button>
+      <button class="mk-tab ${_mkActiveTab==='remove'?'mk-tab-active':''}" data-tab="remove" style="padding:8px 18px;border:none;background:none;cursor:pointer;font-size:13px;font-weight:500;margin-bottom:-1px;border-bottom:2px solid transparent">Remove Admin</button>
+      <button class="mk-tab ${_mkActiveTab==='excluded'?'mk-tab-active':''}" data-tab="excluded" style="padding:8px 18px;border:none;background:none;cursor:pointer;font-size:13px;font-weight:500;margin-bottom:-1px;border-bottom:2px solid transparent">Excluded Orgs</button>
+    </div>
+
+    <!-- Audit Tab -->
+    <div id="mk-panel-audit" ${_mkActiveTab!=='audit'?'style="display:none"':''}>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+        <button class="btn btn-primary btn-sm" id="mk-audit-btn">Refresh</button>
+        <span id="mk-audit-summary" style="font-size:12px;color:var(--text-muted)"></span>
+      </div>
+      <div id="mk-audit-results"></div>
+    </div>
+
+    <!-- Add Employee Tab -->
+    <div id="mk-panel-add" ${_mkActiveTab!=='add'?'style="display:none"':''}>
+      <div class="glass-card" style="max-width:520px;padding:20px;margin-bottom:20px">
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div>
+            <label class="field-label">Email</label>
+            <input type="email" id="mk-add-email" class="field-input" placeholder="employee@anchornetworksolutions.com" style="width:100%">
+          </div>
+          <div>
+            <label class="field-label">Full Name</label>
+            <input type="text" id="mk-add-name" class="field-input" placeholder="First Last" style="width:100%">
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-muted);padding:8px 10px;background:rgba(255,255,255,0.04);border-radius:6px">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="6" stroke="currentColor" stroke-width="1.3"/><path d="M7 6v4M7 4.5v.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            Privilege: <strong style="color:var(--text)">Full Access</strong> — ANS employees always receive full org access
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);padding:6px 10px;background:rgba(255,165,0,0.06);border-radius:6px;border-left:2px solid #f59e0b">
+            ANS org is excluded from bulk operations — manage it directly in the Meraki portal
+          </div>
+          <button class="btn btn-primary" id="mk-add-btn">Add to All Client Orgs</button>
+        </div>
+      </div>
+      <div id="mk-add-log" class="glass-card" style="display:none;padding:16px;max-width:520px">
+        <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.06em">Progress</div>
+        <div id="mk-add-log-body" style="font-family:var(--font-mono,monospace);font-size:12px;line-height:1.7;max-height:320px;overflow-y:auto"></div>
+        <div id="mk-add-summary" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:12px"></div>
+      </div>
+    </div>
+
+    <!-- Remove Admin Tab -->
+    <div id="mk-panel-remove" ${_mkActiveTab!=='remove'?'style="display:none"':''}>
+      <div class="glass-card" style="max-width:520px;padding:20px;margin-bottom:20px">
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div>
+            <label class="field-label">Admin Email to Remove</label>
+            <input type="email" id="mk-remove-email" class="field-input" placeholder="admin@example.com" style="width:100%">
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);padding:6px 10px;background:rgba(255,165,0,0.06);border-radius:6px;border-left:2px solid #f59e0b">
+            ANS org and excluded orgs are skipped — manage those directly in the Meraki portal
+          </div>
+          <button class="btn btn-primary" id="mk-remove-btn">Remove from All Active Client Orgs</button>
+        </div>
+      </div>
+      <div id="mk-remove-log" class="glass-card" style="display:none;padding:16px;max-width:520px">
+        <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.06em">Progress</div>
+        <div id="mk-remove-log-body" style="font-family:var(--font-mono,monospace);font-size:12px;line-height:1.7;max-height:320px;overflow-y:auto"></div>
+        <div id="mk-remove-summary" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:12px"></div>
+      </div>
+    </div>
+
+    <!-- Excluded Orgs Tab -->
+    <div id="mk-panel-excluded" ${_mkActiveTab!=='excluded'?'style="display:none"':''}>
+      <div style="max-width:900px">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;padding:8px 12px;background:rgba(245,158,11,0.06);border-radius:6px;border-left:2px solid #f59e0b">
+          Excluded orgs are hidden from the Audit view and skipped during bulk Add / Remove operations.
+          These are typically orgs where ANS has been offboarded but the new IT company hasn't removed access yet.
+        </div>
+        <div id="mk-excluded-content"><div style="color:var(--text-muted);font-size:12px;padding:12px">Loading…</div></div>
+      </div>
+    </div>`;
+
+  // Tab switching
+  content.querySelectorAll('.mk-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      _mkActiveTab = btn.dataset.tab;
+      content.querySelectorAll('.mk-tab').forEach(b => b.classList.remove('mk-tab-active'));
+      btn.classList.add('mk-tab-active');
+      ['audit','add','remove','excluded'].forEach(t => {
+        const el = document.getElementById(`mk-panel-${t}`);
+        if (el) el.style.display = t === _mkActiveTab ? '' : 'none';
+      });
+      if (_mkActiveTab === 'excluded') mkRenderExcludedOrgs();
+    });
+  });
+
+  if (_mkActiveTab === 'excluded') mkRenderExcludedOrgs();
+
+  // ── Audit ──────────────────────────────────────────────────────────────────
+  if (_mkAuditData) mkRenderAudit(_mkAuditData);
+
+  // Single delegated click handler for audit results (expand/collapse + exclude)
+  document.getElementById('mk-audit-results')?.addEventListener('click', async e => {
+    // Exclude button
+    const excludeBtn = e.target.closest('.mk-org-exclude-btn');
+    if (excludeBtn) {
+      e.stopPropagation();
+      const { orgId, orgName } = excludeBtn.dataset;
+      excludeBtn.disabled = true; excludeBtn.textContent = 'Excluding…';
+      const res = await window.api.merakiSetOrgExcluded({ orgId, orgName, excluded: true });
+      if (res.ok && _mkAuditData) {
+        const org = _mkAuditData.find(o => o.id === orgId);
+        if (org) org.isExcluded = true;
+        _mkExpandedOrgId = null;
+        mkRenderAudit(_mkAuditData);
+      } else if (!res.ok) {
+        excludeBtn.disabled = false; excludeBtn.textContent = 'Exclude';
+      }
+      return;
+    }
+
+    // Add a single missing ANS admin to this org
+    const addMissingBtn = e.target.closest('.mk-add-missing-btn');
+    if (addMissingBtn) {
+      e.stopPropagation();
+      const { orgId, email, name } = addMissingBtn.dataset;
+      addMissingBtn.disabled = true; addMissingBtn.textContent = '…';
+      const res = await window.api.merakiAddAdminToOrg({ orgId, email, name });
+      if (res.ok && _mkAuditData) {
+        const org = _mkAuditData.find(o => o.id === orgId);
+        if (org && res.status === 'added' && res.admin) {
+          org.admins.push({
+            id: res.admin.id, email: res.admin.email, name: res.admin.name,
+            orgAccess: res.admin.orgAccess, lastActive: null, isAns: true,
+          });
+        }
+        mkRenderAudit(_mkAuditData);
+      } else if (!res.ok) {
+        addMissingBtn.disabled = false; addMissingBtn.textContent = '+ Add';
+      }
+      return;
+    }
+
+    // Add all missing ANS admins to this org at once
+    const addAllMissingBtn = e.target.closest('.mk-add-all-missing-btn');
+    if (addAllMissingBtn) {
+      e.stopPropagation();
+      const { orgId } = addAllMissingBtn.dataset;
+      const orgData = _mkAuditSorted?.find(o => o.id === orgId);
+      if (!orgData || !orgData.missing.length) return;
+      addAllMissingBtn.disabled = true;
+      addAllMissingBtn.textContent = `Adding ${orgData.missing.length}…`;
+      const added = [];
+      for (const missing of orgData.missing) {
+        const res = await window.api.merakiAddAdminToOrg({ orgId, email: missing.email, name: missing.name || missing.email });
+        if (res.ok && res.status === 'added' && res.admin && _mkAuditData) {
+          const org = _mkAuditData.find(o => o.id === orgId);
+          if (org) {
+            org.admins.push({
+              id: res.admin.id, email: res.admin.email, name: res.admin.name,
+              orgAccess: res.admin.orgAccess, lastActive: null, isAns: true,
+            });
+          }
+          added.push(missing.email);
+        }
+      }
+      if (added.length && _mkAuditData) mkRenderAudit(_mkAuditData);
+      else { addAllMissingBtn.disabled = false; addAllMissingBtn.textContent = `+ Add All Missing (${orgData.missing.length})`; }
+      return;
+    }
+
+    // Remove admin from this specific org (two-step confirm)
+    const removeAdminBtn = e.target.closest('.mk-admin-remove-btn');
+    if (removeAdminBtn) {
+      e.stopPropagation();
+      if (!removeAdminBtn.dataset.confirming) {
+        removeAdminBtn.dataset.confirming = '1';
+        removeAdminBtn.textContent = 'Confirm?';
+        removeAdminBtn.style.color = '#ef4444';
+        removeAdminBtn.style.borderColor = '#ef444460';
+        setTimeout(() => {
+          if (removeAdminBtn.dataset.confirming) {
+            delete removeAdminBtn.dataset.confirming;
+            removeAdminBtn.textContent = 'Remove';
+            removeAdminBtn.style.color = '#ef444480';
+            removeAdminBtn.style.borderColor = '#ef444430';
+          }
+        }, 3000);
+        return;
+      }
+      delete removeAdminBtn.dataset.confirming;
+      const { orgId, adminId } = removeAdminBtn.dataset;
+      removeAdminBtn.disabled = true; removeAdminBtn.textContent = 'Removing…';
+      const res = await window.api.merakiRemoveAdminFromOrg({ orgId, adminId });
+      if (res.ok && _mkAuditData) {
+        const org = _mkAuditData.find(o => o.id === orgId);
+        if (org) org.admins = org.admins.filter(a => a.id !== adminId);
+        mkRenderAudit(_mkAuditData);
+      } else if (!res.ok) {
+        removeAdminBtn.disabled = false; removeAdminBtn.textContent = 'Remove';
+      }
+      return;
+    }
+
+    // Remove a single extra ANS admin from this org
+    const removeExtraBtn = e.target.closest('.mk-remove-extra-btn');
+    if (removeExtraBtn) {
+      e.stopPropagation();
+      if (!removeExtraBtn.dataset.confirming) {
+        removeExtraBtn.dataset.confirming = '1';
+        removeExtraBtn.textContent = 'Confirm?';
+        removeExtraBtn.style.color = '#f59e0b';
+        removeExtraBtn.style.borderColor = '#f59e0b60';
+        setTimeout(() => {
+          if (removeExtraBtn.dataset.confirming) {
+            delete removeExtraBtn.dataset.confirming;
+            removeExtraBtn.textContent = 'Remove';
+            removeExtraBtn.style.color = '#f59e0b';
+            removeExtraBtn.style.borderColor = '#f59e0b40';
+          }
+        }, 3000);
+        return;
+      }
+      delete removeExtraBtn.dataset.confirming;
+      const { orgId, adminId } = removeExtraBtn.dataset;
+      removeExtraBtn.disabled = true; removeExtraBtn.textContent = '…';
+      const res = await window.api.merakiRemoveAdminFromOrg({ orgId, adminId });
+      if (res.ok && _mkAuditData) {
+        const org = _mkAuditData.find(o => o.id === orgId);
+        if (org) org.admins = org.admins.filter(a => a.id !== adminId);
+        mkRenderAudit(_mkAuditData);
+      } else if (!res.ok) {
+        removeExtraBtn.disabled = false; removeExtraBtn.textContent = 'Remove';
+      }
+      return;
+    }
+
+    // Remove all extra ANS admins from this org
+    const removeAllExtraBtn = e.target.closest('.mk-remove-all-extra-btn');
+    if (removeAllExtraBtn) {
+      e.stopPropagation();
+      if (!removeAllExtraBtn.dataset.confirming) {
+        removeAllExtraBtn.dataset.confirming = '1';
+        removeAllExtraBtn.textContent = 'Confirm Remove All?';
+        removeAllExtraBtn.style.color = '#f59e0b';
+        setTimeout(() => {
+          if (removeAllExtraBtn.dataset.confirming) {
+            delete removeAllExtraBtn.dataset.confirming;
+            removeAllExtraBtn.textContent = `Remove All Extra (${removeAllExtraBtn.dataset.count || ''})`;
+            removeAllExtraBtn.style.color = '#f59e0b';
+          }
+        }, 3000);
+        return;
+      }
+      delete removeAllExtraBtn.dataset.confirming;
+      const { orgId } = removeAllExtraBtn.dataset;
+      const orgData = _mkAuditSorted?.find(o => o.id === orgId);
+      if (!orgData?.extra?.length) return;
+      removeAllExtraBtn.disabled = true; removeAllExtraBtn.textContent = `Removing ${orgData.extra.length}…`;
+      for (const extra of orgData.extra) {
+        const res = await window.api.merakiRemoveAdminFromOrg({ orgId, adminId: extra.id });
+        if (res.ok && _mkAuditData) {
+          const org = _mkAuditData.find(o => o.id === orgId);
+          if (org) org.admins = org.admins.filter(a => a.id !== extra.id);
+        }
+      }
+      if (_mkAuditData) mkRenderAudit(_mkAuditData);
+      return;
+    }
+
+    // Bulk Fix All Missing — add all missing ANS admins across all orgs
+    const bulkFixBtn = e.target.closest('.mk-bulk-fix-all-btn');
+    if (bulkFixBtn) {
+      e.stopPropagation();
+      if (!bulkFixBtn.dataset.confirming) {
+        bulkFixBtn.dataset.confirming = '1';
+        const orig = bulkFixBtn.textContent;
+        bulkFixBtn.textContent = 'Confirm? This adds admins to all orgs with gaps.';
+        bulkFixBtn.style.background = 'rgba(16,185,129,0.15)';
+        setTimeout(() => {
+          if (bulkFixBtn.dataset.confirming) {
+            delete bulkFixBtn.dataset.confirming;
+            bulkFixBtn.textContent = orig;
+            bulkFixBtn.style.background = '';
+          }
+        }, 5000);
+        return;
+      }
+      delete bulkFixBtn.dataset.confirming;
+      const orgsWithMissing = (_mkAuditSorted || []).filter(o => o.missing?.length);
+      if (!orgsWithMissing.length) return;
+      let totalFixed = 0;
+      bulkFixBtn.disabled = true; bulkFixBtn.textContent = `Fixing 0 / ${orgsWithMissing.reduce((s, o) => s + o.missing.length, 0)}…`;
+      for (const org of orgsWithMissing) {
+        for (const missing of org.missing) {
+          const res = await window.api.merakiAddAdminToOrg({ orgId: org.id, email: missing.email, name: missing.name || missing.email });
+          if (res.ok && res.status === 'added' && res.admin && _mkAuditData) {
+            const cached = _mkAuditData.find(o => o.id === org.id);
+            if (cached) cached.admins.push({ id: res.admin.id, email: res.admin.email, name: res.admin.name, orgAccess: res.admin.orgAccess, lastActive: null, isAns: true });
+            totalFixed++;
+            bulkFixBtn.textContent = `Fixing ${totalFixed}…`;
+          }
+        }
+      }
+      if (_mkAuditData) mkRenderAudit(_mkAuditData);
+      return;
+    }
+
+    // Export CSV
+    const exportBtn = e.target.closest('.mk-export-csv-btn');
+    if (exportBtn) {
+      e.stopPropagation();
+      if (!_mkAuditSorted) return;
+      const rows = [['Organization', 'ANS Admins', 'Client Admins', 'Missing', 'Extra', 'Status']];
+      _mkAuditSorted.forEach(o => {
+        const status = o.isTemplate ? 'Baseline' : (o.missing.length || o.extra.length) ? `${o.missing.length + o.extra.length} issues` : 'OK';
+        rows.push([o.name, o.ansAdmins.length, o.clientAdmins.length, o.missing.length, o.extra.length, status]);
+      });
+      const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url  = URL.createObjectURL(blob);
+      const a    = Object.assign(document.createElement('a'), { href: url, download: `meraki-audit-${new Date().toISOString().slice(0,10)}.csv` });
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+      return;
+    }
+
+    // Show Add Admin inline form
+    const addAdminBtn = e.target.closest('.mk-org-add-admin-btn');
+    if (addAdminBtn) {
+      e.stopPropagation();
+      const orgId = addAdminBtn.dataset.orgId;
+      const formDiv = document.getElementById(`mk-add-form-${orgId}`);
+      if (formDiv) {
+        formDiv.innerHTML = `
+          <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+            <div>
+              <div style="font-size:10px;color:var(--text-muted);margin-bottom:3px">Email</div>
+              <input class="cd-find-input" id="mk-add-email-${escHtml(orgId)}" placeholder="admin@example.com" style="width:220px">
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--text-muted);margin-bottom:3px">Name</div>
+              <input class="cd-find-input" id="mk-add-name-${escHtml(orgId)}" placeholder="Full Name" style="width:160px">
+            </div>
+            <button class="btn btn-primary btn-sm mk-org-add-admin-submit" data-org-id="${escHtml(orgId)}" style="font-size:11px;padding:4px 12px">Add</button>
+            <button class="btn btn-ghost btn-sm mk-org-add-admin-cancel" data-org-id="${escHtml(orgId)}" style="font-size:11px;padding:4px 10px">Cancel</button>
+            <span id="mk-add-status-${escHtml(orgId)}" style="font-size:11px;color:var(--text-muted)"></span>
+          </div>`;
+        document.getElementById(`mk-add-email-${orgId}`)?.focus();
+      }
+      return;
+    }
+
+    // Cancel Add Admin form
+    const cancelAddBtn = e.target.closest('.mk-org-add-admin-cancel');
+    if (cancelAddBtn) {
+      e.stopPropagation();
+      const orgId = cancelAddBtn.dataset.orgId;
+      const formDiv = document.getElementById(`mk-add-form-${orgId}`);
+      if (formDiv) {
+        formDiv.innerHTML = `<button class="btn btn-ghost btn-sm mk-org-add-admin-btn" data-org-id="${escHtml(orgId)}"
+          style="font-size:11px;padding:3px 10px;color:#60a5fa;border-color:#60a5fa40">+ Add Admin to this org</button>`;
+      }
+      return;
+    }
+
+    // Submit Add Admin form
+    const submitAddBtn = e.target.closest('.mk-org-add-admin-submit');
+    if (submitAddBtn) {
+      e.stopPropagation();
+      const orgId = submitAddBtn.dataset.orgId;
+      const email    = document.getElementById(`mk-add-email-${orgId}`)?.value.trim();
+      const name     = document.getElementById(`mk-add-name-${orgId}`)?.value.trim();
+      const statusEl = document.getElementById(`mk-add-status-${orgId}`);
+      if (!email) {
+        if (statusEl) { statusEl.style.color = '#ef4444'; statusEl.textContent = 'Email is required'; }
+        return;
+      }
+      submitAddBtn.disabled = true; submitAddBtn.textContent = 'Adding…';
+      const res = await window.api.merakiAddAdminToOrg({ orgId, email, name: name || email });
+      if (res.ok && _mkAuditData) {
+        const org = _mkAuditData.find(o => o.id === orgId);
+        if (org && res.status === 'added' && res.admin) {
+          org.admins.push({
+            id:         res.admin.id,
+            email:      res.admin.email,
+            name:       res.admin.name,
+            orgAccess:  res.admin.orgAccess,
+            lastActive: null,
+            isAns:      (res.admin.email || '').toLowerCase().endsWith('@anchornetworksolutions.com'),
+          });
+        } else if (org && res.status === 'exists' && statusEl) {
+          submitAddBtn.disabled = false; submitAddBtn.textContent = 'Add';
+          statusEl.style.color = '#f59e0b'; statusEl.textContent = 'Already exists in this org';
+          return;
+        }
+        mkRenderAudit(_mkAuditData);
+      } else if (!res.ok) {
+        submitAddBtn.disabled = false; submitAddBtn.textContent = 'Add';
+        if (statusEl) { statusEl.style.color = '#ef4444'; statusEl.textContent = res.error || 'Error'; }
+      }
+      return;
+    }
+
+    // Row click — toggle expand
+    const row = e.target.closest('.mk-org-row');
+    if (!row || !_mkAuditSorted) return;
+    const orgId = row.dataset.orgId;
+    _mkExpandedOrgId = _mkExpandedOrgId === orgId ? null : orgId;
+    const tbody = document.getElementById('mk-org-tbody');
+    if (tbody) tbody.innerHTML = _mkAuditSorted.map(o => mkOrgRowHtml(o)).join('');
+  });
+
+  document.getElementById('mk-audit-btn')?.addEventListener('click', async () => {
+    const btn = document.getElementById('mk-audit-btn');
+    const resultsEl = document.getElementById('mk-audit-results');
+    btn.disabled = true; btn.textContent = 'Loading…';
+    _mkExpandedOrgId = null;
+    resultsEl.innerHTML = `<div style="color:var(--text-muted);font-size:12px;padding:16px">Fetching organizations and admins…</div>`;
+    try {
+      const res = await window.api.merakiAudit();
+      if (!res.ok) throw new Error(res.error);
+      _mkAuditData     = res.orgs;
+      _mkLastRefreshed = new Date();
+      _mkAuditFilter   = '';
+      mkRenderAudit(res.orgs);
+    } catch (e) {
+      resultsEl.innerHTML = `<div class="glass-card" style="padding:16px;color:var(--danger,#ef4444)">Error: ${escHtml(e.message)}</div>`;
+    }
+    btn.disabled = false; btn.textContent = 'Refresh';
+  });
+
+  // ── Add Employee ───────────────────────────────────────────────────────────
+  document.getElementById('mk-add-btn')?.addEventListener('click', async () => {
+    const email = document.getElementById('mk-add-email')?.value.trim();
+    const name  = document.getElementById('mk-add-name')?.value.trim();
+    if (!email || !name) { alert('Email and Name are required.'); return; }
+
+    const btn     = document.getElementById('mk-add-btn');
+    const logEl   = document.getElementById('mk-add-log');
+    const bodyEl  = document.getElementById('mk-add-log-body');
+    const summEl  = document.getElementById('mk-add-summary');
+    btn.disabled = true; btn.textContent = 'Running…';
+    logEl.style.display = ''; bodyEl.innerHTML = ''; summEl.innerHTML = '';
+
+    const onProgress = ({ orgName, status, error }) => {
+      const icon = status === 'added' ? '✓' : status === 'exists' ? '⚠' : '✗';
+      const color = status === 'added' ? '#10b981' : status === 'exists' ? '#f59e0b' : '#ef4444';
+      const msg = status === 'added' ? 'Added' : status === 'exists' ? 'Already exists' : `Error: ${error}`;
+      bodyEl.innerHTML += `<div><span style="color:${color}">${icon}</span> ${escHtml(orgName)} — ${msg}</div>`;
+      bodyEl.scrollTop = bodyEl.scrollHeight;
+    };
+    window.api.merakiOnProgress('meraki-add-progress', onProgress);
+
+    try {
+      const res = await window.api.merakiAddAdmin({ email, name });
+      window.api.merakiOffProgress('meraki-add-progress', onProgress);
+      const added  = (res.results || []).filter(r => r.status === 'added').length;
+      const exists = (res.results || []).filter(r => r.status === 'exists').length;
+      const errors = (res.results || []).filter(r => r.status === 'error').length;
+      summEl.innerHTML = `<span style="color:#10b981">✓ ${added} added</span> &nbsp; <span style="color:#f59e0b">⚠ ${exists} already existed</span>${errors ? ` &nbsp; <span style="color:#ef4444">✗ ${errors} errors</span>` : ''}`;
+    } catch (e) {
+      window.api.merakiOffProgress('meraki-add-progress', onProgress);
+      summEl.innerHTML = `<span style="color:#ef4444">Error: ${escHtml(e.message)}</span>`;
+    }
+    btn.disabled = false; btn.textContent = 'Add to All Client Orgs';
+  });
+
+  // ── Remove Admin ───────────────────────────────────────────────────────────
+  document.getElementById('mk-remove-btn')?.addEventListener('click', async () => {
+    const email = document.getElementById('mk-remove-email')?.value.trim();
+    if (!email) { alert('Email is required.'); return; }
+
+    const btn     = document.getElementById('mk-remove-btn');
+    const logEl   = document.getElementById('mk-remove-log');
+    const bodyEl  = document.getElementById('mk-remove-log-body');
+    const summEl  = document.getElementById('mk-remove-summary');
+    btn.disabled = true; btn.textContent = 'Running…';
+    logEl.style.display = ''; bodyEl.innerHTML = ''; summEl.innerHTML = '';
+
+    const onProgress = ({ orgName, status, error }) => {
+      const icon  = status === 'removed' ? '✓' : status === 'not_found' ? '—' : '✗';
+      const color = status === 'removed' ? '#10b981' : status === 'not_found' ? 'var(--text-muted)' : '#ef4444';
+      const msg   = status === 'removed' ? 'Removed' : status === 'not_found' ? 'Not found (skipped)' : `Error: ${error}`;
+      bodyEl.innerHTML += `<div><span style="color:${color}">${icon}</span> ${escHtml(orgName)} — ${msg}</div>`;
+      bodyEl.scrollTop = bodyEl.scrollHeight;
+    };
+    window.api.merakiOnProgress('meraki-remove-progress', onProgress);
+
+    try {
+      const res = await window.api.merakiRemoveAdmin({ email });
+      window.api.merakiOffProgress('meraki-remove-progress', onProgress);
+      const removed   = (res.results || []).filter(r => r.status === 'removed').length;
+      const notFound  = (res.results || []).filter(r => r.status === 'not_found').length;
+      const errors    = (res.results || []).filter(r => r.status === 'error').length;
+      summEl.innerHTML = `<span style="color:#10b981">✓ ${removed} removed</span> &nbsp; <span style="color:var(--text-muted)">— ${notFound} not found</span>${errors ? ` &nbsp; <span style="color:#ef4444">✗ ${errors} errors</span>` : ''}`;
+    } catch (e) {
+      window.api.merakiOffProgress('meraki-remove-progress', onProgress);
+      summEl.innerHTML = `<span style="color:#ef4444">Error: ${escHtml(e.message)}</span>`;
+    }
+    btn.disabled = false; btn.textContent = 'Remove from All Client Orgs';
+  });
+}
+
+function mkRenderAudit(orgs) {
+  const resultsEl = document.getElementById('mk-audit-results');
+  const summaryEl = document.getElementById('mk-audit-summary');
+  if (!resultsEl) return;
+
+  const isAdmin = _currentUser?.roles?.includes('hub.admin') || _currentUser?.roles?.includes('hub.it');
+
+  const activeOrgs    = orgs.filter(o => !o.isExcluded);
+  const excludedCount = orgs.length - activeOrgs.length;
+
+  const templateOrg       = activeOrgs.find(o => (o.name || '').toLowerCase().includes('organization template'));
+  const templateAnsAdmins = templateOrg ? (templateOrg.admins || []).filter(a => a.isAns) : [];
+
+  const orgData = activeOrgs.map(org => {
+    const admins       = (org.admins || []).filter(a => !a.error);
+    const errCount     = (org.admins || []).filter(a => a.error).length;
+    const ansAdmins    = admins.filter(a => a.isAns);
+    const clientAdmins = admins.filter(a => !a.isAns);
+    const isTemplate   = org === templateOrg;
+    const missing      = isTemplate ? [] : templateAnsAdmins.filter(ta => !ansAdmins.find(a => a.email === ta.email));
+    const extra        = isTemplate ? [] : ansAdmins.filter(a => !templateAnsAdmins.find(ta => ta.email === a.email));
+    return { ...org, admins, errCount, ansAdmins, clientAdmins, isTemplate, missing, extra };
+  });
+
+  const totalAns         = orgData.reduce((s, o) => s + o.ansAdmins.length, 0);
+  const totalClient      = orgData.reduce((s, o) => s + o.clientAdmins.length, 0);
+  const issueCount       = orgData.filter(o => !o.isTemplate && (o.missing.length || o.extra.length)).length;
+  const totalMissing     = orgData.reduce((s, o) => s + o.missing.length, 0);
+  const orgsMissingCount = orgData.filter(o => o.missing.length > 0).length;
+
+  // Update Audit tab badge
+  const auditTabBtn = document.querySelector('.mk-tab[data-tab="audit"]');
+  if (auditTabBtn) {
+    auditTabBtn.textContent = issueCount > 0 ? `Audit  ⚠${issueCount}` : 'Audit';
+  }
+
+  // Summary bar
+  const refreshedStr = _mkLastRefreshed
+    ? `<span style="color:var(--text-muted);font-size:11px">· Refreshed ${_mkLastRefreshed.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</span>`
+    : '';
+  if (summaryEl) {
+    summaryEl.innerHTML = `${activeOrgs.length} orgs &middot; ${totalAns} ANS admins &middot; ${totalClient} client admins`
+      + (templateOrg ? ` &middot; Baseline: <strong>${escHtml(templateOrg.name)}</strong> (${templateAnsAdmins.length} ANS)` : '')
+      + (issueCount ? ` &middot; <span style="color:#f59e0b">${issueCount} org${issueCount !== 1 ? 's' : ''} with issues</span>` : '')
+      + (excludedCount ? ` &middot; <span style="color:var(--text-muted)">${excludedCount} excluded</span>` : '')
+      + ` &nbsp; ${refreshedStr}`;
+  }
+
+  const sorted = [...orgData].sort((a, b) => {
+    if (a.isTemplate) return -1;
+    if (b.isTemplate) return 1;
+    const ai = a.missing.length + a.extra.length;
+    const bi = b.missing.length + b.extra.length;
+    if (ai !== bi) return bi - ai;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+
+  _mkAuditSorted = sorted;
+
+  // Apply active filter
+  const filtered = _mkAuditFilter
+    ? sorted.filter(o => (o.name || '').toLowerCase().includes(_mkAuditFilter))
+    : sorted;
+
+  const thStyle = 'padding:8px 12px;font-size:10px;font-weight:600;text-align:left;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em';
+
+  const bulkFixBtn = (isAdmin && totalMissing > 0)
+    ? `<button class="btn btn-ghost btn-sm mk-bulk-fix-all-btn"
+         style="font-size:11px;padding:3px 10px;color:#10b981;border-color:#10b98140">
+         Fix All Missing (${totalMissing} across ${orgsMissingCount} org${orgsMissingCount !== 1 ? 's' : ''})</button>`
+    : '';
+
+  resultsEl.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+      <input class="cd-find-input" id="mk-audit-filter" placeholder="Filter organizations…"
+        value="${escHtml(_mkAuditFilter)}" style="width:220px">
+      ${bulkFixBtn}
+      <span style="flex:1"></span>
+      <button class="btn btn-ghost btn-sm mk-export-csv-btn" style="font-size:11px;padding:3px 10px">Export CSV</button>
+    </div>
+    <div class="glass-card" style="padding:0;overflow:hidden;max-width:1000px">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="background:rgba(255,255,255,0.04)">
+          <th style="${thStyle};min-width:200px">Organization</th>
+          <th style="${thStyle};width:54px;text-align:center">ANS</th>
+          <th style="${thStyle};width:60px;text-align:center">Client</th>
+          <th style="${thStyle};width:70px;text-align:center">Missing</th>
+          <th style="${thStyle};width:54px;text-align:center">Extra</th>
+          <th style="${thStyle};width:160px">Status</th>
+        </tr></thead>
+        <tbody id="mk-org-tbody">
+          ${filtered.map(o => mkOrgRowHtml(o)).join('')}
+        </tbody>
+      </table>
+    </div>`;
+
+  // Wire up filter input
+  document.getElementById('mk-audit-filter')?.addEventListener('input', e => {
+    _mkAuditFilter = e.target.value.toLowerCase();
+    const f = _mkAuditFilter ? _mkAuditSorted.filter(o => (o.name || '').toLowerCase().includes(_mkAuditFilter)) : _mkAuditSorted;
+    const tbody = document.getElementById('mk-org-tbody');
+    if (tbody) tbody.innerHTML = f.map(o => mkOrgRowHtml(o)).join('');
+  });
+}
+
+function mkOrgRowHtml(org) {
+  const isExpanded = _mkExpandedOrgId === org.id;
+  const hasIssues  = !org.isTemplate && (org.missing.length || org.extra.length);
+
+  const statusHtml = org.isTemplate
+    ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:rgba(59,130,246,0.12);color:#60a5fa">Baseline</span>`
+    : hasIssues
+      ? `<span style="font-size:11px;color:#f59e0b">⚠ ${org.missing.length + org.extra.length} issue${org.missing.length + org.extra.length !== 1 ? 's' : ''}</span>`
+      : `<span style="font-size:11px;color:#10b981">✓ OK</span>`;
+
+  const missingHtml = (!org.isTemplate && org.missing.length)
+    ? `<span style="color:#ef4444;font-weight:600">${org.missing.length}</span>`
+    : `<span style="color:var(--text-muted)">—</span>`;
+
+  const extraHtml = (!org.isTemplate && org.extra.length)
+    ? `<span style="color:#f59e0b;font-weight:600">${org.extra.length}</span>`
+    : `<span style="color:var(--text-muted)">—</span>`;
+
+  const badge = org.isAns && !org.isTemplate
+    ? `<span style="font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(245,158,11,0.15);color:#f59e0b;margin-left:6px">ANS Org</span>`
+    : '';
+
+  const expandIcon = `<span style="margin-right:8px;color:var(--text-muted);font-size:9px;vertical-align:middle">${isExpanded ? '▼' : '▶'}</span>`;
+  const rowBg = isExpanded ? 'background:rgba(255,255,255,0.03)' : (hasIssues ? 'background:rgba(245,158,11,0.02)' : '');
+
+  const isAdmin = _currentUser?.isAdmin || _currentUser?.roles?.some(r => ['hub.admin','hub.it'].includes(r));
+  const excludeBtn = (isAdmin && !org.isTemplate && !org.isAns)
+    ? `<button class="btn btn-ghost btn-sm mk-org-exclude-btn"
+         data-org-id="${escHtml(org.id)}" data-org-name="${escHtml(org.name)}"
+         style="font-size:10px;padding:2px 7px;margin-left:8px;color:var(--text-muted);border-color:rgba(255,255,255,0.1)"
+         title="Exclude this org from audit and bulk operations">Exclude</button>`
+    : '';
+
+  const expandedHtml = isExpanded ? `<tr class="mk-expanded-row">
+    <td colspan="6" style="padding:0;border-top:1px solid var(--border)">
+      ${mkOrgDetailHtml(org)}
+    </td>
+  </tr>` : '';
+
+  return `<tr class="mk-org-row" data-org-id="${escHtml(org.id)}" style="cursor:pointer;border-top:1px solid var(--border);${rowBg}">
+    <td style="padding:9px 12px;font-size:12px;font-weight:500">${expandIcon}${escHtml(org.name)}${badge}</td>
+    <td style="padding:9px 12px;font-size:13px;text-align:center">${org.ansAdmins.length}</td>
+    <td style="padding:9px 12px;font-size:13px;text-align:center">${org.clientAdmins.length}</td>
+    <td style="padding:9px 12px;font-size:13px;text-align:center">${missingHtml}</td>
+    <td style="padding:9px 12px;font-size:13px;text-align:center">${extraHtml}</td>
+    <td style="padding:9px 12px;white-space:nowrap">${statusHtml}${excludeBtn}</td>
+  </tr>${expandedHtml}`;
+}
+
+function mkOrgDetailHtml(org) {
+  const isAdmin = _currentUser?.roles?.includes('hub.admin') || _currentUser?.roles?.includes('hub.it');
+  let html = '';
+
+  if (org.missing.length) {
+    const addAllMissingBtn = isAdmin
+      ? `<button class="btn btn-ghost btn-sm mk-add-all-missing-btn" data-org-id="${escHtml(org.id)}"
+           style="font-size:10px;padding:2px 9px;color:#10b981;border-color:#10b98140;margin-left:auto">
+           + Add All Missing (${org.missing.length})</button>`
+      : '';
+    html += `<div style="padding:10px 14px;background:rgba(239,68,68,0.05);border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <div style="font-size:10px;font-weight:700;color:#ef4444;text-transform:uppercase;letter-spacing:.07em">Missing ANS Admins (${org.missing.length})</div>
+        ${addAllMissingBtn}
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        ${org.missing.map(a => {
+          const addBtn = isAdmin
+            ? `<button class="btn btn-ghost btn-sm mk-add-missing-btn"
+                 data-org-id="${escHtml(org.id)}" data-email="${escHtml(a.email)}" data-name="${escHtml(a.name || a.email)}"
+                 style="font-size:10px;padding:1px 6px;color:#10b981;border-color:#10b98140;line-height:1.4">+ Add</button>`
+            : '';
+          return `<span style="font-size:11px;padding:2px 4px 2px 8px;border-radius:10px;background:rgba(239,68,68,0.1);color:#fca5a5;display:inline-flex;align-items:center;gap:4px">${escHtml(a.name || a.email)}${addBtn}</span>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }
+
+  if (org.extra.length) {
+    const removeAllExtraBtn = isAdmin
+      ? `<button class="btn btn-ghost btn-sm mk-remove-all-extra-btn" data-org-id="${escHtml(org.id)}"
+           style="font-size:10px;padding:2px 9px;color:#f59e0b;border-color:#f59e0b40;margin-left:auto">
+           Remove All Extra (${org.extra.length})</button>`
+      : '';
+    html += `<div style="padding:10px 14px;background:rgba(245,158,11,0.05);border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <div style="font-size:10px;font-weight:700;color:#f59e0b;text-transform:uppercase;letter-spacing:.07em">Extra ANS Admins not in baseline (${org.extra.length})</div>
+        ${removeAllExtraBtn}
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        ${org.extra.map(a => {
+          const removeBtn = isAdmin
+            ? `<button class="btn btn-ghost btn-sm mk-remove-extra-btn"
+                 data-org-id="${escHtml(org.id)}" data-admin-id="${escHtml(a.id)}" data-admin-email="${escHtml(a.email)}"
+                 style="font-size:10px;padding:1px 6px;color:#f59e0b;border-color:#f59e0b40;line-height:1.4">Remove</button>`
+            : '';
+          return `<span style="font-size:11px;padding:2px 4px 2px 8px;border-radius:10px;background:rgba(245,158,11,0.1);color:#fcd34d;display:inline-flex;align-items:center;gap:4px">${escHtml(a.name || a.email)}${removeBtn}</span>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }
+
+  const thS = 'padding:5px 12px;font-size:10px;font-weight:600;text-align:left;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em';
+  const actionTh = isAdmin ? `<th style="${thS};width:80px"></th>` : '';
+
+  const adminRows = org.admins.length
+    ? org.admins.map(a => {
+        const chip = a.isAns
+          ? `<span style="display:inline-block;padding:1px 7px;border-radius:10px;font-size:10px;background:rgba(59,130,246,0.15);color:#60a5fa">ANS</span>`
+          : `<span style="display:inline-block;padding:1px 7px;border-radius:10px;font-size:10px;background:rgba(148,163,184,0.1);color:var(--text-muted)">Client</span>`;
+        const removeTd = isAdmin
+          ? `<td style="padding:4px 12px;text-align:right">
+              <button class="btn btn-ghost btn-sm mk-admin-remove-btn"
+                data-org-id="${escHtml(org.id)}" data-admin-id="${escHtml(a.id)}" data-admin-email="${escHtml(a.email)}"
+                style="font-size:10px;padding:2px 7px;color:#ef444480;border-color:#ef444430">Remove</button>
+            </td>`
+          : '';
+        return `<tr style="border-top:1px solid rgba(255,255,255,0.04)">
+          <td style="padding:5px 12px;font-size:12px">${escHtml(a.name || '')}</td>
+          <td style="padding:5px 12px;font-size:12px;color:var(--text-muted)">${escHtml(a.email)}</td>
+          <td style="padding:5px 12px;font-size:11px;color:var(--text-muted)">${escHtml(a.orgAccess || '')}</td>
+          <td style="padding:5px 12px;font-size:11px;color:var(--text-muted)">${a.lastActive || '—'}</td>
+          <td style="padding:5px 12px">${chip}</td>
+          ${removeTd}
+        </tr>`;
+      }).join('')
+    : `<tr><td colspan="${isAdmin ? 6 : 5}" style="padding:10px 12px;font-size:12px;color:var(--text-muted)">No admins found</td></tr>`;
+
+  html += `<table style="width:100%;border-collapse:collapse">
+    <thead><tr style="background:rgba(255,255,255,0.02)">
+      <th style="${thS}">Name</th>
+      <th style="${thS}">Email</th>
+      <th style="${thS}">Role</th>
+      <th style="${thS}">Last Active</th>
+      <th style="${thS}">Type</th>
+      ${actionTh}
+    </tr></thead>
+    <tbody>${adminRows}</tbody>
+  </table>`;
+
+  if (isAdmin) {
+    html += `<div id="mk-add-form-${escHtml(org.id)}" style="padding:8px 14px;border-top:1px solid var(--border)">
+      <button class="btn btn-ghost btn-sm mk-org-add-admin-btn" data-org-id="${escHtml(org.id)}"
+        style="font-size:11px;padding:3px 10px;color:#60a5fa;border-color:#60a5fa40">+ Add Admin to this org</button>
+    </div>`;
+  }
+
+  return html;
+}
+
+async function mkRenderExcludedOrgs() {
+  const el = document.getElementById('mk-excluded-content');
+  if (!el) return;
+  el.innerHTML = `<div style="color:var(--text-muted);font-size:12px;padding:12px">Loading…</div>`;
+
+  try {
+    const res = await window.api.merakiGetExcludedOrgs();
+    if (!res.ok) throw new Error(res.error);
+    const orgs = res.orgs || [];
+
+    if (!orgs.length) {
+      el.innerHTML = `<div class="glass-card" style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px">No excluded orgs.</div>`;
+      return;
+    }
+
+    el.innerHTML = `
+      <div class="glass-card" style="padding:0;overflow:hidden">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="background:rgba(255,255,255,0.04)">
+            <th style="padding:8px 14px;font-size:10px;font-weight:600;text-align:left;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Organization</th>
+            <th style="padding:8px 14px;font-size:10px;font-weight:600;text-align:left;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;width:160px">Excluded On</th>
+            <th style="padding:8px 14px;width:100px;text-align:center"></th>
+          </tr></thead>
+          <tbody>
+            ${orgs.map(o => `<tr style="border-top:1px solid var(--border)">
+              <td style="padding:9px 14px;font-size:13px">${escHtml(o.name)}</td>
+              <td style="padding:9px 14px;font-size:11px;color:var(--text-muted)">${o.excludedAt ? new Date(o.excludedAt).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }) : '—'}</td>
+              <td style="padding:9px 14px;text-align:center">
+                <button class="btn btn-ghost btn-sm mk-unexclude-btn"
+                  data-org-id="${escHtml(o.id)}" data-org-name="${escHtml(o.name)}"
+                  style="font-size:11px;padding:2px 10px;color:#10b981;border-color:#10b98140">Un-exclude</button>
+              </td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+
+    el.addEventListener('click', async e => {
+      const btn = e.target.closest('.mk-unexclude-btn');
+      if (!btn) return;
+      const { orgId, orgName } = btn.dataset;
+      btn.disabled = true; btn.textContent = 'Saving…';
+      const res2 = await window.api.merakiSetOrgExcluded({ orgId, orgName, excluded: false });
+      if (res2.ok) {
+        // Also update cached audit data if present
+        if (_mkAuditData) {
+          const org = _mkAuditData.find(o => o.id === orgId);
+          if (org) org.isExcluded = false;
+        }
+        mkRenderExcludedOrgs();
+      } else {
+        btn.disabled = false; btn.textContent = 'Un-exclude';
+      }
+    });
+
+  } catch (e) {
+    el.innerHTML = `<div style="padding:12px;color:var(--danger,#ef4444);font-size:12px">Error: ${escHtml(e.message)}</div>`;
+  }
+}
+
+// ─── Meraki Org Mapping (in Company Mapping tool) ────────────────────────────
+
+let _mkOrgSuggestions    = null; // Map<orgNameLower, {atId, atName, score}> — persists across re-renders
+let _mkOrgMapClickHandler = null; // removed before each re-render to avoid stacking
+
+function mkNormalize(s) {
+  return (s || '').toLowerCase()
+    .replace(/\b(inc|llc|corp|co|ltd|limited|networks?|technology|technologies|tech|systems?|solutions?|group|services?|consulting|associates?|enterprises?|holdings?|international|management|communications?|partners?)\b/g, '')
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function mkFuzzyScore(a, b) {
+  const na = mkNormalize(a);
+  const nb = mkNormalize(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 1.0;
+  // Substring containment (proportional to shorter length)
+  if (na.includes(nb) || nb.includes(na))
+    return Math.min(na.length, nb.length) / Math.max(na.length, nb.length) * 0.95;
+  // Jaccard word overlap
+  const wa = new Set(na.split(' ').filter(w => w.length > 1));
+  const wb = new Set(nb.split(' ').filter(w => w.length > 1));
+  if (!wa.size || !wb.size) return 0;
+  let overlap = 0;
+  wa.forEach(w => { if (wb.has(w)) overlap++; });
+  return overlap / (wa.size + wb.size - overlap);
+}
+
+async function renderMerakiOrgMapping() {
+  const el = document.getElementById('mk-org-map-content');
+  if (!el) return;
+
+  // Remove stale handler before re-rendering to avoid stacking
+  if (_mkOrgMapClickHandler) {
+    el.removeEventListener('click', _mkOrgMapClickHandler);
+    _mkOrgMapClickHandler = null;
+  }
+
+  el.innerHTML = `<div style="color:var(--text-muted);font-size:12px;padding:16px">Loading Meraki orgs…</div>`;
+
+  try {
+    const [orgsRes, hubRes] = await Promise.all([
+      window.api.merakiGetOrgs(),
+      window.api.cmGetHubData(),
+    ]);
+
+    if (!orgsRes.ok) throw new Error(orgsRes.error || 'Failed to load Meraki orgs');
+
+    const orgs = orgsRes.orgs || [];
+    const hub  = hubRes?.companies || [];
+
+    // Build reverse map: merakiOrgName.lower → { atId, atName }
+    const merakiToAt = {};
+    hub.forEach(company => {
+      (company.platforms?.meraki || []).forEach(mk => {
+        if (mk.name) merakiToAt[mk.name.toLowerCase()] = { atId: company.atId, atName: company.atName };
+      });
+    });
+
+    // Annotate orgs with match + active suggestion (skip suggestion if already matched)
+    const annotated = orgs.map(org => ({
+      ...org,
+      match:      merakiToAt[org.name.toLowerCase()] || null,
+      suggestion: (_mkOrgSuggestions && !merakiToAt[org.name.toLowerCase()])
+                    ? (_mkOrgSuggestions.get(org.name.toLowerCase()) || null)
+                    : null,
+    }));
+
+    // Sort: suggestions (high conf first) → unmapped → mapped → ANS
+    annotated.sort((a, b) => {
+      const pri = x => x.isAns ? 0 : x.match ? 1 : x.suggestion ? (x.suggestion.score >= 0.75 ? 4 : 3) : 2;
+      const diff = pri(b) - pri(a);
+      if (diff !== 0) return diff;
+      if (a.suggestion && b.suggestion) return b.suggestion.score - a.suggestion.score;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+
+    const unmapped   = annotated.filter(o => !o.match && !o.isAns).length;
+    const hasSugg    = _mkOrgSuggestions && _mkOrgSuggestions.size > 0;
+    const suggCount  = hasSugg ? annotated.filter(o => o.suggestion).length : 0;
+    const highCount  = hasSugg ? annotated.filter(o => o.suggestion && o.suggestion.score >= 0.75).length : 0;
+
+    const acceptHighBtn = highCount > 0
+      ? `<button class="btn btn-primary btn-sm mk-org-accept-high-btn" style="font-size:11px;padding:3px 10px">Accept High Confidence (${highCount})</button>`
+      : '';
+    const clearSuggBtn = hasSugg
+      ? `<button class="btn btn-ghost btn-sm mk-org-clearsugg-btn" style="font-size:11px;padding:3px 10px">Clear Suggestions</button>`
+      : '';
+    const suggNote = suggCount > 0
+      ? `<span style="font-size:11px;color:var(--text-muted)">${suggCount} suggestion${suggCount !== 1 ? 's' : ''} · ${highCount} high confidence ≥75%</span>`
+      : '';
+
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <span style="font-size:12px;color:var(--text-muted)">${orgs.length} Meraki orgs &middot; <span style="color:${unmapped > 0 ? '#f59e0b' : '#10b981'}">${unmapped} unmapped</span></span>
+        <span style="flex:1;min-width:8px"></span>
+        ${suggNote}
+        ${acceptHighBtn}
+        ${clearSuggBtn}
+        <button class="btn btn-secondary btn-sm mk-org-automatch-btn" style="font-size:11px;padding:3px 10px">✨ Auto-Match</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px">Map Meraki org names to AT companies so the correct client name appears in the audit.</div>
+      <div class="settings-section" style="padding:0">
+        <table class="cd-table">
+          <thead><tr>
+            <th style="min-width:240px">Meraki Org</th>
+            <th>Mapped AT Company</th>
+            <th style="width:120px;text-align:center">Action</th>
+          </tr></thead>
+          <tbody id="mk-org-map-tbody">
+            ${annotated.map(org => mkOrgMapRowHtml(org)).join('')}
+          </tbody>
+        </table>
+      </div>`;
+
+    const handler = async e => {
+      // Auto-Match: fuzzy-score all unmapped non-ANS orgs against AT companies
+      if (e.target.closest('.mk-org-automatch-btn')) {
+        _mkOrgSuggestions = new Map();
+        annotated.filter(o => !o.match && !o.isAns).forEach(org => {
+          let best = null, bestScore = 0;
+          hub.forEach(co => {
+            const score = mkFuzzyScore(org.name, co.atName || '');
+            if (score > bestScore) { bestScore = score; best = co; }
+          });
+          if (bestScore >= 0.4 && best) {
+            _mkOrgSuggestions.set(org.name.toLowerCase(), { atId: best.atId, atName: best.atName, score: bestScore });
+          }
+        });
+        renderMerakiOrgMapping();
+        return;
+      }
+
+      // Clear all suggestions
+      if (e.target.closest('.mk-org-clearsugg-btn')) {
+        _mkOrgSuggestions = null;
+        renderMerakiOrgMapping();
+        return;
+      }
+
+      // Accept all high-confidence suggestions (≥75%)
+      if (e.target.closest('.mk-org-accept-high-btn')) {
+        const highEntries = [...(_mkOrgSuggestions || new Map()).entries()]
+          .filter(([, v]) => v.score >= 0.75);
+        for (const [orgNameLower, s] of highEntries) {
+          const org = annotated.find(o => o.name.toLowerCase() === orgNameLower);
+          if (org) {
+            await window.api.cmAddPlatformMapping({ atId: s.atId, platform: 'meraki', platformName: org.name });
+            _mkOrgSuggestions.delete(orgNameLower);
+          }
+        }
+        if (_mkOrgSuggestions && _mkOrgSuggestions.size === 0) _mkOrgSuggestions = null;
+        renderMerakiOrgMapping();
+        return;
+      }
+
+      // Accept single suggestion
+      const acceptBtn = e.target.closest('.mk-org-accept-btn');
+      if (acceptBtn) {
+        const { atid, orgname } = acceptBtn.dataset;
+        await window.api.cmAddPlatformMapping({ atId: parseInt(atid, 10), platform: 'meraki', platformName: orgname });
+        if (_mkOrgSuggestions) {
+          _mkOrgSuggestions.delete(orgname.toLowerCase());
+          if (_mkOrgSuggestions.size === 0) _mkOrgSuggestions = null;
+        }
+        renderMerakiOrgMapping();
+        return;
+      }
+
+      // Skip single suggestion (dismiss without accepting)
+      const skipBtn = e.target.closest('.mk-org-skip-btn');
+      if (skipBtn) {
+        const { orgname } = skipBtn.dataset;
+        if (_mkOrgSuggestions) {
+          _mkOrgSuggestions.delete(orgname.toLowerCase());
+          if (_mkOrgSuggestions.size === 0) _mkOrgSuggestions = null;
+        }
+        // Update just that row in place
+        const org = annotated.find(o => o.name === orgname);
+        if (org) {
+          org.suggestion = null;
+          const row = skipBtn.closest('tr');
+          if (row) row.outerHTML = mkOrgMapRowHtml(org);
+        }
+        // If no more suggestions, drop the Accept High button from header
+        if (!_mkOrgSuggestions) renderMerakiOrgMapping();
+        return;
+      }
+
+      // Manual assign: open search dropdown
+      const assignBtn = e.target.closest('.mk-org-assign-btn');
+      if (assignBtn) {
+        const orgName = assignBtn.dataset.orgName;
+        const td = assignBtn.closest('td');
+        td.innerHTML = `
+          <div style="position:relative">
+            <input class="cd-find-input" placeholder="Search AT company…" style="width:100%;box-sizing:border-box" data-org-name="${escHtml(orgName)}">
+            <div class="cd-find-results" id="mk-org-at-dropdown" style="position:absolute;z-index:200;width:100%;max-height:200px;overflow-y:auto;background:var(--surface);border:1px solid var(--border);border-radius:6px;top:100%;left:0;display:none"></div>
+          </div>`;
+        const input    = td.querySelector('input');
+        const dropdown = td.querySelector('#mk-org-at-dropdown');
+        input.focus();
+        let timer;
+        input.addEventListener('input', () => {
+          clearTimeout(timer);
+          const q = input.value.trim();
+          if (!q) { dropdown.style.display = 'none'; return; }
+          timer = setTimeout(async () => {
+            const results = await window.api.cmSearchAtCompanies(q);
+            if (!results?.length) { dropdown.style.display = 'none'; return; }
+            dropdown.innerHTML = results.map(r =>
+              `<div class="mk-org-at-result" style="padding:7px 10px;cursor:pointer;font-size:12px;border-bottom:1px solid rgba(255,255,255,0.05)"
+                data-atid="${r.id}" data-atname="${escHtml(r.name)}" data-orgname="${escHtml(orgName)}">${escHtml(r.name)}</div>`
+            ).join('');
+            dropdown.style.display = '';
+          }, 280);
+        });
+        return;
+      }
+
+      // AT search result selected
+      const atResult = e.target.closest('.mk-org-at-result');
+      if (atResult) {
+        const { atid, orgname } = atResult.dataset;
+        await window.api.cmAddPlatformMapping({ atId: parseInt(atid, 10), platform: 'meraki', platformName: orgname });
+        if (_mkOrgSuggestions) _mkOrgSuggestions.delete(orgname.toLowerCase());
+        renderMerakiOrgMapping();
+        return;
+      }
+
+      // Remove existing mapping
+      const removeBtn = e.target.closest('.mk-org-remove-btn');
+      if (removeBtn) {
+        const { atid, orgname } = removeBtn.dataset;
+        await window.api.cmRemovePlatformMapping({ atId: parseInt(atid, 10), platform: 'meraki', platformName: orgname });
+        renderMerakiOrgMapping();
+        return;
+      }
+    };
+
+    _mkOrgMapClickHandler = handler;
+    el.addEventListener('click', handler);
+
+  } catch (e) {
+    el.innerHTML = `<div class="glass-card" style="padding:16px;color:var(--danger,#ef4444)">Error loading Meraki orgs: ${escHtml(e.message)}</div>`;
+  }
+}
+
+function mkOrgMapRowHtml(org) {
+  const ansBadge = org.isAns
+    ? `<span style="font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(245,158,11,0.12);color:#f59e0b;margin-left:6px">ANS Org</span>`
+    : '';
+  const tplBadge = org.isTemplate
+    ? `<span style="font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(59,130,246,0.12);color:#60a5fa;margin-left:6px">Template</span>`
+    : '';
+
+  if (org.isAns) {
+    return `<tr>
+      <td style="padding:8px 12px;font-size:12px">${escHtml(org.name)}${ansBadge}${tplBadge}</td>
+      <td style="padding:8px 12px;font-size:12px;color:var(--text-muted)" colspan="2">ANS internal — not mapped to a client company</td>
+    </tr>`;
+  }
+
+  if (org.match) {
+    return `<tr>
+      <td style="padding:8px 12px;font-size:12px">${escHtml(org.name)}</td>
+      <td style="padding:8px 12px;font-size:12px">
+        <span>${escHtml(org.match.atName)}</span>
+        <span style="font-size:10px;color:var(--text-muted);margin-left:6px">AT#${org.match.atId}</span>
+      </td>
+      <td style="padding:8px 12px;text-align:center">
+        <button class="btn btn-ghost btn-sm mk-org-remove-btn" data-atid="${org.match.atId}" data-orgname="${escHtml(org.name)}" style="font-size:11px;padding:2px 8px">Remove</button>
+      </td>
+    </tr>`;
+  }
+
+  if (org.suggestion) {
+    const s = org.suggestion;
+    const pct = Math.round(s.score * 100);
+    const confColor = s.score >= 0.75 ? '#10b981' : s.score >= 0.55 ? '#f59e0b' : '#6b7280';
+    const confLabel = s.score >= 0.75 ? 'High' : s.score >= 0.55 ? 'Med' : 'Low';
+    return `<tr style="background:rgba(16,185,129,0.04)">
+      <td style="padding:8px 12px;font-size:12px">${escHtml(org.name)}</td>
+      <td style="padding:8px 12px;font-size:12px">
+        <span>${escHtml(s.atName)}</span>
+        <span style="font-size:10px;color:var(--text-muted);margin-left:6px">AT#${s.atId}</span>
+        <span style="font-size:10px;padding:1px 5px;border-radius:8px;background:${confColor}22;color:${confColor};margin-left:6px">${confLabel} ${pct}%</span>
+      </td>
+      <td style="padding:8px 12px;text-align:center;white-space:nowrap">
+        <button class="btn btn-ghost btn-sm mk-org-accept-btn"
+          data-atid="${s.atId}" data-orgname="${escHtml(org.name)}"
+          style="font-size:11px;padding:2px 8px;color:#10b981;border-color:#10b98140" title="Accept">✓</button>
+        <button class="btn btn-ghost btn-sm mk-org-skip-btn"
+          data-orgname="${escHtml(org.name)}"
+          style="font-size:11px;padding:2px 8px;color:var(--text-muted);margin-left:4px" title="Skip">✕</button>
+      </td>
+    </tr>`;
+  }
+
+  return `<tr>
+    <td style="padding:8px 12px;font-size:12px">${escHtml(org.name)}</td>
+    <td style="padding:8px 12px;font-size:12px;color:var(--text-muted)">—</td>
+    <td style="padding:8px 12px;text-align:center">
+      <button class="btn btn-ghost btn-sm mk-org-assign-btn" data-org-name="${escHtml(org.name)}" style="font-size:11px;padding:2px 8px;color:#60a5fa;border-color:#60a5fa40">+ Assign</button>
+    </td>
+  </tr>`;
+}
+

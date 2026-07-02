@@ -24,7 +24,9 @@ const ALL_TOOL_KEYS = [
   'blackpoint-processor',
   'msc-agreements',
   'duo-management',
+  'meraki-admin',
   'project-profitability',
+  'meraki-expiration',
 ];
 
 function getDefaultSidebarConfig() {

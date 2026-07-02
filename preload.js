@@ -153,9 +153,10 @@ contextBridge.exposeInMainWorld('api', {
   saveToolVisibility: (vis) => ipcRenderer.invoke('save-tool-visibility', vis),
 
   // Auth / SSO
-  authGetUser: () => ipcRenderer.invoke('auth-get-user'),
-  authLogin:   () => ipcRenderer.invoke('auth-login'),
-  authLogout:  () => ipcRenderer.invoke('auth-logout'),
+  authGetUser:          () => ipcRenderer.invoke('auth-get-user'),
+  authLogin:            () => ipcRenderer.invoke('auth-login'),
+  authLogout:           () => ipcRenderer.invoke('auth-logout'),
+  atGetCurrentResource: () => ipcRenderer.invoke('at-get-current-resource'),
 
   // Azure Key Vault
   kvGetSecret: (name) => ipcRenderer.invoke('kv-get-secret', name),
@@ -232,5 +233,42 @@ contextBridge.exposeInMainWorld('api', {
   onMappingLog: (cb) => {
     ipcRenderer.on('mapping-log', (_, data) => cb(data));
     return () => ipcRenderer.removeAllListeners('mapping-log');
-  }
+  },
+
+  // ── Meraki Admin ─────────────────────────────────────────────────────────────
+  merakiGetOrgs:            ()     => ipcRenderer.invoke('meraki-get-orgs'),
+  merakiAudit:              ()     => ipcRenderer.invoke('meraki-audit'),
+  merakiAddAdminToOrg:      (opts) => ipcRenderer.invoke('meraki-add-admin-to-org', opts),
+  merakiRemoveAdminFromOrg: (opts) => ipcRenderer.invoke('meraki-remove-admin-from-org', opts),
+  merakiAddAdmin:           (opts) => ipcRenderer.invoke('meraki-add-admin', opts),
+  merakiRemoveAdmin:        (opts) => ipcRenderer.invoke('meraki-remove-admin', opts),
+  merakiGetExcludedOrgs:    ()     => ipcRenderer.invoke('meraki-get-excluded-orgs'),
+  merakiSetOrgExcluded:     (opts) => ipcRenderer.invoke('meraki-set-org-excluded', opts),
+  onMerakiAddProgress:    (cb) => { ipcRenderer.on('meraki-add-progress',    (_, d) => cb(d)); return () => ipcRenderer.removeAllListeners('meraki-add-progress'); },
+  onMerakiRemoveProgress: (cb) => { ipcRenderer.on('meraki-remove-progress', (_, d) => cb(d)); return () => ipcRenderer.removeAllListeners('meraki-remove-progress'); },
+
+  // ── Meraki Expiration ─────────────────────────────────────────────────────────
+  merakiExpGetSettings:     ()     => ipcRenderer.invoke('meraki-exp-get-settings'),
+  merakiExpSaveSettings:    (s)    => ipcRenderer.invoke('meraki-exp-save-settings', s),
+  merakiExpGetCache:        ()     => ipcRenderer.invoke('meraki-exp-get-cache'),
+  merakiExpScan:            ()     => ipcRenderer.invoke('meraki-exp-scan'),
+  merakiExpGetAudit:        ()     => ipcRenderer.invoke('meraki-exp-get-audit'),
+  merakiExpGetExclusions:    ()     => ipcRenderer.invoke('meraki-exp-get-exclusions'),
+  merakiExpAddExclusion:     (opts) => ipcRenderer.invoke('meraki-exp-add-exclusion', opts),
+  merakiExpRemoveExclusion:  (opts) => ipcRenderer.invoke('meraki-exp-remove-exclusion', opts),
+  merakiExpAtLookupDefaults: ()     => ipcRenderer.invoke('meraki-exp-at-lookup-defaults'),
+  merakiExpRenewLicense:          (opts) => ipcRenderer.invoke('meraki-exp-renew-license', opts),
+  merakiExpAssignUnusedLicenses:  (opts) => ipcRenderer.invoke('meraki-exp-assign-unused-licenses', opts),
+  merakiExpGetAssignCandidates:   (opts) => ipcRenderer.invoke('meraki-exp-get-assign-candidates', opts),
+  merakiExpSyncAtDate:       (opts) => ipcRenderer.invoke('meraki-exp-sync-at-date', opts),
+  merakiExpCheckTicket:      (opts) => ipcRenderer.invoke('meraki-exp-check-ticket', opts),
+  merakiExpCreateTicket:     (opts) => ipcRenderer.invoke('meraki-exp-create-ticket', opts),
+  merakiExpGetTicketStatuses: ()     => ipcRenderer.invoke('meraki-exp-get-ticket-statuses'),
+  merakiExpAddTimeEntry:     (opts) => ipcRenderer.invoke('meraki-exp-add-time-entry', opts),
+  merakiExpCompleteTicket:   (opts) => ipcRenderer.invoke('meraki-exp-complete-ticket', opts),
+  onMerakiExpProgress:      (cb)   => {
+    const listener = (_, d) => cb(d);
+    ipcRenderer.on('meraki-exp-progress', listener);
+    return () => ipcRenderer.removeListener('meraki-exp-progress', listener);
+  },
 });

@@ -192,6 +192,45 @@ async function saveHubDirectory(data) {
   throw lastErr;
 }
 
+// ─── Generic Anchor Hub SharePoint file helpers ───────────────────────────────
+// Load any JSON file from the /Anchor Hub/ folder in SharePoint.
+// Returns parsed object, or null on 404/error.
+async function loadHubFile(filename) {
+  try {
+    const spPath = `/Anchor%20Hub/${encodeURIComponent(filename)}`;
+    const meta = await hubGraphFetch(`${spPath}:`);
+    if (!meta) return null;
+    const dlUrl = meta['@microsoft.graph.downloadUrl'];
+    if (!dlUrl) return null;
+    return JSON.parse(await spDownload(dlUrl));
+  } catch (e) {
+    console.warn(`[HubDirectory] loadHubFile(${filename}) failed:`, e.message);
+    return null;
+  }
+}
+
+// Save any JSON file to the /Anchor Hub/ folder in SharePoint (retries up to 4x).
+async function saveHubFile(filename, data) {
+  const spPath = `/Anchor%20Hub/${encodeURIComponent(filename)}`;
+  const body   = Buffer.from(JSON.stringify(data, null, 2), 'utf8');
+  const MAX_ATTEMPTS = 4;
+  let lastErr;
+  for (let i = 0; i < MAX_ATTEMPTS; i++) {
+    try {
+      await hubGraphFetch(`${spPath}:/content`, {
+        method: 'PUT',
+        body,
+        headers: { 'Content-Type': 'application/octet-stream' },
+      });
+      return;
+    } catch (e) {
+      lastErr = e;
+      if (i < MAX_ATTEMPTS - 1) await new Promise(r => setTimeout(r, 1000 * Math.pow(2, i)));
+    }
+  }
+  throw lastErr;
+}
+
 // ─── Platform helpers ─────────────────────────────────────────────────────────
 
 // Find the hub entry where entry.platforms[platform].name === name (case-insensitive).
@@ -288,4 +327,7 @@ module.exports = {
   spDownload,
   SP_SITE_URL,
   GRAPH_SCOPES,
+  // Generic Anchor Hub SharePoint file helpers
+  loadHubFile,
+  saveHubFile,
 };
